@@ -1,0 +1,46 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 21,
+        "patch": 0
+    },
+    "vendor": {
+        "astraclient.note/v1": {
+            "comment": [
+                "The vc17 solution (vc17/otclient.sln) remains the canonical Windows build path for AstraClient.",
+                "This CMakePresets.json defines the parallel cross-platform build path, enabled in Phase 0",
+                "and exercised in later phases (Linux/macOS CI, headless tooling). The vc17 .sln is the source",
+                "of truth for shipping Windows binaries; CMake is the portable mirror.",
+                "Triplet x64-windows-static matches the vc17 /MT static-CRT configuration so the vcpkg",
+                "binary cache is shared between both build paths."
+            ]
+        }
+    },
+    "configurePresets": [
+        {
+            "name": "windows-x64-static",
+            "displayName": "Windows x64 (static, vcpkg)",
+            "description": "Parallel CMake path mirroring the vc17 static-CRT Windows build. The vc17 .sln remains the canonical Windows build; this preset is the portable mirror enabled in P0 and exercised later (Linux/macOS CI, headless tooling). Triplet x64-windows-static matches vc17 /MT so the vcpkg cache is shared.",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/windows-x64-static",
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+                "VCPKG_HOST_TRIPLET": "x64-windows-static",
+                "CMAKE_BUILD_TYPE": "Release"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "windows-x64-static",
+            "configurePreset": "windows-x64-static"
+        }
+    ]
+}
