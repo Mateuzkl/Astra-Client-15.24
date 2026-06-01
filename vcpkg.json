@@ -24,10 +24,7 @@
         "luajit",
         "bzip2",
         "liblzma",
-        {
-            "name": "protobuf",
-            "features": [ "tools" ]
-        },
+        "protobuf",
         {
             "name": "opengl",
             "platform": "windows | linux"
@@ -37,11 +34,5 @@
             "platform": "windows"
         }
     ],
-    "overrides": [
-        {
-            "name": "openal-soft",
-            "version": "1.23.1#2"
-        }
-    ],
-    "builtin-baseline": "389e18e8380daab3884e7dc0710ad7f4a264def6"
+"builtin-baseline": "a97cd63dbb870f107c557fa13b2bc2ce7e4e2188"
 }

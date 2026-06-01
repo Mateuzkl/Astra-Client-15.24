@@ -33,10 +33,6 @@
 #include <framework/platform/platform.h>
 #include <framework/http/http.h>
 
-#if !defined(ANDROID)
-#include <boost/process.hpp>
-#endif
-
 #include <locale>
 
 #include <framework/net/connection.h>
@@ -184,15 +180,27 @@ void Application::close()
         exit();
 }
 
+// Boost.Process v2 dropped child/wait_for/detach. Restart helpers use
+// CreateProcessA directly — same fire-and-forget semantics, no dep.
+static void spawnAndDetach(const std::string& binary, const std::string& cmdTail = "")
+{
+    STARTUPINFOA si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::string cmdLine = binary;
+    if (!cmdTail.empty()) { cmdLine += " "; cmdLine += cmdTail; }
+    std::vector<char> cmdMutable(cmdLine.begin(), cmdLine.end());
+    cmdMutable.push_back('\0');
+    if (CreateProcessA(nullptr, cmdMutable.data(), nullptr, nullptr, FALSE,
+                       0, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
 void Application::restart()
 {
 #if !defined(ANDROID)
-    boost::process::child c(g_resources.getBinaryName());
-    std::error_code ec2;
-    if (c.wait_for(std::chrono::seconds(1), ec2)) {
-        g_logger.fatal("Updater restart error. Please restart application");
-    }
-    c.detach();
+    spawnAndDetach(g_resources.getBinaryName());
     quick_exit();
 #else
     exit();
@@ -202,12 +210,12 @@ void Application::restart()
 void Application::restartArgs(const std::vector<std::string>& args)
 {
 #if !defined(ANDROID)
-    boost::process::child c(g_resources.getBinaryName(), boost::process::args(args));
-    std::error_code ec2;
-    if (c.wait_for(std::chrono::seconds(1), ec2)) {
-        g_logger.fatal("Updater restart error. Please restart application");
+    std::string tail;
+    for (const auto& a : args) {
+        if (!tail.empty()) tail += " ";
+        tail += a;
     }
-    c.detach();
+    spawnAndDetach(g_resources.getBinaryName(), tail);
     quick_exit();
 #else
     exit();

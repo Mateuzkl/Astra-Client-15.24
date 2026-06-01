@@ -70,7 +70,6 @@
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 
-#include <boost/asio/io_service.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #ifndef __EMSCRIPTEN__
 #include <boost/asio/ssl.hpp>

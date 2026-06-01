@@ -32,9 +32,6 @@
 #include <queue>
 #include <regex>
 
-#if !defined(ANDROID)
-#include <boost/process.hpp>
-#endif
 #include <locale>
 #include <zlib.h>
 
@@ -128,14 +125,29 @@ bool ResourceManager::launchCorrect(const std::string& product, const std::strin
     if (binary == m_binaryPath)
         return false;
 
-    boost::process::child c(binary.string());
-    std::error_code ec2;
-    if (c.wait_for(std::chrono::seconds(5), ec2)) {
-        return c.exit_code() == 0;
+    // Boost.Process v2 dropped boost::process::child + wait_for/exit_code/detach
+    // in favor of a co_await-flavoured API. Rather than chase that upstream
+    // (this is the bootstrap-rename helper, never the hot path), shell out via
+    // CreateProcessA directly — same semantics, no dep.
+    STARTUPINFOA si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::string cmdLine = binary.string();
+    std::vector<char> cmdMutable(cmdLine.begin(), cmdLine.end());
+    cmdMutable.push_back('\0');
+    if (!CreateProcessA(nullptr, cmdMutable.data(), nullptr, nullptr, FALSE,
+                        0, nullptr, nullptr, &si, &pi)) {
+        return false;
     }
-
-    c.detach();
-    return true;
+    DWORD waitResult = WaitForSingleObject(pi.hProcess, 5000);
+    bool ok = true;
+    if (waitResult == WAIT_OBJECT_0) {
+        DWORD code = 1;
+        GetExitCodeProcess(pi.hProcess, &code);
+        ok = (code == 0);
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return ok;
 #else
     return false;
 #endif
