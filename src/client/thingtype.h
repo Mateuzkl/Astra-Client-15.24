@@ -191,8 +191,13 @@ struct DrawOutfitParams {
     Color color;
 };
 
+class AppearancesLoader;
+class SpritesheetLoader;
+
 class ThingType : public LuaObject
 {
+    friend class AppearancesLoader;
+    friend class SpritesheetLoader;
 public:
     ThingType();
 

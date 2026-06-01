@@ -285,7 +285,7 @@
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <PreventDllBinding>true</PreventDllBinding>
       <RegisterOutput>false</RegisterOutput>
-      <AdditionalDependencies>libEGL.lib;libGLESv2.lib;dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libEGL.lib;libGLESv2.lib;dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/ignore:4286 %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <ResourceCompile>
@@ -313,7 +313,7 @@
       <StringPooling>true</StringPooling>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ControlFlowGuard>Guard</ControlFlowGuard>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir)proto;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <FloatingPointExceptions>false</FloatingPointExceptions>
       <WholeProgramOptimization>true</WholeProgramOptimization>
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
@@ -329,7 +329,7 @@
       <LinkStatus>false</LinkStatus>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <PreventDllBinding>true</PreventDllBinding>
-      <AdditionalDependencies>dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/ignore:4286 %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <ResourceCompile>
@@ -357,7 +357,7 @@
       <StringPooling>true</StringPooling>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <ControlFlowGuard>Guard</ControlFlowGuard>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir)proto;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <FloatingPointExceptions>false</FloatingPointExceptions>
       <WholeProgramOptimization>false</WholeProgramOptimization>
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
@@ -412,7 +412,7 @@
       <StringPooling>true</StringPooling>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <ControlFlowGuard>Guard</ControlFlowGuard>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir)proto;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <FloatingPointExceptions>false</FloatingPointExceptions>
       <WholeProgramOptimization>false</WholeProgramOptimization>
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
@@ -432,7 +432,7 @@
       <LinkStatus>false</LinkStatus>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <PreventDllBinding>true</PreventDllBinding>
-      <AdditionalDependencies>dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>
       </IgnoreAllDefaultLibraries>
       <AdditionalOptions>/VERBOSE:LIB /ignore:4286 %(AdditionalOptions)</AdditionalOptions>

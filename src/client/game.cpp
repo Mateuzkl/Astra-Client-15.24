@@ -1684,7 +1684,7 @@ void Game::setClientVersion(int version)
 
 // Server-era helpers — see memo project_protocol_pipeline_1524.
 // "Modern" == Tibia 12.40+/15.x packet schema (>= 1300).
-bool Game::isModernClient() const
+bool Game::isModernClient()
 {
     return m_clientVersion >= 1300;
 }
@@ -1694,7 +1694,7 @@ bool Game::isModernClient() const
 //   < 1100 : tibia10   (account-name login era through tibia 11.x)
 //   < 1300 : tibia12   (early tibia 12.x, pre packet-schema rewrite)
 //   >=1300 : tibia15   (tibia 12.40+ / 15.x — Koliseu target, memo project_protocol_pipeline_1524)
-std::string Game::getServerEra() const
+std::string Game::getServerEra()
 {
     if(m_clientVersion < 980)
         return "classic";

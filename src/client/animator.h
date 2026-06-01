@@ -43,8 +43,11 @@ enum AnimationDirection : uint8
 
 using PhaseDurations = std::vector<std::pair<int, int>>;
 
+class AppearancesLoader;
+
 class Animator : public std::enable_shared_from_this<Animator>
 {
+    friend class AppearancesLoader;
 public:
     Animator();
 

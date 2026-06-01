@@ -355,8 +355,8 @@ public:
     // Era boundaries: 980 (account-name -> session-key login),
     //                 1100 (modern world list / prey),
     //                 1300 (Tibia 12.40+ / 15.x packet schema).
-    bool isModernClient() const;
-    std::string getServerEra() const;
+    bool isModernClient();
+    std::string getServerEra();
 
     void setCustomOs(int os) { m_clientCustomOs = os; }
     int getOs();

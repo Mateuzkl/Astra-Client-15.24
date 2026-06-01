@@ -351,23 +351,12 @@ void AppearancesLoader::applyFlags(const AppearanceFlags& f, const std::string& 
     if (f.unwrap())                t.m_attribs.set(ThingAttrUnwrapable, true);
     if (f.topeffect())             t.m_attribs.set(ThingAttrTopEffect, true);
 
-    // F3 P3.2: flags read by ProtocolGame::getItem() to mirror the optional
-    // bytes server-side AddItem (server protocolgame.cpp:445-648) writes.
-    // wearout=53, clockexpire=54, expire=55, expirestop=56, wrapkit=57,
-    // upgradeclassification=48 (carries U16 value), show_off_socket=46 is
-    // the podium flag (Mehah reference thingtype.cpp:405).
-    if (f.expire() || f.expirestop() || f.clockexpire())
-        t.m_attribs.set(ThingAttrExpire, true);
-    if (f.wearout())               t.m_attribs.set(ThingAttrWearOut, true);
-    if (f.show_off_socket())       t.m_attribs.set(ThingAttrPodium, true);
-    if (f.wrapkit())               t.m_attribs.set(ThingAttrWrapKit, true);
-    if (f.has_upgradeclassification() &&
-        f.upgradeclassification().has_upgrade_classification() &&
-        f.upgradeclassification().upgrade_classification() > 0)
-    {
-        t.m_attribs.set<uint16>(ThingAttrUpgradeClass,
-            static_cast<uint16>(f.upgradeclassification().upgrade_classification()));
-    }
+    // P2 TODO: add ThingAttrExpire / ThingAttrWearOut / ThingAttrPodium /
+    // ThingAttrWrapKit / ThingAttrUpgradeClass to thingtype.h enum + isXxx()
+    // accessors, then wire them to the proto fields wearout/expire/expirestop/
+    // clockexpire/wrapkit/show_off_socket/upgradeclassification here. Not
+    // critical for P0 first boot — the optional bytes ProtocolGame::getItem()
+    // reads only matter once we're parsing real AddItem packets from Koliseu.
 
     // Proto fields still NOT mapped (no consumer yet in 15.24 client):
     //   default_action, npcsaledata, changedtoexpire, corpse, player_corpse,
@@ -407,16 +396,16 @@ void AppearancesLoader::applyFrameGroup(const FrameGroup& fg, ThingCategory cate
     if (square <= 0)
         square = 1;
     const int spriteSize = g_sprites.spriteSize();
-    int cellW = 1, cellH = 1;
-    if (si.sprite_id_size() > 0) {
-        const auto wh = g_sprites.getSpriteCellSize(static_cast<int>(si.sprite_id(0)));
-        cellW = std::max(1, wh.first  / spriteSize);
-        cellH = std::max(1, wh.second / spriteSize);
-    }
+    // P0 fallback: derive m_size from bounding_square / spriteSize. Memo
+    // project_proto_sprite_size flags this as imprecise for items where the
+    // sprite sheet spritetype differs from bsq/spriteSize. Revisit in P2 when
+    // SpritesheetLoader is wired through ResourceManager so we can read the
+    // sheet's spritetype byte and derive cellW/cellH from there.
+    const int cellW = std::max(1, square / spriteSize);
+    const int cellH = std::max(1, square / spriteSize);
     t.m_size = Size(cellW, cellH);
     t.m_realSize = square;
     t.m_exactSize = std::min<int>(t.m_realSize, std::max<int>(cellW * spriteSize, cellH * spriteSize));
-    t.m_isProto = true;
 
     t.m_layers      = layers;
     t.m_numPatternX = patternX;
