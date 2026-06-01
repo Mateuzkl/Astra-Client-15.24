@@ -1,0 +1,134 @@
+# --- Project-specific (open source repo hygiene) ----------------------------
+# Per-character persistence written by modules (loot prefs, hotkey state, etc.).
+# Mirrors koliseu-otcv8 — added pre-emptively so future modules can write here
+# without leaking player data into the public repo.
+characterdata/
+
+# Local per-user config — devs copy config.example.lua -> config.lua.
+# Added pre-emptively to mirror koliseu-otcv8 conventions.
+config.lua
+
+# Worktrees / state created by the Claude Code harness — never commit.
+.claude/
+
+# --- Game assets -------------------------------------------------------------
+# Legacy 8.60 assets: the .rar stays tracked as the canonical source, but the
+# unpacked tree (Tibia.spr / Tibia.dat / pics) is regenerated locally and must
+# not be committed.
+data/things/860/
+
+# Modern 15.24 assets: user-supplied (appearances.dat + sprite sheets).
+# Never committed — devs drop their own copy in here.
+data/things/1524/
+
+# --- Build artefacts (Visual Studio vc17 / MSBuild) --------------------------
+# OutDir writes the final binary + debug symbols straight into the repo root.
+AstraClient_*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Intermediate + output dirs produced by the vc17 solution.
+vc17/x64/
+vc17/Win32/
+vc17/.vs/
+vc17/Debug/
+vc17/Release/
+vc17/Debug_lib/
+vc17/Release_lib/
+vc17/DirectX/
+vc17/OpenGL/
+
+# vcpkg manifest-mode install tree.
+vcpkg_installed/
+
+# --- Build artefacts (CMake, in case someone wires it up) --------------------
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+cmake_install.cmake
+Makefile
+
+# --- Logs --------------------------------------------------------------------
+*.log
+console-trace.log
+packet*.log
+otclient*.log
+
+# --- Visual Studio user/temp files -------------------------------------------
+*.suo
+*.user
+*.sln.docstates
+*.vcxproj.user
+
+# MSBuild intermediate output
+*_i.c
+*_p.c
+*.meta
+*.obj
+*.pch
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*.vspscc
+*.vssscc
+.builds
+*.pidb
+*.scc
+
+# Visual C++ cache files
+ipch/
+*.aps
+*.ncb
+*.opensdf
+*.sdf
+*.cachefile
+
+# Visual Studio profiler
+*.psess
+*.vsp
+*.vspx
+
+# Generic build leftovers
+[Dd]ebug/
+[Rr]elease/
+x64/
+[Bb]in/
+[Oo]bj/
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# --- Editor / tooling --------------------------------------------------------
+.vs/
+.vscode/
+.idea/
+.lvimrc
+.clang_complete
+*.swp
+*.bak
+*~
+*.kate-swap
+*.autosave
+CMakeLists.txt.user*
+tags
+Thumbs.db
+.directory
+
+# --- Archives that shouldn't be committed (allowlist 860.rar) ----------------
+*.zip
+*.7z
+*.gz
+*.rar
+!data/things/860.rar
+
+# Keep this file tracked regardless of patterns above.
+!.gitignore
