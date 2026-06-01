@@ -21,7 +21,9 @@
  */
 
 #include "thingtypemanager.h"
+#include "appearancesloader.h"
 #include "spritemanager.h"
+#include "spritesheetloader.h"
 #include "thing.h"
 #include "thingtype.h"
 #include "itemtype.h"
@@ -36,7 +38,23 @@
 #include <framework/otml/otml.h>
 #include <framework/util/stats.h>
 
+// === Tibia 12+ protobuf path ===
+// Phase 0 P0.8: nlohmann/json for getAppearancesPath() catalog scan + fstream
+// for the same. The SpriteSheetLoader pulls these in too — including them
+// here keeps the .cpp self-contained even if loadSpriteSheets is excluded.
+#include <nlohmann/json.hpp>
+#include <fstream>
+// === end protobuf path ===
+
 ThingTypeManager g_things;
+
+// === Tibia 12+ protobuf path ===
+// Phase 0 P0.8: ctor/dtor defined here (not =default-in-class) so the
+// std::unique_ptr<SpriteSheetLoader> member sees the complete type when it
+// instantiates its destructor. Header carries only a forward declaration.
+ThingTypeManager::ThingTypeManager() = default;
+ThingTypeManager::~ThingTypeManager() = default;
+// === end protobuf path ===
 
 namespace {
 int parseWeaponType(std::string value)
@@ -236,6 +254,121 @@ bool ThingTypeManager::loadDat(std::string file)
         return false;
     }
 }
+
+// === Tibia 12+ protobuf path ===
+// Phase 0 P0.8: protobuf entry points. All three bodies below are isolated in
+// this marker block so the legacy loadDat() above stays clearly reviewable as
+// the 8.60 path. None of these touch loadDat / loadOtb / loadXml / loadOtml.
+
+bool ThingTypeManager::loadAppearances(const std::string& file)
+{
+    // Phase 0 #9 / P0.8: thin delegation to AppearancesLoader. The loader owns
+    // all the protobuf parsing logic and writes the result back into this
+    // manager's per-category vectors (it is a friend of ThingTypeManager).
+    // Lua picks this entry point only when catalog-content.json is present
+    // alongside the assets — the legacy 8.60 boot path keeps calling
+    // loadDat() above unchanged.
+    //
+    // Ordering guard per project_proto_sprite_size memo: ThingType::m_size
+    // is derived from the sprite SHEET's spritetype (32x32 / 32x64 / 64x32 /
+    // 64x64), NOT from the proto's bounding_square. If the sheets aren't
+    // ready when AppearancesLoader runs, any future P1.x revision that
+    // consults SpriteSheetLoader::getSpriteCellSize() during appearance
+    // parsing will silently fall back to (32,32) and corrupt the atlas. We
+    // accept either the modern sheet loader OR the legacy g_sprites being
+    // live, since both ship the same spriteId -> dimensions truth.
+    VALIDATE(m_spriteSheetLoader != nullptr || g_sprites.isLoaded());
+
+    AppearancesLoader loader;
+    if (!loader.load(file))
+        return false;
+
+    m_datLoaded = true;
+    g_lua.callGlobalField("g_things", "onLoadDat", file);
+    return true;
+}
+
+bool ThingTypeManager::loadSpriteSheets(const std::string& assetsDir)
+{
+    // Phase 0 P0.8: parse catalog-content.json and stash the LRU loader on
+    // the manager. Per-sheet LZMA decompression is lazy — happens the first
+    // time a sprite is requested. The boot path is free to wire
+    // g_sprites.loadSpr through this same SpriteSheetLoader later (mirrors
+    // the koliseu-otcv8 P1.4 wiring); this entry point is also useful for
+    // tooling that wants to inspect the catalog without touching g_sprites.
+    auto loader = std::make_unique<SpriteSheetLoader>();
+    if (!loader->loadCatalog(assetsDir))
+        return false;
+    m_spriteSheetLoader = std::move(loader);
+    return true;
+}
+
+std::string ThingTypeManager::getAppearancesPath(const std::string& assetsDir)
+{
+    // Phase 0 P0.8: read catalog-content.json, find the entry with
+    // "type":"appearances", and return the absolute filesystem path to it.
+    // Used by the Lua boot path to discover the hashed appearances-<sha>.dat
+    // filename without globbing or hardcoding.
+    //
+    // `assetsDir` may be a PHYSFS virtual path (e.g. "/things/1524"); Lua's
+    // resolvepath returns those. Convert to a real FS path internally so
+    // std::ifstream below can find the file.
+    if (assetsDir.empty()) {
+        g_logger.error("ThingTypeManager::getAppearancesPath: empty assetsDir");
+        return std::string();
+    }
+
+    try {
+        std::string dir = g_resources.resolvePath(assetsDir);
+        if (dir.empty())
+            dir = assetsDir;  // fallback: caller passed a real FS path directly
+        if (dir.back() != '/' && dir.back() != '\\')
+            dir.push_back('/');
+
+        const std::string catalogPath = dir + "catalog-content.json";
+        std::ifstream in(catalogPath, std::ios::in | std::ios::binary);
+        if (!in.is_open()) {
+            g_logger.error(stdext::format(
+                "ThingTypeManager::getAppearancesPath: cannot open '%s'", catalogPath));
+            return std::string();
+        }
+
+        nlohmann::json catalog;
+        in >> catalog;
+        in.close();
+
+        if (!catalog.is_array()) {
+            g_logger.error(stdext::format(
+                "ThingTypeManager::getAppearancesPath: catalog '%s' is not a JSON array",
+                catalogPath));
+            return std::string();
+        }
+
+        for (const auto& entry : catalog) {
+            auto typeIt = entry.find("type");
+            auto fileIt = entry.find("file");
+            if (typeIt == entry.end() || !typeIt->is_string())
+                continue;
+            if (fileIt == entry.end() || !fileIt->is_string())
+                continue;
+            if (typeIt->get<std::string>() != "appearances")
+                continue;
+            return dir + fileIt->get<std::string>();
+        }
+
+        g_logger.error(stdext::format(
+            "ThingTypeManager::getAppearancesPath: no 'appearances' entry in '%s'",
+            catalogPath));
+        return std::string();
+    } catch (const std::exception& e) {
+        g_logger.error(stdext::format(
+            "ThingTypeManager::getAppearancesPath: exception parsing catalog in '%s': %s",
+            assetsDir, e.what()));
+        return std::string();
+    }
+}
+
+// === end protobuf path ===
 
 bool ThingTypeManager::loadOtml(std::string file)
 {

@@ -30,14 +30,75 @@
 #include "thingtype.h"
 #include "itemtype.h"
 
+#include <memory>
+
+// === Tibia 12+ protobuf path ===
+// Phase 0 P0.8: forward decls. AppearancesLoader is a friend so it can write
+// directly into the per-category vectors during parse. SpriteSheetLoader is
+// held via std::unique_ptr below — declaring it here (instead of including
+// spritesheetloader.h) keeps the header lightweight and avoids transitively
+// pulling in <nlohmann/json.hpp> + LZMA headers everywhere.
+class AppearancesLoader;
+class SpriteSheetLoader;
+// === end protobuf path ===
+
 class ThingTypeManager
 {
+    // === Tibia 12+ protobuf path ===
+    // Phase 0 #9 / P0.8: AppearancesLoader writes parsed thingtypes back into
+    // m_thingTypes[] / m_marketCategories during load(). Granting friendship
+    // (rather than exposing setters) keeps the public surface unchanged for
+    // the legacy 8.60 path and matches the pattern in koliseu-otcv8.
+    friend class AppearancesLoader;
+    // === end protobuf path ===
+
 public:
+    // === Tibia 12+ protobuf path ===
+    // Phase 0 P0.8: ctor/dtor declared out-of-line (not =default-in-class) so
+    // the std::unique_ptr<SpriteSheetLoader> member below can hold a
+    // forward-declared type in this header. Bodies live in the .cpp where
+    // spritesheetloader.h is in scope; without this, every TU that includes
+    // thingtypemanager.h would have to see the full SpriteSheetLoader.
+    ThingTypeManager();
+    ~ThingTypeManager();
+    // === end protobuf path ===
+
     void init();
     void terminate();
     void check();
 
     bool loadDat(std::string file);
+    // === Tibia 12+ protobuf path ===
+    // Phase 0 #9 / P0.8: modern protobuf appearances loader. Thin wrapper
+    // over AppearancesLoader so Lua (modules/game_things/things.lua) can
+    // pick the modern path when data/things/<version>/catalog-content.json
+    // exists. Legacy 8.60 boot never touches this — see loadDat above.
+    //
+    // CRITICAL ordering: loadSpriteSheets() MUST be called before
+    // loadAppearances(). ThingType::m_size derives from the sprite SHEET's
+    // spritetype (32x32 / 32x64 / 64x32 / 64x64), NOT from the proto
+    // bounding_square. Enforced at runtime by a VALIDATE() inside
+    // loadAppearances(). See memory note: project_proto_sprite_size.
+    bool loadAppearances(const std::string& file);
+    // Phase 0 P0.8: parse catalog-content.json and own the sheet LRU. The
+    // actual per-sheet LZMA + BMP decode is lazy (paid on first sprite
+    // request); this call only validates the catalog. Returns false on any
+    // I/O / json error — the SpriteSheetLoader logs the diagnostic.
+    bool loadSpriteSheets(const std::string& assetsDir);
+    // Phase 0 P0.8: read `<assetsDir>/catalog-content.json` and return the
+    // absolute path to the entry marked "type":"appearances". Returns an
+    // empty string on any error. Used by the Lua boot path to discover the
+    // hashed appearances-<sha>.dat filename without globbing.
+    std::string getAppearancesPath(const std::string& assetsDir);
+    // NOTE: loadStaticData() + getRaceData() / getRacesByName() / getAllRaces()
+    // and the BestiaryStorage pimpl from koliseu-otcv8 are intentionally
+    // deferred. They require staticdata.pb.h (no generated header in
+    // AstraClient yet) plus a RaceType struct that transitively pulls
+    // outfit.h, creating an include cycle with this header that the pimpl
+    // would have to break. Wire them in the same phase the bestiary UI
+    // lands; do not stub them here to avoid an empty API the Lua side might
+    // bind against and then silently rely on.
+    // === end protobuf path ===
     bool loadOtml(std::string file);
     void loadOtb(const std::string& file);
     void loadXml(const std::string& file);
@@ -112,6 +173,16 @@ private:
 
     ScheduledEventPtr m_checkEvent;
     size_t m_checkIndex[ThingLastCategory];
+
+    // === Tibia 12+ protobuf path ===
+    // Phase 0 P0.8: owns the sprite-sheet LRU for Tibia 15.24 assets. Held
+    // by unique_ptr so this header does not need to include
+    // spritesheetloader.h (which would drag <nlohmann/json.hpp> + LZMA in).
+    // Allocated by loadSpriteSheets(); checked by loadAppearances() to
+    // enforce the sheet-before-appearances ordering required by
+    // project_proto_sprite_size.
+    std::unique_ptr<SpriteSheetLoader> m_spriteSheetLoader;
+    // === end protobuf path ===
 };
 
 extern ThingTypeManager g_things;

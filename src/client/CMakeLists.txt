@@ -1,6 +1,24 @@
 add_definitions(-DCLIENT)
 
+# Protobuf (Phase 0 deliverable #6): generate appearances.pb.{h,cc} and
+# staticdata.pb.{h,cc} from src/client/proto/*.proto. The pair is written to
+# ${CMAKE_BINARY_DIR}/generated/proto/ (which the root CMakeLists.txt adds to
+# include_directories), so consumers just #include "appearances.pb.h".
+#
+# find_package(Protobuf) is called by the root CMakeLists.txt before this
+# fragment is include()'d, which is what makes protobuf_generate_cpp()
+# available here. The PROTOC_OUT_DIR keyword is forwarded to the underlying
+# protobuf_generate() helper; pre-creating the directory keeps protoc from
+# failing on the very first configure when it does not exist yet.
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/generated/proto)
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS
+    PROTOC_OUT_DIR ${CMAKE_BINARY_DIR}/generated/proto
+    ${CMAKE_CURRENT_LIST_DIR}/proto/appearances.proto
+    ${CMAKE_CURRENT_LIST_DIR}/proto/staticdata.proto)
+
 set(client_SOURCES ${client_SOURCES}
+    ${PROTO_SRCS}
+
     # client
     ${CMAKE_CURRENT_LIST_DIR}/const.h
     ${CMAKE_CURRENT_LIST_DIR}/global.h
@@ -52,6 +70,10 @@ set(client_SOURCES ${client_SOURCES}
     ${CMAKE_CURRENT_LIST_DIR}/thingtypemanager.h
     ${CMAKE_CURRENT_LIST_DIR}/thingtype.cpp
     ${CMAKE_CURRENT_LIST_DIR}/thingtype.h
+    ${CMAKE_CURRENT_LIST_DIR}/appearancesloader.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/appearancesloader.h
+    ${CMAKE_CURRENT_LIST_DIR}/spritesheetloader.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/spritesheetloader.h
     ${CMAKE_CURRENT_LIST_DIR}/itemtype.cpp
     ${CMAKE_CURRENT_LIST_DIR}/itemtype.h
     ${CMAKE_CURRENT_LIST_DIR}/tile.cpp
@@ -100,3 +122,9 @@ set(client_SOURCES ${client_SOURCES}
     # util
     ${CMAKE_CURRENT_LIST_DIR}/position.h
 )
+
+# Wire Protobuf headers + generated-source dir + lib into the (single) executable target.
+# This file is included from the root CMakeLists.txt _before_ add_executable, so we can only
+# extend the *_INCLUDE_DIRS / *_LIBRARIES lists that the root then consumes.
+include_directories(${Protobuf_INCLUDE_DIRS} ${CMAKE_BINARY_DIR}/generated/proto)
+set(framework_LIBRARIES ${framework_LIBRARIES} ${Protobuf_LIBRARIES})

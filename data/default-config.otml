@@ -147,6 +147,12 @@ actionBarShowLeft2: false
 spellsOthers: false
 optimiseConnectionStability: false
 resetconfig: true
+# Phase 0 #9: pin the legacy .dat/.spr loader even when a modern
+# catalog-content.json sits next to the assets. Default false so the probe
+# in modules/game_things/things.lua picks the modern path automatically when
+# Tibia 12+ assets are present; flip to true to A/B-test the legacy path
+# against modern assets without renaming files on disk.
+force-legacy-assets: false
 game_interface:
   splitterMarginBottom: 200
 game_console:

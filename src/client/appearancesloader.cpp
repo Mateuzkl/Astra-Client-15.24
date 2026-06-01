@@ -1,0 +1,525 @@
+/*
+ * Copyright (c) 2010-2017 OTClient <https://github.com/edubart/otclient>
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+#include "appearancesloader.h"
+#include "animator.h"
+#include "thingtypemanager.h"
+#include "spritemanager.h"
+
+#include "appearances.pb.h"
+
+#include <framework/core/clock.h>
+#include <framework/core/logger.h>
+#include <framework/stdext/format.h>
+
+#include <algorithm>
+#include <fstream>
+
+using namespace Crystal::protobuf::appearances;
+
+// ----------------------------------------------------------------------------
+// Public API
+// ----------------------------------------------------------------------------
+
+// Defined here (not in header) so the std::unique_ptr<Appearances> sees the
+// full protobuf type when it instantiates its destructor.
+AppearancesLoader::AppearancesLoader() = default;
+AppearancesLoader::~AppearancesLoader() = default;
+
+bool AppearancesLoader::load(const std::string& file)
+{
+    // Reset per-load state. We never throw; on any failure we log and return
+    // false, mirroring the robustness contract (P1.2 robustness contract).
+    // P1.2 fix: wrap the entire body in try/catch so any std::exception
+    // (bad_alloc, ios_base::failure, protobuf::FatalException, ...) is caught
+    // and logged — without this, exceptions bubble to luaCppFunctionCallback's
+    // `catch(...)` which fires g_logger.fatal with no useful diagnostic.
+    try {
+        m_appearances.reset();
+        for (int i = 0; i < ThingLastCategory; ++i)
+            m_categoryCounts[i] = 0;
+
+        // Open as raw binary stream — the server (game.cpp:1454) does the same.
+        // appearances.dat lives in the assets directory, outside the PHYSFS
+        // virtual filesystem the legacy loader used.
+        std::ifstream in(file, std::ios::in | std::ios::binary);
+        if (!in.is_open()) {
+            g_logger.error(stdext::format("AppearancesLoader: cannot open '%s'", file));
+            return false;
+        }
+
+        GOOGLE_PROTOBUF_VERIFY_VERSION;
+
+        auto appearances = std::make_unique<Appearances>();
+        if (!appearances->ParseFromIstream(&in)) {
+            g_logger.error(stdext::format("AppearancesLoader: failed to parse '%s' (corrupt protobuf?)", file));
+            return false;
+        }
+        in.close();
+
+        // Compute per-category capacities so g_things.m_thingTypes[]/findItemTypeByClientId
+        // can index by app.id() without resizing in the inner loop.
+        auto computeMaxId = [](const auto& repeated) {
+            uint32_t maxId = 0;
+            for (int i = 0, n = repeated.size(); i < n; ++i)
+                if (repeated.Get(i).id() > maxId)
+                    maxId = repeated.Get(i).id();
+            return maxId;
+        };
+
+        const uint32_t maxItemId    = computeMaxId(appearances->object());
+        const uint32_t maxOutfitId  = computeMaxId(appearances->outfit());
+        const uint32_t maxEffectId  = computeMaxId(appearances->effect());
+        const uint32_t maxMissileId = computeMaxId(appearances->missile());
+
+        // Reuse the existing null-thingtype to fill the gaps, just like loadDat.
+        const ThingTypePtr& nullType = g_things.getNullThingType();
+        auto reset = [&](ThingCategory cat, uint32_t maxId) {
+            // +1: arrays are indexed by id (1-based for items starting at 100, etc.).
+            auto& vec = g_things.m_thingTypes[cat];
+            vec.clear();
+            vec.resize(maxId + 1, nullType);
+        };
+
+        reset(ThingCategoryItem,     maxItemId);
+        reset(ThingCategoryCreature, maxOutfitId);
+        reset(ThingCategoryEffect,   maxEffectId);
+        reset(ThingCategoryMissile,  maxMissileId);
+
+        // Cross-cuts loadDat: market categories are rebuilt during the load.
+        auto& marketCategories = g_things.m_marketCategories;
+        marketCategories.clear();
+
+        auto populate = [&](const google::protobuf::RepeatedPtrField<Appearance>& repeated,
+                            ThingCategory category) {
+            const int n = repeated.size();
+            m_categoryCounts[category] = n;
+            auto& vec = g_things.m_thingTypes[category];
+            for (int i = 0; i < n; ++i) {
+                const Appearance& app = repeated.Get(i);
+                const uint32_t id = app.id();
+                if (id == 0 || id >= vec.size())
+                    continue;
+
+                ThingTypePtr type;
+                if (!buildThingType(app, category, type))
+                    continue;
+
+                vec[id] = type;
+
+                if (type->isMarketable()) {
+                    MarketData md = type->getMarketData();
+                    marketCategories.insert(md.category);
+                }
+            }
+        };
+
+        populate(appearances->object(),  ThingCategoryItem);
+        populate(appearances->outfit(),  ThingCategoryCreature);
+        populate(appearances->effect(),  ThingCategoryEffect);
+        populate(appearances->missile(), ThingCategoryMissile);
+
+        m_appearances = std::move(appearances);
+
+        g_logger.info(stdext::format("Loaded %d items, %d outfits, %d effects, %d missiles from %s",
+            m_categoryCounts[ThingCategoryItem],
+            m_categoryCounts[ThingCategoryCreature],
+            m_categoryCounts[ThingCategoryEffect],
+            m_categoryCounts[ThingCategoryMissile],
+            file));
+
+        return true;
+    } catch (const std::exception& e) {
+        g_logger.error(stdext::format("AppearancesLoader: std::exception in load('%s'): %s", file, e.what()));
+        m_appearances.reset();
+        return false;
+    } catch (...) {
+        g_logger.error(stdext::format("AppearancesLoader: unknown exception in load('%s')", file));
+        m_appearances.reset();
+        return false;
+    }
+}
+
+const SpecialMeaningAppearanceIds* AppearancesLoader::getSpecialIds() const
+{
+    if (!m_appearances || !m_appearances->has_special_meaning_appearance_ids())
+        return nullptr;
+    return &m_appearances->special_meaning_appearance_ids();
+}
+
+int AppearancesLoader::getCategoryCount(ThingCategory category) const
+{
+    if (category >= ThingLastCategory)
+        return 0;
+    return m_categoryCounts[category];
+}
+
+// ----------------------------------------------------------------------------
+// Per-appearance build
+// ----------------------------------------------------------------------------
+
+bool AppearancesLoader::buildThingType(const Appearance& app, ThingCategory category, ThingTypePtr& out)
+{
+    auto type = std::make_shared<ThingType>();
+    type->m_null = false;
+    type->m_id = static_cast<uint16>(app.id());
+    type->m_category = category;
+
+    // Bytes-typed in proto, std::string in C++ — direct assignment is safe.
+    const std::string name = app.has_name() ? app.name() : std::string();
+
+    if (app.has_flags())
+        applyFlags(app.flags(), name, *type);
+
+    int totalSpritesCount = 0;
+    const int groupCount = app.frame_group_size();
+    for (int g = 0; g < groupCount; ++g)
+        applyFrameGroup(app.frame_group(g), category, *type, totalSpritesCount);
+
+    // Mirror legacy ThingType::unserialize line 387: if only an idle animator
+    // exists, promote it to m_animator (the moving slot is the "default").
+    if (type->m_idleAnimator && !type->m_animator) {
+        type->m_animator = type->m_idleAnimator;
+        type->m_idleAnimator = nullptr;
+    }
+
+    // Mirror legacy lines 392–395: the texture lazy-load caches are sized by
+    // the final animationPhases count of the merged groups.
+    if (type->m_animationPhases > 0) {
+        type->m_textures.resize(type->m_animationPhases);
+        type->m_texturesFramesRects.resize(type->m_animationPhases);
+        type->m_texturesFramesOriginRects.resize(type->m_animationPhases);
+        type->m_texturesFramesOffsets.resize(type->m_animationPhases);
+    }
+
+    type->m_lastUsage = g_clock.seconds();
+
+    out = type;
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// Flags -> ThingAttr mapping
+// ----------------------------------------------------------------------------
+
+void AppearancesLoader::applyFlags(const AppearanceFlags& f, const std::string& name, ThingType& t)
+{
+    // The mapping below is derived from src/client/proto/appearances.proto
+    // (AppearanceFlags) cross-referenced with src/client/thingtype.cpp's
+    // legacy unserialize(). Each ThingAttr matches the legacy storage shape
+    // so downstream code (tile rendering, market UI, light view, etc.) works
+    // unchanged.
+
+    // bank.waypoints -> ThingAttrGround (uint16 walking speed of ground tile).
+    // Legacy thingtype.cpp:255 reads U16 into ThingAttrGround.
+    if (f.has_bank() && f.bank().has_waypoints())
+        t.m_attribs.set<uint16>(ThingAttrGround, static_cast<uint16>(f.bank().waypoints()));
+
+    if (f.clip())                  t.m_attribs.set(ThingAttrGroundBorder, true);
+    if (f.bottom())                t.m_attribs.set(ThingAttrOnBottom, true);
+    if (f.top())                   t.m_attribs.set(ThingAttrOnTop, true);
+    if (f.container())             t.m_attribs.set(ThingAttrContainer, true);
+    if (f.cumulative())            t.m_attribs.set(ThingAttrStackable, true);
+
+    // P1.2: `usable` is the proto's standalone "default action allowed" bool
+    // (proto field 7). In the legacy unserialize ThingAttrUsable carries a
+    // U16 payload (thingtype.cpp:254-261); for protobuf we only have the bool
+    // bit so we store it without a value. Distinct from `multiuse`/`forceuse`.
+    if (f.usable())                t.m_attribs.set(ThingAttrUsable, true);
+    if (f.forceuse())              t.m_attribs.set(ThingAttrForceUse, true);
+    if (f.multiuse())              t.m_attribs.set(ThingAttrMultiUse, true);
+
+    // write/write_once carry a max-text-length U16. Legacy thingtype.cpp:256.
+    if (f.has_write() && f.write().has_max_text_length())
+        t.m_attribs.set<uint16>(ThingAttrWritable, static_cast<uint16>(f.write().max_text_length()));
+    if (f.has_write_once() && f.write_once().has_max_text_length_once())
+        t.m_attribs.set<uint16>(ThingAttrWritableOnce, static_cast<uint16>(f.write_once().max_text_length_once()));
+
+    if (f.liquidpool())            t.m_attribs.set(ThingAttrSplash, true);
+    if (f.unpass())                t.m_attribs.set(ThingAttrNotWalkable, true);
+    if (f.unmove())                t.m_attribs.set(ThingAttrNotMoveable, true);
+    if (f.unsight())               t.m_attribs.set(ThingAttrBlockProjectile, true);
+    if (f.avoid())                 t.m_attribs.set(ThingAttrNotPathable, true);
+    if (f.no_movement_animation()) t.m_attribs.set(ThingAttrNoMoveAnimation, true);
+    if (f.take())                  t.m_attribs.set(ThingAttrPickupable, true);
+    if (f.liquidcontainer())       t.m_attribs.set(ThingAttrFluidContainer, true);
+    if (f.hang())                  t.m_attribs.set(ThingAttrHangable, true);
+
+    // hook is a sub-message with a direction enum (south=1, east=2).
+    if (f.has_hook() && f.hook().has_direction()) {
+        if (f.hook().direction() == HOOK_TYPE_SOUTH)
+            t.m_attribs.set(ThingAttrHookSouth, true);
+        else if (f.hook().direction() == HOOK_TYPE_EAST)
+            t.m_attribs.set(ThingAttrHookEast, true);
+    }
+
+    if (f.rotate())                t.m_attribs.set(ThingAttrRotateable, true);
+
+    // light is a sub-message: brightness=intensity, color=color (1 byte each
+    // in legacy, but proto uses uint32). Light.pos defaults to {0,0}.
+    // Legacy thingtype.cpp:231-237: intensity = U16, color = U16; we mirror.
+    if (f.has_light()) {
+        Light l;
+        l.pos = Point(0, 0);
+        l.intensity = static_cast<uint8_t>(f.light().brightness());
+        l.color     = static_cast<uint8_t>(f.light().color());
+        t.m_attribs.set<Light>(ThingAttrLight, l);
+    }
+
+    if (f.dont_hide())             t.m_attribs.set(ThingAttrDontHide, true);
+    if (f.translucent())           t.m_attribs.set(ThingAttrTranslucent, true);
+
+    // shift -> displacement Point + flag (legacy thingtype.cpp:220-230).
+    if (f.has_shift()) {
+        t.m_displacement = Point(
+            static_cast<int>(f.shift().has_x() ? f.shift().x() : 0),
+            static_cast<int>(f.shift().has_y() ? f.shift().y() : 0));
+        t.m_attribs.set(ThingAttrDisplacement, true);
+    }
+
+    // height -> elevation U16 + flag (legacy thingtype.cpp:249-253).
+    if (f.has_height() && f.height().has_elevation()) {
+        t.m_elevation = static_cast<int>(f.height().elevation());
+        t.m_attribs.set<uint16>(ThingAttrElevation, static_cast<uint16>(t.m_elevation));
+    }
+
+    if (f.lying_object())          t.m_attribs.set(ThingAttrLyingCorpse, true);
+    if (f.animate_always())        t.m_attribs.set(ThingAttrAnimateAlways, true);
+
+    // automap.color -> ThingAttrMinimapColor U16 (legacy thingtype.cpp:258).
+    if (f.has_automap() && f.automap().has_color())
+        t.m_attribs.set<uint16>(ThingAttrMinimapColor, static_cast<uint16>(f.automap().color()));
+
+    // lenshelp.id -> ThingAttrLensHelp U16 (legacy thingtype.cpp:260).
+    if (f.has_lenshelp() && f.lenshelp().has_id())
+        t.m_attribs.set<uint16>(ThingAttrLensHelp, static_cast<uint16>(f.lenshelp().id()));
+
+    if (f.fullbank())              t.m_attribs.set(ThingAttrFullGround, true);
+    // ignore_look -> ThingAttrLook (legacy mapping is "look ignored" via
+    // ThingAttrLook; isIgnoreLook() in thingtype.h:254 checks this bit).
+    if (f.ignore_look())           t.m_attribs.set(ThingAttrLook, true);
+
+    // clothes.slot -> ThingAttrCloth U16 (legacy thingtype.cpp:259).
+    if (f.has_clothes() && f.clothes().has_slot())
+        t.m_attribs.set<uint16>(ThingAttrCloth, static_cast<uint16>(f.clothes().slot()));
+
+    // market: build MarketData with name (from Appearance.name) + category,
+    // tradeAs, showAs, restrictVocation (first vocation if present),
+    // requiredLevel. Legacy thingtype.cpp:239-247.
+    if (f.has_market()) {
+        const AppearanceFlagMarket& m = f.market();
+        MarketData md;
+        md.name           = name;
+        md.category       = m.has_category() ? static_cast<int>(m.category()) : 0;
+        md.tradeAs        = m.has_trade_as_object_id()
+                              ? static_cast<uint16>(m.trade_as_object_id())
+                              : 0;
+        md.showAs         = m.has_show_as_object_id()
+                              ? static_cast<uint16>(m.show_as_object_id())
+                              : 0;
+        // Legacy stores a single restrictVocation U16. Proto sends a repeated
+        // list; mirror legacy by collapsing to the first entry (or 0).
+        md.restrictVocation = (m.restrict_to_profession_size() > 0)
+                                ? static_cast<uint16>(m.restrict_to_profession(0))
+                                : 0;
+        md.requiredLevel  = m.has_minimum_level()
+                              ? static_cast<uint16>(m.minimum_level())
+                              : 0;
+        t.m_attribs.set<MarketData>(ThingAttrMarket, md);
+    }
+
+    if (f.wrap())                  t.m_attribs.set(ThingAttrWrapable, true);
+    if (f.unwrap())                t.m_attribs.set(ThingAttrUnwrapable, true);
+    if (f.topeffect())             t.m_attribs.set(ThingAttrTopEffect, true);
+
+    // F3 P3.2: flags read by ProtocolGame::getItem() to mirror the optional
+    // bytes server-side AddItem (server protocolgame.cpp:445-648) writes.
+    // wearout=53, clockexpire=54, expire=55, expirestop=56, wrapkit=57,
+    // upgradeclassification=48 (carries U16 value), show_off_socket=46 is
+    // the podium flag (Mehah reference thingtype.cpp:405).
+    if (f.expire() || f.expirestop() || f.clockexpire())
+        t.m_attribs.set(ThingAttrExpire, true);
+    if (f.wearout())               t.m_attribs.set(ThingAttrWearOut, true);
+    if (f.show_off_socket())       t.m_attribs.set(ThingAttrPodium, true);
+    if (f.wrapkit())               t.m_attribs.set(ThingAttrWrapKit, true);
+    if (f.has_upgradeclassification() &&
+        f.upgradeclassification().has_upgrade_classification() &&
+        f.upgradeclassification().upgrade_classification() > 0)
+    {
+        t.m_attribs.set<uint16>(ThingAttrUpgradeClass,
+            static_cast<uint16>(f.upgradeclassification().upgrade_classification()));
+    }
+
+    // Proto fields still NOT mapped (no consumer yet in 15.24 client):
+    //   default_action, npcsaledata, changedtoexpire, corpse, player_corpse,
+    //   cyclopediaitem, ammo, reportable, reverse_addons_*, skillwheel_gem,
+    //   dual_wielding, imbueable, proficiency, restrict_to_vocation,
+    //   minimum_level, weapon_type. Expose later if a handler needs them.
+}
+
+// ----------------------------------------------------------------------------
+// FrameGroup -> sprite layout
+// ----------------------------------------------------------------------------
+
+void AppearancesLoader::applyFrameGroup(const FrameGroup& fg, ThingCategory category,
+                                        ThingType& t, int& totalSpritesCount)
+{
+    if (!fg.has_sprite_info())
+        return;
+
+    const SpriteInfo& si = fg.sprite_info();
+
+    // Legacy thingtype.cpp:300-317: width/height/layers/numPatternX/Y/Z come
+    // from the same SpriteInfo fields in protobuf land.
+    const int patternX = si.has_pattern_width()  ? static_cast<int>(si.pattern_width())  : 1;
+    const int patternY = si.has_pattern_height() ? static_cast<int>(si.pattern_height()) : 1;
+    const int patternZ = si.has_pattern_depth()  ? static_cast<int>(si.pattern_depth())  : 1;
+    const int layers   = si.has_layers()         ? static_cast<int>(si.layers())         : 1;
+
+    // bounding_square is just the visible bounding box of the artwork —
+    // NOT the atlas storage size. The true cell dimensions come from the
+    // sheet that owns sprite_id(0): the catalog's "spritetype" field
+    // (0=32x32, 1=32x64, 2=64x32, 3=64x64) dictates how many 32x32 cells
+    // each sprite occupies. Using bsq/spriteSize was wrong: a bsq=40 item
+    // with 64x64 sprite would compute m_size=1x1, then blit a 64x64 sprite
+    // into a 32x32 atlas cell and stomp the heap. koliseu-client derives
+    // m_size from sheet->getSpriteSize() for exactly this reason.
+    int square = si.has_bounding_square() ? static_cast<int>(si.bounding_square()) : 1;
+    if (square <= 0)
+        square = 1;
+    const int spriteSize = g_sprites.spriteSize();
+    int cellW = 1, cellH = 1;
+    if (si.sprite_id_size() > 0) {
+        const auto wh = g_sprites.getSpriteCellSize(static_cast<int>(si.sprite_id(0)));
+        cellW = std::max(1, wh.first  / spriteSize);
+        cellH = std::max(1, wh.second / spriteSize);
+    }
+    t.m_size = Size(cellW, cellH);
+    t.m_realSize = square;
+    t.m_exactSize = std::min<int>(t.m_realSize, std::max<int>(cellW * spriteSize, cellH * spriteSize));
+    t.m_isProto = true;
+
+    t.m_layers      = layers;
+    t.m_numPatternX = patternX;
+    t.m_numPatternY = patternY;
+    t.m_numPatternZ = patternZ;
+
+    // Phase count comes from the animation's sprite_phase array (legacy
+    // thingtype.cpp:319 reads it as U8). Without animation we assume 1 phase.
+    int groupPhases = 1;
+    if (si.has_animation()) {
+        const SpriteAnimation& sa = si.animation();
+        groupPhases = sa.sprite_phase_size();
+        if (groupPhases < 1)
+            groupPhases = 1;
+
+        // Mirror legacy thingtype.cpp:322-334: build per-group Animator and
+        // place into m_animator (moving) vs m_idleAnimator (idle) based on
+        // fixed_frame_group. For non-outfit appearances (items, effects,
+        // missiles), use the FrameGroupDefault slot (m_animator).
+        if (groupPhases > 1) {
+            AnimatorPtr animator = buildAnimator(sa, groupPhases);
+            if (animator) {
+                if (category == ThingCategoryCreature && fg.has_fixed_frame_group()) {
+                    switch (fg.fixed_frame_group()) {
+                        case FIXED_FRAME_GROUP_OUTFIT_IDLE:
+                            t.m_idleAnimator = animator;
+                            break;
+                        case FIXED_FRAME_GROUP_OUTFIT_MOVING:
+                            t.m_animator = animator;
+                            break;
+                        default:
+                            t.m_animator = animator;
+                            break;
+                    }
+                } else {
+                    t.m_animator = animator;
+                }
+            }
+        }
+    }
+    t.m_animationPhases += groupPhases;
+
+    // Flat sprite-index vector indexed by getSpriteIndex(). For proto
+    // (Tibia 12+), one sprite covers the entire bounding_square — drop
+    // the m_size.area() factor that the legacy .dat reader needed.
+    // koliseu-client thingtype.cpp uses the same formula for proto:
+    //   total = layers * patternX * patternY * patternZ * phases
+    const int totalSprites = t.m_layers * t.m_numPatternX
+                           * t.m_numPatternY * t.m_numPatternZ * groupPhases;
+
+    const int newSize = totalSpritesCount + totalSprites;
+    t.m_spritesIndex.resize(newSize);
+
+    // The proto's sprite_id[] is a flat U32 list in the same order the legacy
+    // reader expects (row-major over w, h, l, x, y, z, a — see
+    // ThingType::getSpriteIndex thingtype.cpp:862).
+    const int available = si.sprite_id_size();
+    for (int i = 0; i < totalSprites; ++i) {
+        const int dst = totalSpritesCount + i;
+        t.m_spritesIndex[dst] = (i < available) ? static_cast<int>(si.sprite_id(i)) : 0;
+    }
+    totalSpritesCount = newSize;
+}
+
+AnimatorPtr AppearancesLoader::buildAnimator(const SpriteAnimation& sa, int phases)
+{
+    if (phases <= 0)
+        return nullptr;
+
+    auto animator = std::make_shared<Animator>();
+    animator->m_animationPhases = phases;
+    // Legacy thingtype.cpp / animator.cpp:49 reads `m_async = fin->getU8() == 0;`
+    // i.e. the U8 0 means async. In protobuf, `synchronized=true` is the
+    // explicit synchronous case, so async = !synchronized.
+    animator->m_async = sa.has_synchronized() ? !sa.synchronized() : true;
+
+    // loop_count + loop_type: legacy stores loop_count<0 as pingpong (see
+    // animator.cpp:116-119 `if (m_loopCount < 0) getPingPongPhase()`). The
+    // proto separates them; collapse back to legacy convention.
+    int loopCount = sa.has_loop_count() ? static_cast<int>(sa.loop_count()) : 0;
+    if (sa.has_loop_type() && sa.loop_type() == ANIMATION_LOOP_TYPE_PINGPONG)
+        loopCount = -1;
+    animator->m_loopCount = loopCount;
+
+    // default_start_phase: legacy reads int8 (animator.cpp:51). The proto's
+    // random_start_phase=true overrides start phase to -1, matching the legacy
+    // sentinel that triggers a random pick in Animator::getStartPhase().
+    int startPhase = sa.has_default_start_phase() ? static_cast<int>(sa.default_start_phase()) : 0;
+    if (sa.has_random_start_phase() && sa.random_start_phase())
+        startPhase = -1;
+    animator->m_startPhase = startPhase;
+
+    animator->m_phaseDurations->clear();
+    animator->m_phaseDurations->reserve(phases);
+    for (int i = 0; i < phases; ++i) {
+        const SpritePhase& p = sa.sprite_phase(i);
+        const int minimum = static_cast<int>(p.has_duration_min() ? p.duration_min() : 0);
+        const int maximum = static_cast<int>(p.has_duration_max() ? p.duration_max() : 0);
+        // Legacy animator.cpp:56 stores (min, max - min) — the second element
+        // is the random *range*, not the absolute max.
+        animator->m_phaseDurations->emplace_back(minimum, std::max(0, maximum - minimum));
+    }
+
+    animator->m_phase = animator->getStartPhase();
+    return animator;
+}

@@ -58,6 +58,16 @@ void Client::registerLuaFunctions()
 {
     g_lua.registerSingletonClass("g_things");
     g_lua.bindSingletonFunction("g_things", "loadDat", &ThingTypeManager::loadDat, &g_things);
+    // Phase 0 #9 / P0.8: modern protobuf entry points. Lua's game_things probe
+    // calls loadAppearances when data/things/<version>/catalog-content.json is
+    // present; the legacy 8.60 boot keeps using loadDat above and is
+    // byte-identical. loadSpriteSheets must be called BEFORE loadAppearances
+    // — see ordering note on ThingTypeManager::loadAppearances. The boot path
+    // uses getAppearancesPath to discover the hashed appearances-<sha>.dat
+    // filename announced by catalog-content.json.
+    g_lua.bindSingletonFunction("g_things", "loadAppearances", &ThingTypeManager::loadAppearances, &g_things);
+    g_lua.bindSingletonFunction("g_things", "loadSpriteSheets", &ThingTypeManager::loadSpriteSheets, &g_things);
+    g_lua.bindSingletonFunction("g_things", "getAppearancesPath", &ThingTypeManager::getAppearancesPath, &g_things);
 #ifdef WITH_ENCRYPTION
     g_lua.bindSingletonFunction("g_things", "saveDat", &ThingTypeManager::saveDat, &g_things);
     g_lua.bindSingletonFunction("g_things", "dumpTextures", &ThingTypeManager::dumpTextures, &g_things);

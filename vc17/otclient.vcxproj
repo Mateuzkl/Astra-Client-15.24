@@ -484,6 +484,8 @@
     <ClCompile Include="..\src\client\thing.cpp" />
     <ClCompile Include="..\src\client\thingtype.cpp" />
     <ClCompile Include="..\src\client\thingtypemanager.cpp" />
+    <ClCompile Include="..\src\client\appearancesloader.cpp" />
+    <ClCompile Include="..\src\client\spritesheetloader.cpp" />
     <ClCompile Include="..\src\client\tile.cpp" />
     <ClCompile Include="..\src\client\towns.cpp" />
     <ClCompile Include="..\src\client\uicreature.cpp" />
@@ -645,6 +647,8 @@
     <ClInclude Include="..\src\client\thingstype.h" />
     <ClInclude Include="..\src\client\thingtype.h" />
     <ClInclude Include="..\src\client\thingtypemanager.h" />
+    <ClInclude Include="..\src\client\appearancesloader.h" />
+    <ClInclude Include="..\src\client\spritesheetloader.h" />
     <ClInclude Include="..\src\client\tile.h" />
     <ClInclude Include="..\src\client\towns.h" />
     <ClInclude Include="..\src\client\uicreature.h" />
@@ -807,6 +811,51 @@
   </ItemGroup>
   <ItemGroup>
     <Image Include="..\src\otcicon.ico" />
+  </ItemGroup>
+  <!--
+    Phase 0 deliverable #6: Protobuf-generated appearances.pb.{h,cc} +
+    staticdata.pb.{h,cc} for Tibia 12+ assets / static-data bestiary banks.
+    The .proto files are copied verbatim from the Koliseu server
+    (src/protobuf/*.proto). `protoc.exe` is shipped by
+    `vcpkg install protobuf:x86-windows-static`.
+
+    Path layout note (the #1 landmine flagged in project_protocol_pipeline_1524
+    and AGENT_NOTES_BUILD §9): vcpkg manifest mode places protoc.exe under
+    vcpkg_installed/<triplet>/<triplet>/tools/protobuf/protoc.exe — the inner
+    triplet folder is the vcpkg buildtree's "package" copy. That's why
+    $(VcpkgTriplet) appears TWICE in the path below; this is the exact string
+    proven to work in koliseu-otcv8 and must not be "simplified".
+
+    Generated pairs land in $(IntDir)proto\ (parallel-build-safe per
+    configuration) and are picked up via AdditionalIncludeDirectories +
+    the ClCompile entries below. libprotobuf{,d}.lib is auto-linked by vcpkg
+    (VcpkgAutoLink=true).
+  -->
+  <ItemGroup>
+    <CustomBuild Include="..\src\client\proto\appearances.proto">
+      <FileType>Document</FileType>
+      <Command>if not exist "$(IntDir)proto" mkdir "$(IntDir)proto"
+"$(ProjectDir)..\vcpkg_installed\$(VcpkgTriplet)\$(VcpkgTriplet)\tools\protobuf\protoc.exe" --cpp_out="$(IntDir)proto" --proto_path="$(ProjectDir)..\src\client\proto" "$(ProjectDir)..\src\client\proto\appearances.proto"</Command>
+      <Message>protoc appearances.proto -&gt; $(IntDir)proto\appearances.pb.{h,cc}</Message>
+      <Outputs>$(IntDir)proto\appearances.pb.cc;$(IntDir)proto\appearances.pb.h</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="..\src\client\proto\staticdata.proto">
+      <FileType>Document</FileType>
+      <Command>if not exist "$(IntDir)proto" mkdir "$(IntDir)proto"
+"$(ProjectDir)..\vcpkg_installed\$(VcpkgTriplet)\$(VcpkgTriplet)\tools\protobuf\protoc.exe" --cpp_out="$(IntDir)proto" --proto_path="$(ProjectDir)..\src\client\proto" "$(ProjectDir)..\src\client\proto\staticdata.proto"</Command>
+      <Message>protoc staticdata.proto -&gt; $(IntDir)proto\staticdata.pb.{h,cc}</Message>
+      <Outputs>$(IntDir)proto\staticdata.pb.cc;$(IntDir)proto\staticdata.pb.h</Outputs>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="$(IntDir)proto\appearances.pb.cc">
+      <!-- The protoc-generated TU includes <google/protobuf/*.h> which trips a few warnings; mute the ones MSBuild flags by default. -->
+      <DisableSpecificWarnings>4267;4244;4146;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)proto\staticdata.pb.cc">
+      <!-- Same warning shape as appearances.pb.cc — the protoc TU carries the noisy includes. -->
+      <DisableSpecificWarnings>4267;4244;4146;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
