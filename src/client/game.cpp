@@ -1682,6 +1682,29 @@ void Game::setClientVersion(int version)
     g_lua.callGlobalField("g_game", "onClientVersionChange", version);
 }
 
+// Server-era helpers — see memo project_protocol_pipeline_1524.
+// "Modern" == Tibia 12.40+/15.x packet schema (>= 1300).
+bool Game::isModernClient() const
+{
+    return m_clientVersion >= 1300;
+}
+
+// Era boundaries:
+//   < 980  : classic   (pre session-key login)
+//   < 1100 : tibia10   (account-name login era through tibia 11.x)
+//   < 1300 : tibia12   (early tibia 12.x, pre packet-schema rewrite)
+//   >=1300 : tibia15   (tibia 12.40+ / 15.x — Koliseu target, memo project_protocol_pipeline_1524)
+std::string Game::getServerEra() const
+{
+    if(m_clientVersion < 980)
+        return "classic";
+    if(m_clientVersion < 1100)
+        return "tibia10";
+    if(m_clientVersion < 1300)
+        return "tibia12";
+    return "tibia15";
+}
+
 void Game::setAttackingCreature(const CreaturePtr& creature)
 {
     if(creature != m_attackingCreature) {

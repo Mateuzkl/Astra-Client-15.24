@@ -15,7 +15,7 @@ local serverHostTextEdit
 local rememberPasswordBox
 local rememberEmailBox
 local protos = { "740", "760", "772", "792", "800", "810", "854", "860", "870", "910", "961", "1000", "1077", "1090",
-  "1096", "1098", "1099", "1100", "1200", "1220", "1312" }
+  "1096", "1098", "1099", "1100", "1200", "1220", "1312", "1300", "1400", "1500", "1524" }
 
 -- Google Configuration
 local googleSession = ""
@@ -151,6 +151,139 @@ function getWorldInfo(id)
   return worlds[id]
 end
 
+-- Detects Koliseu's flat HTTP response shape.
+-- Koliseu sends `clientVersion` (number) + top-level `worlds` / `characters` arrays,
+-- in contrast to the Tibia 12.x shape which nests everything under `session`/`playdata`.
+local function isKoliseuShape(data)
+  if type(data) ~= "table" then
+    return false
+  end
+  if type(data["clientVersion"]) ~= "number" then
+    return false
+  end
+  return type(data["worlds"]) == "table" or type(data["characters"]) == "table"
+end
+
+-- Queues HTTP.download calls for appearances.dat + sprite sheets into data/things/<version>/.
+-- Reuses the same HTTP.download primitive as modules/updater/updater.lua.
+-- doneCallback() fires once every file finishes (or immediately if there is nothing to fetch).
+local function downloadKoliseuCatalog(catalogUrl, clientVersion, files, index, doneCallback)
+  local entry = files[index]
+  if not entry then
+    return doneCallback()
+  end
+  local relPath = "data/things/" .. tostring(clientVersion) .. "/" .. entry
+  HTTP.download(catalogUrl .. "/" .. entry, relPath, function(_file, _checksum, err)
+    if err then
+      g_logger.warning("Koliseu catalog: failed to fetch " .. entry .. " (" .. tostring(err) .. ")")
+    end
+    downloadKoliseuCatalog(catalogUrl, clientVersion, files, index + 1, doneCallback)
+  end)
+end
+
+local function onKoliseuHTTPResult(data)
+  local clientVersion = data["clientVersion"]
+  local catalogUrl = data["catalogUrl"]
+  local sessionKey = nil
+  if type(data["session"]) == "table" then
+    sessionKey = data["session"]["sessionkey"]
+  elseif type(data["session"]) == "string" then
+    sessionKey = data["session"]
+  end
+
+  local account = {
+    status = 0,
+    subStatus = SubscriptionStatus.Free,
+    premDays = 0,
+  }
+
+  if type(data["session"]) == "table" then
+    local session = data["session"]
+    if session["status"] and session["status"] ~= "active" then
+      account.status = 1
+    end
+    if session["premiumuntil"] and session["premiumuntil"] > g_clock.seconds() then
+      account.subStatus = SubscriptionStatus.Premium
+      account.premDays = math.max(0, math.ceil((session["premiumuntil"] - g_clock.seconds()) / 86400))
+    end
+  end
+
+  for _, world in pairs(data["worlds"] or {}) do
+    worlds[world.id] = {
+      name = world.name,
+      address = world.host,
+      port = world.port,
+      pvptype = world.pvptype or 0,
+      version = world.version or clientVersion,
+    }
+  end
+
+  local characters = {}
+  for _, character in pairs(data["characters"] or {}) do
+    local world = worlds[character.worldid or character.worldId]
+    if world then
+      table.insert(characters, {
+        name = character.name,
+        worldName = world.name,
+        worldIp = world.address,
+        worldPort = world.port,
+        pvpType = world.pvptype,
+        mainCharacter = character.ismaincharacter or character.mainCharacter,
+        dailyRewardState = character.dailyrewardstate or character.dailyRewardState or 0,
+        level = character.level or 1,
+        vocation = character.vocation or 0,
+        worldId = character.worldid or character.worldId,
+        outfit = character.outfit or {
+          type = character.outfitid or 128,
+          head = character.headcolor or 0,
+          body = character.torsocolor or 0,
+          legs = character.legscolor or 0,
+          feet = character.detailcolor or 0,
+          addons = character.addonsflags or 0,
+        },
+      })
+    end
+  end
+
+  if #characters == 0 then
+    return EnterGame.onError("No characters found on this account.")
+  end
+
+  G.clientVersion = clientVersion
+  g_game.setClientVersion(clientVersion)
+  g_game.setStringVersion(GameInfo.strVersion)
+  g_game.setProtocolVersion(g_game.getClientProtocolVersion(clientVersion))
+  g_game.setCustomProtocolVersion(0)
+  g_game.chooseRsa(G.host)
+  g_game.setCustomOs(-1)
+  if not g_game.getFeature(GameExtendedOpcode) then
+    g_game.setCustomOs(5)
+  end
+
+  if sessionKey then
+    onSessionKey(nil, sessionKey)
+  end
+
+  local function proceed()
+    onCharacterList(nil, characters, account, nil)
+  end
+
+  if type(catalogUrl) == "string" and catalogUrl:len() > 0 then
+    -- Strip trailing slash so we can do catalogUrl .. "/" .. file uniformly.
+    catalogUrl = catalogUrl:gsub("/+$", "")
+    local catalogFiles = data["catalogFiles"]
+    if type(catalogFiles) ~= "table" or #catalogFiles == 0 then
+      catalogFiles = { "appearances.dat", "catalog-content.json" }
+    end
+    if loadBox then
+      loadBox.label:setText(tr("Downloading game data..."))
+    end
+    downloadKoliseuCatalog(catalogUrl, clientVersion, catalogFiles, 1, proceed)
+  else
+    proceed()
+  end
+end
+
 local function onTibia12HTTPResult(session, playdata)
   local characters = {}
   local account = {
@@ -282,6 +415,12 @@ local function onHTTPResult(data, err)
     return EnterGame.onLoginError(data['error'])
   elseif data['errorMessage'] and data['errorMessage']:len() > 0 then
     return EnterGame.onLoginError(data['errorMessage'])
+  end
+
+  -- Koliseu's flat shape: clientVersion + top-level worlds/characters arrays.
+  -- Check before the Tibia 12.x branch since Koliseu may also include a `session` table.
+  if isKoliseuShape(data) then
+    return onKoliseuHTTPResult(data)
   end
 
   if type(data["session"]) == "table" and type(data["playdata"]) == "table" then

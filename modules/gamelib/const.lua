@@ -334,7 +334,11 @@ GameLoadTibiaAssets = 133
 GameGroupInMessage = 134
 GameExevoVisHur = 135
 
-LastGameFeature = 136
+GameTibia13Protocol = 136
+GameTibia15Protocol = 137
+GameModernClient = 138
+
+LastGameFeature = 139
 
 TextColors = {
   red        = '#F55E5E',

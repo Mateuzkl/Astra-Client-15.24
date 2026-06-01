@@ -332,6 +332,9 @@ void Client::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_game", "setCustomProtocolVersion", &Game::setCustomProtocolVersion, &g_game);
     g_lua.bindSingletonFunction("g_game", "getClientVersion", &Game::getClientVersion, &g_game);
     g_lua.bindSingletonFunction("g_game", "setClientVersion", &Game::setClientVersion, &g_game);
+    // Server-era helpers — see memo project_protocol_pipeline_1524.
+    g_lua.bindSingletonFunction("g_game", "isModernClient", &Game::isModernClient, &g_game);
+    g_lua.bindSingletonFunction("g_game", "getServerEra", &Game::getServerEra, &g_game);
     g_lua.bindSingletonFunction("g_game", "setCustomOs", &Game::setCustomOs, &g_game);
     g_lua.bindSingletonFunction("g_game", "getOs", &Game::getOs, &g_game);
     g_lua.bindSingletonFunction("g_game", "getCharacterName", &Game::getCharacterName, &g_game);
@@ -411,6 +414,19 @@ void Client::registerLuaFunctions()
     g_lua.bindClassMemberFunction<ProtocolGame>("getCreature", &ProtocolGame::getCreature);
     g_lua.bindClassMemberFunction<ProtocolGame>("getItem", &ProtocolGame::getItem);
     g_lua.bindClassMemberFunction<ProtocolGame>("getPosition", &ProtocolGame::getPosition);
+    // Phase 1 SEAM: opcode dispatch table (see protocolgame.h).
+    g_lua.bindClassMemberFunction<ProtocolGame>("registerOpcodeHandler", &ProtocolGame::registerOpcodeHandler);
+    g_lua.bindClassMemberFunction<ProtocolGame>("tryDispatchOpcode", &ProtocolGame::tryDispatchOpcode);
+    // Convenience: g_game.registerOpcodeHandler(opcode, fn) forwards to the
+    // active ProtocolGame. Silent no-op when no protocol is connected -- this
+    // matches the defensive pattern used by other singleton helpers and lets
+    // modules register handlers at load time (before login).
+    g_lua.bindSingletonFunction("g_game", "registerOpcodeHandler",
+        std::function<void(uint8_t, ProtocolGame::OpcodeHandler)>(
+            [](uint8_t opcode, ProtocolGame::OpcodeHandler fn) {
+                if (auto p = g_game.getProtocolGame())
+                    p->registerOpcodeHandler(opcode, std::move(fn));
+            }));
 
     g_lua.registerClass<Container>();
     g_lua.bindClassMemberFunction<Container>("getItem", &Container::getItem);

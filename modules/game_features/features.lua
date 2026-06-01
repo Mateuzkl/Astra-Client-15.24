@@ -229,5 +229,21 @@ function updateFeatures(version)
       g_game.enableFeature(GameTibia12Protocol)
     end
 
+    if(version >= 1300) then
+      g_game.enableFeature(GameTibia13Protocol)
+    end
+
+    if(version >= 1400) then
+      -- no new feature flags introduced at 1400 (cumulative on 1300)
+    end
+
+    if(version >= 1500) then
+      g_game.enableFeature(GameTibia15Protocol)
+    end
+
+    if(version >= 1524) then
+      g_game.enableFeature(GameModernClient)
+    end
+
     modules.game_things.load()
 end

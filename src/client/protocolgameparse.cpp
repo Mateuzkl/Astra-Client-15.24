@@ -82,6 +82,18 @@ void ProtocolGame::parseMessage(const InputMessagePtr& msg)
             } else
                 msg->setReadPos(readPos); // restore read pos
 
+            // Phase 1 SEAM: opcode dispatch table.
+            // If a handler is registered for this opcode (Phase 3 / 15.24),
+            // invoke it and SKIP the legacy switch below. When the table is
+            // empty (legacy versions, default state) tryDispatchOpcode()
+            // returns false and the existing switch handles the opcode --
+            // byte-identical to the pre-seam behaviour.
+            if (tryDispatchOpcode(static_cast<uint8_t>(opcode), msg)) {
+                prevOpcode = opcode;
+                prevOpcodePos = opcodePos;
+                continue;
+            }
+
             switch (opcode) {
             case Proto::GameServerLoginOrPendingState:
                 if (g_game.getFeature(Otc::GameLoginPending))

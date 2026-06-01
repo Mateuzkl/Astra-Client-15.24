@@ -86,3 +86,30 @@ void ProtocolGame::onError(const boost::system::error_code& error)
     g_game.processConnectionError(error);
     disconnect();
 }
+
+// ---------------------------------------------------------------------------
+// Phase 1 SEAM: opcode dispatch table.
+// ---------------------------------------------------------------------------
+// The default state is an EMPTY table. parseMessage() consults the table
+// first; if no handler is registered for the incoming opcode, control falls
+// through to the legacy case-switch -- so legacy versions behave exactly as
+// before. Phase 3 will register 15.24-specific handlers via Lua / C++.
+
+void ProtocolGame::registerOpcodeHandler(uint8_t opcode, OpcodeHandler fn)
+{
+    if (!fn) {
+        // Allow erase by passing an empty std::function (e.g. for hot reload).
+        m_opcodeDispatch.erase(opcode);
+        return;
+    }
+    m_opcodeDispatch[opcode] = std::move(fn);
+}
+
+bool ProtocolGame::tryDispatchOpcode(uint8_t opcode, const InputMessagePtr& msg)
+{
+    auto it = m_opcodeDispatch.find(opcode);
+    if (it == m_opcodeDispatch.end())
+        return false;
+    it->second(msg);
+    return true;
+}

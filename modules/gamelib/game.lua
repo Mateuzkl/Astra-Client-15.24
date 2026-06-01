@@ -108,7 +108,11 @@ function g_game.getClientProtocolVersion(client)
     [985] = 977,
     [986] = 978,
     [1001] = 979,
-    [1002] = 980
+    [1002] = 980,
+    [1300] = 1300,
+    [1400] = 1400,
+    [1500] = 1500,
+    [1524] = 1524
   }
   return clients[client] or client
 end

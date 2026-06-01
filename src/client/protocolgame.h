@@ -28,8 +28,27 @@
 #include <framework/net/protocol.h>
 #include "creature.h"
 
+#include <functional>
+#include <unordered_map>
+
 class ProtocolGame : public Protocol
 {
+public:
+    // Phase 1 SEAM: opcode dispatch table.
+    // Phase 3 will use registerOpcodeHandler() to bind 15.24-specific opcode
+    // handlers WITHOUT touching the legacy case-switch in parseMessage().
+    // tryDispatchOpcode() returns true when an entry was found in the table
+    // (and was invoked); false means the caller must fall through to the
+    // existing legacy switch -- guaranteeing byte-identical behaviour for
+    // pre-15.24 protocols where the table is empty.
+    // Handler signature is (msg) only -- callers that need access to the
+    // ProtocolGame instance can capture it (C++ lambda) or use the implicit
+    // `g_game.getProtocolGame()` accessor (Lua). This keeps the Lua binding
+    // trivial (the framework cannot marshal raw ProtocolGame* arguments).
+    using OpcodeHandler = std::function<void(const InputMessagePtr&)>;
+    void registerOpcodeHandler(uint8_t opcode, OpcodeHandler fn);
+    bool tryDispatchOpcode(uint8_t opcode, const InputMessagePtr& msg);
+
 public:
     void login(const std::string& accountName, const std::string& accountPassword, const std::string& host, uint16 port, const std::string& characterName, const std::string& authenticatorToken, const std::string& sessionKey, const std::string& worldName);
     void send(const OutputMessagePtr& outputMessage, bool rawPacket = false);
@@ -346,6 +365,10 @@ private:
     LocalPlayerPtr m_localPlayer;
     int m_recivedPackeds = 0;
     int m_recivedPackedsSize = 0;
+
+    // Phase 1 SEAM: opcode -> handler table.
+    // Empty by default => legacy switch handles everything (Phase 0 parity).
+    std::unordered_map<uint8_t, OpcodeHandler> m_opcodeDispatch;
 };
 
 #endif
