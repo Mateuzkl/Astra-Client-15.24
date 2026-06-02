@@ -46,21 +46,27 @@ function load()
 
   loading = true
   local version = g_game.getClientVersion()
+  if version == 0 then
+    -- Boot path: features/setClientVersion only fires after entergame picks a
+    -- server. things.load() during background prefetch has nothing to load yet.
+    loading = false
+    return
+  end
+
   local things = g_settings.getNode('things')
 
   local datPath, sprPath
   if things and things["data"] ~= nil and things["sprites"] ~= nil then
     datPath = resolvepath('/things/' .. things["data"])
     sprPath = resolvepath('/things/' .. things["sprites"])
+  elseif filename then
+    datPath = resolvepath('/things/' .. filename)
+    sprPath = resolvepath('/things/' .. filename)
   else
-    if filename then
-      datPath = resolvepath('/things/' .. filename)
-      sprPath = resolvepath('/things/' .. filename)
-    else
-      -- Force loading the 8.60 asset pack used by this server.
-      datPath = resolvepath('/things/860/Tibia')
-      sprPath = resolvepath('/things/860/Tibia')
-    end
+    -- Default per-version asset directory: data/things/<version>/Tibia.{dat,spr}
+    -- (legacy ≤1099) or data/things/<version>/{catalog-content.json,...} (12+).
+    datPath = resolvepath('/things/' .. tostring(version) .. '/Tibia')
+    sprPath = resolvepath('/things/' .. tostring(version) .. '/Tibia')
   end
 
   local protocolVersion = g_game.getProtocolVersion()
