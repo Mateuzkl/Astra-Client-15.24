@@ -497,7 +497,13 @@ namespace Otc
         GameGroupInMessage = 134,
         GameExevoVisHur = 135,
 
-        LastGameFeature = 136
+        // 15.24 upgrade — feature-flagged so 8.60/10.x default flows still work.
+        // Mirror modules/gamelib/const.lua.
+        GameTibia13Protocol = 136,
+        GameTibia15Protocol = 137,
+        GameModernClient = 138,
+
+        LastGameFeature = 139
     };
 
     enum PathFindResult {
