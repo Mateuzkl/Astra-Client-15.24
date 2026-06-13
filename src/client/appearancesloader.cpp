@@ -29,6 +29,7 @@
 
 #include <framework/core/clock.h>
 #include <framework/core/logger.h>
+#include <framework/core/resourcemanager.h>
 #include <framework/stdext/format.h>
 
 #include <algorithm>
@@ -59,11 +60,15 @@ bool AppearancesLoader::load(const std::string& file)
             m_categoryCounts[i] = 0;
 
         // Open as raw binary stream — the server (game.cpp:1454) does the same.
-        // appearances.dat lives in the assets directory, outside the PHYSFS
-        // virtual filesystem the legacy loader used.
-        std::ifstream in(file, std::ios::in | std::ios::binary);
+        // The Lua caller passes a PHYSFS virtual path (e.g.
+        // "/data/things/1524/appearances-<sha>.dat"); translate to a real FS
+        // path before handing to std::ifstream (which bypasses PHYSFS).
+        std::string realPath = g_resources.getRealPath(file);
+        if (realPath.empty())
+            realPath = file;  // fallback: caller may have passed a real path
+        std::ifstream in(realPath, std::ios::in | std::ios::binary);
         if (!in.is_open()) {
-            g_logger.error(stdext::format("AppearancesLoader: cannot open '%s'", file));
+            g_logger.error(stdext::format("AppearancesLoader: cannot open '%s' (real '%s')", file, realPath));
             return false;
         }
 
@@ -186,14 +191,87 @@ bool AppearancesLoader::buildThingType(const Appearance& app, ThingCategory cate
 
     // Bytes-typed in proto, std::string in C++ — direct assignment is safe.
     const std::string name = app.has_name() ? app.name() : std::string();
+    type->setAppearanceName(name);
 
     if (app.has_flags())
         applyFlags(app.flags(), name, *type);
 
     int totalSpritesCount = 0;
+    std::vector<FrameGroupLayout> groupLayouts;
     const int groupCount = app.frame_group_size();
     for (int g = 0; g < groupCount; ++g)
-        applyFrameGroup(app.frame_group(g), category, *type, totalSpritesCount);
+        applyFrameGroup(app.frame_group(g), category, *type, totalSpritesCount, groupLayouts);
+
+    // Some multi-group outfits ship idle/moving groups with DIFFERENT dims
+    // (e.g. outfit 267: idle 4x2x1x1, moving 4x1x1x1). applyFrameGroup writes
+    // last-group-wins dims while appending each group's sprites flat, but
+    // getSpriteIndex indexes the whole concatenated phase axis with ONE stride
+    // from the final dims — so divergent groups render scrambled (or clamp +
+    // traceError-spam past the vector end). Re-layout every phase to the
+    // per-dimension maxima, mirroring the legacy .dat correction block
+    // (thingtype.cpp:364-400) that the proto path lacked.
+    bool dimsDiverge = false;
+    for (size_t i = 1; i < groupLayouts.size(); ++i) {
+        const FrameGroupLayout& a = groupLayouts[0];
+        const FrameGroupLayout& b = groupLayouts[i];
+        if (b.layers != a.layers || b.patternX != a.patternX
+            || b.patternY != a.patternY || b.patternZ != a.patternZ) {
+            dimsDiverge = true;
+            break;
+        }
+    }
+    if (dimsDiverge) {
+        int maxL = 1, maxX = 1, maxY = 1, maxZ = 1;
+        int maxCellW = 1, maxCellH = 1, maxRealSize = 0;
+        for (const FrameGroupLayout& gl : groupLayouts) {
+            maxL = std::max(maxL, gl.layers);
+            maxX = std::max(maxX, gl.patternX);
+            maxY = std::max(maxY, gl.patternY);
+            maxZ = std::max(maxZ, gl.patternZ);
+            maxCellW = std::max(maxCellW, gl.cellW);
+            maxCellH = std::max(maxCellH, gl.cellH);
+            maxRealSize = std::max(maxRealSize, gl.realSize);
+        }
+        const int totalPhases = type->m_animationPhases;
+        std::vector<int> newIndex(static_cast<size_t>(maxL) * maxX * maxY * maxZ * totalPhases, 0);
+        int phaseBase = 0;
+        for (const FrameGroupLayout& gl : groupLayouts) {
+            for (int p = 0; p < gl.phases; ++p) {
+                const int a = phaseBase + p;
+                for (int z = 0; z < maxZ; ++z) {
+                    for (int y = 0; y < maxY; ++y) {
+                        for (int x = 0; x < maxX; ++x) {
+                            for (int l = 0; l < maxL; ++l) {
+                                const int dst = (((a * maxZ + z) * maxY + y) * maxX + x) * maxL + l;
+                                // Duplicate the nearest real sprite (modulo patterns,
+                                // clamp layers) rather than 0-fill: getSpriteIndex wraps
+                                // the same way, and 0-fill would blank e.g. an idle group
+                                // with Z=1 drawn at zPattern=1 (mounted).
+                                const int src = gl.spriteOffset
+                                    + (((p * gl.patternZ + (z % gl.patternZ)) * gl.patternY + (y % gl.patternY))
+                                        * gl.patternX + (x % gl.patternX)) * gl.layers
+                                    + std::min(l, gl.layers - 1);
+                                newIndex[dst] = type->m_spritesIndex[src];
+                            }
+                        }
+                    }
+                }
+            }
+            phaseBase += gl.phases;
+        }
+        type->m_spritesIndex = std::move(newIndex);
+        type->m_layers = maxL;
+        type->m_numPatternX = maxX;
+        type->m_numPatternY = maxY;
+        type->m_numPatternZ = maxZ;
+        // m_size/m_realSize were also last-group-wins; getTexture uses m_size as
+        // the atlas frame cell for ALL phases, so normalize the footprint too
+        // (same as the legacy correction at thingtype.cpp:364-369).
+        const int spriteSize = g_sprites.spriteSize();
+        type->m_size = Size(maxCellW, maxCellH);
+        type->m_realSize = maxRealSize;
+        type->m_exactSize = std::min<int>(maxRealSize, std::max<int>(maxCellW * spriteSize, maxCellH * spriteSize));
+    }
 
     // Mirror legacy ThingType::unserialize line 387: if only an idle animator
     // exists, promote it to m_animator (the moving slot is the "default").
@@ -322,6 +400,30 @@ void AppearancesLoader::applyFlags(const AppearanceFlags& f, const std::string& 
     if (f.has_clothes() && f.clothes().has_slot())
         t.m_attribs.set<uint16>(ThingAttrCloth, static_cast<uint16>(f.clothes().slot()));
 
+    // proficiency: weapon proficiency id (15.x weapon mastery). Feeds
+    // g_things.getProficiencyThings() used by mods/game_proficiency.
+    if (f.has_proficiency() && f.proficiency().has_proficiency_id())
+        t.setProficiencyId(static_cast<uint16_t>(f.proficiency().proficiency_id()));
+
+    // weapon_type: WEAPON_TYPE_* enum, same numbering as the gamelib WEAPON_* Lua
+    // constants. Replaces the legacy OTB weapon-type lookup on 15.x setups.
+    if (f.has_weapon_type())
+        t.setWeaponType(static_cast<int>(f.weapon_type()));
+
+    // npcsaledata: NPC trade list (who buys/sells this item and prices). Feeds the
+    // cyclopedia "sell to / buy from" panels and Item::getDefaultValue/BuyPrice.
+    for (int i = 0; i < f.npcsaledata_size(); ++i) {
+        const auto& npc = f.npcsaledata(i);
+        ThingType::NpcSaleInfo info;
+        info.name      = npc.has_name() ? npc.name() : std::string();
+        info.location  = npc.has_location() ? npc.location() : std::string();
+        info.salePrice = npc.has_sale_price() ? npc.sale_price() : 0;
+        info.buyPrice  = npc.has_buy_price() ? npc.buy_price() : 0;
+        info.currencyObjectTypeId = npc.has_currency_object_type_id() ? npc.currency_object_type_id() : 0;
+        info.currencyQuestFlagDisplayName = npc.has_currency_quest_flag_display_name() ? npc.currency_quest_flag_display_name() : std::string();
+        t.addNpcSaleData(std::move(info));
+    }
+
     // market: build MarketData with name (from Appearance.name) + category,
     // tradeAs, showAs, restrictVocation (first vocation if present),
     // requiredLevel. Legacy thingtype.cpp:239-247.
@@ -337,10 +439,17 @@ void AppearancesLoader::applyFlags(const AppearanceFlags& f, const std::string& 
                               ? static_cast<uint16>(m.show_as_object_id())
                               : 0;
         // Legacy stores a single restrictVocation U16. Proto sends a repeated
-        // list; mirror legacy by collapsing to the first entry (or 0).
+        // list; keep the legacy collapse for the .dat path AND the full list for
+        // Lua (mods iterate it: #list / table.contains). PROFESSION_ANY (-1)
+        // means "no restriction" -> empty list.
         md.restrictVocation = (m.restrict_to_profession_size() > 0)
                                 ? static_cast<uint16>(m.restrict_to_profession(0))
                                 : 0;
+        for (int v = 0; v < m.restrict_to_profession_size(); ++v) {
+            const int profession = static_cast<int>(m.restrict_to_profession(v));
+            if (profession >= 0)
+                md.restrictVocations.push_back(static_cast<uint16>(profession));
+        }
         md.requiredLevel  = m.has_minimum_level()
                               ? static_cast<uint16>(m.minimum_level())
                               : 0;
@@ -351,18 +460,33 @@ void AppearancesLoader::applyFlags(const AppearanceFlags& f, const std::string& 
     if (f.unwrap())                t.m_attribs.set(ThingAttrUnwrapable, true);
     if (f.topeffect())             t.m_attribs.set(ThingAttrTopEffect, true);
 
-    // P2 TODO: add ThingAttrExpire / ThingAttrWearOut / ThingAttrPodium /
-    // ThingAttrWrapKit / ThingAttrUpgradeClass to thingtype.h enum + isXxx()
-    // accessors, then wire them to the proto fields wearout/expire/expirestop/
-    // clockexpire/wrapkit/show_off_socket/upgradeclassification here. Not
-    // critical for P0 first boot — the optional bytes ProtocolGame::getItem()
-    // reads only matter once we're parsing real AddItem packets from Koliseu.
+    // 15.24 item flags consumed by ProtocolGame::getItem (server AddItem schema):
+    // these gate optional bytes (decay/charges/podium/wrapkit/classification),
+    // so they MUST be loaded or the map/inventory parse desyncs.
+    if (f.expire())                t.m_attribs.set(ThingAttrExpire, true);
+    if (f.expirestop())            t.m_attribs.set(ThingAttrExpireStop, true);
+    if (f.clockexpire())           t.m_attribs.set(ThingAttrClockExpire, true);
+    if (f.wearout())               t.m_attribs.set(ThingAttrWearOut, true);
+    if (f.wrapkit())               t.m_attribs.set(ThingAttrWrapKit, true);
+    if (f.has_upgradeclassification())
+        t.setClassification(static_cast<uint16>(f.upgradeclassification().upgrade_classification()));
+
+    // show_off_socket (proto field 46) is how 13+/15.x marks a podium. The server
+    // (items.cpp: iType.isPodium = flags().show_off_socket()) serializes an 8-byte
+    // outfit/mount/direction/visible block for podium items in AddItem; getItem()
+    // only consumes it when isPodium() is true, so without this flag a "podium of
+    // vigour" (id 38707) on the ground desynced the whole map slice into
+    // "invalid thing id (0)" on walk.
+    if (f.show_off_socket())       t.m_attribs.set(ThingAttrPodium, true);
+
+    // ammo-slot equipables; consumed by game_actionbar canEquipItem via Item:isAmmo().
+    if (f.ammo())                  t.m_attribs.set(ThingAttrAmmo, true);
 
     // Proto fields still NOT mapped (no consumer yet in 15.24 client):
-    //   default_action, npcsaledata, changedtoexpire, corpse, player_corpse,
-    //   cyclopediaitem, ammo, reportable, reverse_addons_*, skillwheel_gem,
-    //   dual_wielding, imbueable, proficiency, restrict_to_vocation,
-    //   minimum_level, weapon_type. Expose later if a handler needs them.
+    //   default_action, changedtoexpire, corpse, player_corpse,
+    //   cyclopediaitem, reportable, reverse_addons_*, skillwheel_gem,
+    //   dual_wielding, imbueable, restrict_to_vocation,
+    //   minimum_level. Expose later if a handler needs them.
 }
 
 // ----------------------------------------------------------------------------
@@ -370,7 +494,8 @@ void AppearancesLoader::applyFlags(const AppearanceFlags& f, const std::string& 
 // ----------------------------------------------------------------------------
 
 void AppearancesLoader::applyFrameGroup(const FrameGroup& fg, ThingCategory category,
-                                        ThingType& t, int& totalSpritesCount)
+                                        ThingType& t, int& totalSpritesCount,
+                                        std::vector<FrameGroupLayout>& groupLayouts)
 {
     if (!fg.has_sprite_info())
         return;
@@ -379,30 +504,38 @@ void AppearancesLoader::applyFrameGroup(const FrameGroup& fg, ThingCategory cate
 
     // Legacy thingtype.cpp:300-317: width/height/layers/numPatternX/Y/Z come
     // from the same SpriteInfo fields in protobuf land.
-    const int patternX = si.has_pattern_width()  ? static_cast<int>(si.pattern_width())  : 1;
-    const int patternY = si.has_pattern_height() ? static_cast<int>(si.pattern_height()) : 1;
-    const int patternZ = si.has_pattern_depth()  ? static_cast<int>(si.pattern_depth())  : 1;
-    const int layers   = si.has_layers()         ? static_cast<int>(si.layers())         : 1;
+    // max(1,...): an explicit 0 in the protobuf would zero totalSprites below and
+    // turn every pattern getter into a division-by-zero divisor at draw time
+    const int patternX = si.has_pattern_width()  ? std::max(1, static_cast<int>(si.pattern_width()))  : 1;
+    const int patternY = si.has_pattern_height() ? std::max(1, static_cast<int>(si.pattern_height())) : 1;
+    const int patternZ = si.has_pattern_depth()  ? std::max(1, static_cast<int>(si.pattern_depth()))  : 1;
+    const int layers   = si.has_layers()         ? std::max(1, static_cast<int>(si.layers()))         : 1;
 
-    // bounding_square is just the visible bounding box of the artwork —
-    // NOT the atlas storage size. The true cell dimensions come from the
-    // sheet that owns sprite_id(0): the catalog's "spritetype" field
-    // (0=32x32, 1=32x64, 2=64x32, 3=64x64) dictates how many 32x32 cells
-    // each sprite occupies. Using bsq/spriteSize was wrong: a bsq=40 item
-    // with 64x64 sprite would compute m_size=1x1, then blit a 64x64 sprite
-    // into a 32x32 atlas cell and stomp the heap. koliseu-client derives
-    // m_size from sheet->getSpriteSize() for exactly this reason.
+    // m_size is the sprite's SQM footprint (in 32px cells). It MUST come from the
+    // owning sprite sheet's "spritetype" (0=32x32→1x1, 1=32x64→1x2, 2=64x32→2x1,
+    // 3=64x64→2x2), NOT from bounding_square. bounding_square is only the visible
+    // bbox of the artwork; using bsq/spriteSize collapsed every 64x64 sprite to a
+    // 1x1 cell, so getTexture stored a 64x64 sprite in a 32x32 atlas cell and the
+    // draw path clipped it to a single SQM — exactly the "sprites quebradas / tudo
+    // no mesmo SQM" bug. In Tibia's 45° projection a 2x2 sprite anchors at its tile
+    // (bottom-right) and extends into the 3 SQMs above/left, which only works when
+    // m_size reports the true 2x2 footprint.
+    const int spriteSize = g_sprites.spriteSize();
     int square = si.has_bounding_square() ? static_cast<int>(si.bounding_square()) : 1;
     if (square <= 0)
         square = 1;
-    const int spriteSize = g_sprites.spriteSize();
-    // P0 fallback: derive m_size from bounding_square / spriteSize. Memo
-    // project_proto_sprite_size flags this as imprecise for items where the
-    // sprite sheet spritetype differs from bsq/spriteSize. Revisit in P2 when
-    // SpritesheetLoader is wired through ResourceManager so we can read the
-    // sheet's spritetype byte and derive cellW/cellH from there.
-    const int cellW = std::max(1, square / spriteSize);
-    const int cellH = std::max(1, square / spriteSize);
+
+    int cellW = 1;
+    int cellH = 1;
+    if (si.sprite_id_size() > 0) {
+        const auto cell = g_sprites.getSpriteCellSize(static_cast<int>(si.sprite_id(0)));
+        cellW = std::max(1, cell.first / spriteSize);
+        cellH = std::max(1, cell.second / spriteSize);
+    } else {
+        // No sprites (rare); fall back to the bounding-box heuristic.
+        cellW = std::max(1, square / spriteSize);
+        cellH = std::max(1, square / spriteSize);
+    }
     t.m_size = Size(cellW, cellH);
     t.m_realSize = square;
     t.m_exactSize = std::min<int>(t.m_realSize, std::max<int>(cellW * spriteSize, cellH * spriteSize));
@@ -455,6 +588,11 @@ void AppearancesLoader::applyFrameGroup(const FrameGroup& fg, ThingCategory cate
     //   total = layers * patternX * patternY * patternZ * phases
     const int totalSprites = t.m_layers * t.m_numPatternX
                            * t.m_numPatternY * t.m_numPatternZ * groupPhases;
+
+    // Record this group's layout (spriteOffset = start of its block) so
+    // buildThingType can re-layout when groups diverge on dims.
+    groupLayouts.push_back({ layers, patternX, patternY, patternZ,
+                             groupPhases, totalSpritesCount, cellW, cellH, square });
 
     const int newSize = totalSpritesCount + totalSprites;
     t.m_spritesIndex.resize(newSize);

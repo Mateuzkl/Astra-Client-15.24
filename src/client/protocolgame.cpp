@@ -55,6 +55,13 @@ void ProtocolGame::onConnect()
     if(g_game.getFeature(Otc::GameProtocolChecksum))
         enableChecksum();
 
+    // Tibia 13.x+/crystalserver scales the ProtocolGame 2-byte size header by 8
+    // ((realSize-4)/8 on the wire). The server applies this to EVERY game packet
+    // (Connection::parseHeader), so enable it for the whole game connection on
+    // modern clients — including the very first login packet we send.
+    if(g_game.getFeature(Otc::GameSequencedPackets))
+        enableScaledPacketSize();
+
     if(!g_game.getFeature(Otc::GameChallengeOnLogin))
         sendLoginPacket(0, 0);
 
@@ -68,7 +75,15 @@ void ProtocolGame::onRecv(const InputMessagePtr& inputMessage)
     if(m_firstRecv) {
         m_firstRecv = false;
 
-        if(g_game.getFeature(Otc::GameMessageSizeCheck)) {
+        if (m_scaledPacketSize) {
+            // Modern crystalserver framing: the first game packet (the login
+            // challenge and the first post-login burst) is prefixed with a
+            // single-byte message count (0x01 = "one message follows"), see
+            // ProtocolGame::sendLoginChallenge ("Packet length & type"). It is
+            // not an opcode, so consume it before dispatching, otherwise the
+            // parser reads 0x01 as an unknown opcode.
+            inputMessage->getU8();
+        } else if(g_game.getFeature(Otc::GameMessageSizeCheck)) {
             int size = g_game.getFeature(Otc::GamePacketSizeU32) ? inputMessage->getU32() : inputMessage->getU16();
             if(size != inputMessage->getUnreadSize()) {
                 g_logger.traceError("invalid message size");
@@ -83,8 +98,22 @@ void ProtocolGame::onRecv(const InputMessagePtr& inputMessage)
 
 void ProtocolGame::onError(const boost::system::error_code& error)
 {
-    g_game.processConnectionError(error);
-    disconnect();
+    // Keep ourselves alive for the duration of this handler: processConnectionError
+    // -> Game::processDisconnect() resets g_game.m_protocolGame, which may be the
+    // last shared_ptr to this object. Without this local ref, `this` (and the
+    // referenced error_code, owned by the connection) would be freed mid-call and
+    // the following disconnect() would crash with an access violation
+    // (Protocol::disconnect+0x44, seen on WSAECONNREFUSED before first recv).
+    auto self = static_self_cast<ProtocolGame>();
+
+    // Copy the error before processConnectionError can tear down the connection.
+    const auto err = error;
+    g_game.processConnectionError(err);
+
+    // processConnectionError -> processDisconnect already calls disconnect() on
+    // us, so only disconnect here if that path didn't run (no protocol/offline).
+    if (!m_disconnected)
+        disconnect();
 }
 
 // ---------------------------------------------------------------------------

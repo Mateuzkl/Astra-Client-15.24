@@ -40,6 +40,11 @@ public:
     virtual void draw(const Point& dest, bool animate = true, LightView* lightView = nullptr) { }
     virtual bool drawToImage(const Point& dest, ImagePtr image) { return false; }
 
+    // Map draw-order layer (see DrawOrder in drawqueue.h). Set per-frame by Tile::draw
+    // for ground/border items so the framebuffer queue can stable-sort by layer.
+    void setDrawOrder(uint8 order) { m_drawOrder = order; }
+    uint8 getDrawOrder() { return m_drawOrder; }
+
     virtual void setId(uint32 id) { }
     void setPosition(const Position& position);
 
@@ -99,6 +104,8 @@ public:
     int getElevation() { return rawGetThingType()->getElevation(); }
     bool isGround() { return rawGetThingType()->isGround(); }
     bool isGroundBorder() { return rawGetThingType()->isGroundBorder(); }
+    bool isSingleGround() { return rawGetThingType()->isSingleGround(); }
+    bool isSingleGroundBorder() { return rawGetThingType()->isSingleGroundBorder(); }
     bool isOnBottom() { return rawGetThingType()->isOnBottom(); }
     bool isOnTop() { return rawGetThingType()->isOnTop(); }
     bool isContainer() { return rawGetThingType()->isContainer(); }
@@ -139,11 +146,15 @@ public:
     bool isUsable() { return rawGetThingType()->isUsable(); }
     bool isWrapable() { return rawGetThingType()->isWrapable(); }
     bool isUnwrapable() { return rawGetThingType()->isUnwrapable(); }
+    bool isAmmo() { return rawGetThingType()->isAmmo(); }
+    bool hasWearOut() { return rawGetThingType()->hasWearOut(); }
+    bool hasExpireStop() { return rawGetThingType()->hasExpireStop(); }
     bool isInStash() { return false; }
     bool isStowable() { return isPickupable() || isMarketable(); }
     bool isPodium() { return false; }
     bool isTopEffect() { return rawGetThingType()->isTopEffect(); }
     MarketData getMarketData() { return rawGetThingType()->getMarketData(); }
+    uint16_t getProficiencyId() { return rawGetThingType()->getProficiencyId(); }
 
     void hide() { m_hidden = true; }
     void show() { m_hidden = false; }
@@ -160,6 +171,7 @@ protected:
     bool m_marked = false;
     bool m_hidden = false;
     Color m_markedColor;
+    uint8 m_drawOrder = DRAW_ORDER_THIRD;
 };
 #pragma pack(pop)
 

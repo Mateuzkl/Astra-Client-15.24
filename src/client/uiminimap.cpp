@@ -38,6 +38,22 @@ UIMinimap::UIMinimap()
     m_maxZoom = 5;
 }
 
+UIMapAnchorLayoutPtr UIMinimap::ensureLayout()
+{
+    // m_layout can still be null here: a childless minimap style (RealMinimap)
+    // never triggers the addChild default layout, and the ctor cannot
+    // self-cast. Layout-touching methods can run before the first draw (e.g.
+    // cyclopedia Houses calls setCameraPosition right after createWidget), so
+    // they all must come through here — a raw m_layout deref was a null AV.
+    // NOTE: for styles WITH children (Minimap), addChild installs a plain
+    // UIAnchorLayout first and the cast below is technically a downcast of the
+    // wrong type — pre-existing behavior, benign because UIMapAnchorLayout
+    // adds no data members; position anchors just won't resolve there.
+    if (!m_layout)
+        m_layout = std::make_shared<UIMapAnchorLayout>(static_self_cast<UIWidget>());
+    return m_layout->static_self_cast<UIMapAnchorLayout>();
+}
+
 void UIMinimap::drawSelf(Fw::DrawPane drawPane)
 {
     UIWidget::drawSelf(drawPane);
@@ -45,8 +61,7 @@ void UIMinimap::drawSelf(Fw::DrawPane drawPane)
     if(drawPane != Fw::ForegroundPane)
         return;
 
-    if (!m_layout)
-        m_layout = std::make_shared<UIMapAnchorLayout>(static_self_cast<UIWidget>());
+    ensureLayout();
 
     g_minimap.draw(getPaddingRect(), getCameraPosition(), m_scale, m_color);
 }
@@ -67,7 +82,7 @@ bool UIMinimap::setZoom(int zoom)
         m_scale = 1.0f * (1 << std::abs(zoom));
     else
         m_scale = 1;
-    m_layout->update();
+    ensureLayout()->update();
 
     onZoomChange(zoom, oldZoom);
     return true;
@@ -84,7 +99,7 @@ void UIMinimap::setCameraPosition(const Position& pos)
 {
     Position oldPos = m_cameraPosition;
     m_cameraPosition = pos;
-    m_layout->update();
+    ensureLayout()->update();
 
     onCameraPositionChange(pos, oldPos);
 }
@@ -124,21 +139,21 @@ Position UIMinimap::getTilePosition(const Point& mousePos)
 
 void UIMinimap::anchorPosition(const UIWidgetPtr& anchoredWidget, Fw::AnchorEdge anchoredEdge, const Position& hookedPosition, Fw::AnchorEdge hookedEdge)
 {
-    UIMapAnchorLayoutPtr layout = m_layout->static_self_cast<UIMapAnchorLayout>();
+    UIMapAnchorLayoutPtr layout = ensureLayout();
     VALIDATE(layout);
     layout->addPositionAnchor(anchoredWidget, anchoredEdge, hookedPosition, hookedEdge);
 }
 
 void UIMinimap::fillPosition(const UIWidgetPtr& anchoredWidget, const Position& hookedPosition)
 {
-    UIMapAnchorLayoutPtr layout = m_layout->static_self_cast<UIMapAnchorLayout>();
+    UIMapAnchorLayoutPtr layout = ensureLayout();
     VALIDATE(layout);
     layout->fillPosition(anchoredWidget, hookedPosition);
 }
 
 void UIMinimap::centerInPosition(const UIWidgetPtr& anchoredWidget, const Position& hookedPosition)
 {
-    UIMapAnchorLayoutPtr layout = m_layout->static_self_cast<UIMapAnchorLayout>();
+    UIMapAnchorLayoutPtr layout = ensureLayout();
     VALIDATE(layout);
     layout->centerInPosition(anchoredWidget, hookedPosition);
 }

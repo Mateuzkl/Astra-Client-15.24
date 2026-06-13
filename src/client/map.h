@@ -222,6 +222,14 @@ public:
     void setZoneOpacity(float opacity) { m_zoneOpacity = opacity; }
 
     float getZoneOpacity() { return m_zoneOpacity; }
+
+    // Global opacity applied when drawing magic effects / missiles (0.0 - 1.0).
+    // Driven by the "Opacity Effects" / "Opacity Missiles" sliders in the client
+    // settings (see client_settings dataset.lua -> g_client.setEffectAlpha/setMissileAlpha).
+    void setEffectAlpha(float alpha) { m_effectAlpha = std::min<float>(1.0f, std::max<float>(0.0f, alpha)); }
+    float getEffectAlpha() { return m_effectAlpha; }
+    void setMissileAlpha(float alpha) { m_missileAlpha = std::min<float>(1.0f, std::max<float>(0.0f, alpha)); }
+    float getMissileAlpha() { return m_missileAlpha; }
     Color getZoneColor(tileflags_t flag);
     tileflags_t getZoneFlags() { return (tileflags_t)m_zoneFlags; }
     bool showZones() { return m_zoneFlags != 0; }
@@ -267,6 +275,13 @@ public:
     std::vector<AnimatedTextPtr> getAnimatedTexts() { return m_animatedTexts; }
     std::vector<StaticTextPtr> getStaticTexts() { return m_staticTexts; }
 
+    // Cavebot waypoint overlay: tile-anchored markers drawn in MapView::drawMapForeground
+    // (on top of the map tiles/borders, under the UI). Fed from Lua by the cavebot HUD.
+    struct CavebotMark { Position pos; Color color; std::string text; };
+    void addCavebotMark(const Position& pos, const Color& color, const std::string& text) { m_cavebotMarks.push_back({ pos, color, text }); }
+    void clearCavebotMarks() { m_cavebotMarks.clear(); }
+    const std::vector<CavebotMark>& getCavebotMarks() { return m_cavebotMarks; }
+
     std::tuple<std::vector<Otc::Direction>, Otc::PathFindResult> findPath(const Position& start, const Position& goal, int maxComplexity, int flags = 0);
     PathFindResult_ptr newFindPath(const Position& start, const Position& goal, std::shared_ptr<std::list<Node*>> visibleNodes);
     void findPathAsync(const Position & start, const Position & goal, std::function<void(PathFindResult_ptr)> callback);
@@ -289,6 +304,7 @@ private:
     std::array<std::vector<MissilePtr>, Otc::MAX_Z+1> m_floorMissiles;
     std::vector<AnimatedTextPtr> m_animatedTexts;
     std::vector<StaticTextPtr> m_staticTexts;
+    std::vector<CavebotMark> m_cavebotMarks;
     std::vector<MapViewPtr> m_mapViews;
     std::unordered_map<Position, std::string, PositionHasher> m_waypoints;
 
@@ -296,6 +312,8 @@ private:
     uint32 m_zoneFlags;
     std::map<uint32, Color> m_zoneColors;
     float m_zoneOpacity;
+    float m_effectAlpha = 1.0f;
+    float m_missileAlpha = 1.0f;
 
     Light m_light;
     Position m_centralPosition;

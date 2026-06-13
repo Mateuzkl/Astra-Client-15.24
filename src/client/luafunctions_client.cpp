@@ -68,6 +68,7 @@ void Client::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_things", "loadAppearances", &ThingTypeManager::loadAppearances, &g_things);
     g_lua.bindSingletonFunction("g_things", "loadSpriteSheets", &ThingTypeManager::loadSpriteSheets, &g_things);
     g_lua.bindSingletonFunction("g_things", "getAppearancesPath", &ThingTypeManager::getAppearancesPath, &g_things);
+    g_lua.bindSingletonFunction("g_things", "getStaticDataPath", &ThingTypeManager::getStaticDataPath, &g_things);
 #ifdef WITH_ENCRYPTION
     g_lua.bindSingletonFunction("g_things", "saveDat", &ThingTypeManager::saveDat, &g_things);
     g_lua.bindSingletonFunction("g_things", "dumpTextures", &ThingTypeManager::dumpTextures, &g_things);
@@ -83,6 +84,8 @@ void Client::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_things", "getThingType", &ThingTypeManager::getThingType, &g_things);
     g_lua.bindSingletonFunction("g_things", "getItemType", &ThingTypeManager::getItemType, &g_things);
     g_lua.bindSingletonFunction("g_things", "getThingTypes", &ThingTypeManager::getThingTypes, &g_things);
+    g_lua.bindSingletonFunction("g_things", "getProficiencyThings", &ThingTypeManager::getProficiencyThings, &g_things);
+    g_lua.bindSingletonFunction("g_things", "getCyclopediaItemName", &ThingTypeManager::getCyclopediaItemName, &g_things);
     g_lua.bindSingletonFunction("g_things", "findItemTypeByClientId", &ThingTypeManager::findItemTypeByClientId, &g_things);
     g_lua.bindSingletonFunction("g_things", "findItemTypeByName", &ThingTypeManager::findItemTypeByName, &g_things);
     g_lua.bindSingletonFunction("g_things", "findItemTypesByName", &ThingTypeManager::findItemTypesByName, &g_things);
@@ -91,6 +94,7 @@ void Client::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_things", "findThingTypeByAttr", &ThingTypeManager::findThingTypeByAttr, &g_things);
     g_lua.bindSingletonFunction("g_things", "getMarketCategories", &ThingTypeManager::getMarketCategories, &g_things);
     g_lua.bindSingletonFunction("g_things", "getMonsterList", &CreatureManager::getMonsterList, &g_creatures);
+    g_lua.bindSingletonFunction("g_things", "getAchievementList", &CreatureManager::getAchievementList, &g_creatures);
     g_lua.bindSingletonFunction("g_things", "getHouseList", &HouseManager::getStaticHouseList, &g_houses);
     
     g_lua.registerSingletonClass("g_houses");
@@ -144,6 +148,8 @@ void Client::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_map", "getTile", &Map::getTile, &g_map);
     g_lua.bindSingletonFunction("g_map", "getOrCreateTile", &Map::getOrCreateTile, &g_map);
     g_lua.bindSingletonFunction("g_map", "getTiles", &Map::getTiles, &g_map);
+    g_lua.bindSingletonFunction("g_map", "addCavebotMark", &Map::addCavebotMark, &g_map);
+    g_lua.bindSingletonFunction("g_map", "clearCavebotMarks", &Map::clearCavebotMarks, &g_map);
     g_lua.bindSingletonFunction("g_map", "setCentralPosition", &Map::setCentralPosition, &g_map);
     g_lua.bindSingletonFunction("g_map", "getCentralPosition", &Map::getCentralPosition, &g_map);
     g_lua.bindSingletonFunction("g_map", "getCreatureById", &Map::getCreatureById, &g_map);
@@ -173,6 +179,10 @@ void Client::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_map", "setZoneColor", &Map::setZoneColor, &g_map);
     g_lua.bindSingletonFunction("g_map", "setZoneOpacity", &Map::setZoneOpacity, &g_map);
     g_lua.bindSingletonFunction("g_map", "getZoneOpacity", &Map::getZoneOpacity, &g_map);
+    g_lua.bindSingletonFunction("g_map", "setEffectAlpha", &Map::setEffectAlpha, &g_map);
+    g_lua.bindSingletonFunction("g_map", "getEffectAlpha", &Map::getEffectAlpha, &g_map);
+    g_lua.bindSingletonFunction("g_map", "setMissileAlpha", &Map::setMissileAlpha, &g_map);
+    g_lua.bindSingletonFunction("g_map", "getMissileAlpha", &Map::getMissileAlpha, &g_map);
     g_lua.bindSingletonFunction("g_map", "getZoneColor", &Map::getZoneColor, &g_map);
     g_lua.bindSingletonFunction("g_map", "showZones", &Map::showZones, &g_map);
     g_lua.bindSingletonFunction("g_map", "showZone", &Map::showZone, &g_map);
@@ -200,6 +210,7 @@ void Client::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_minimap", "saveOtmm", &Minimap::saveOtmm, &g_minimap);
 
     g_lua.registerSingletonClass("g_creatures");
+    g_lua.bindSingletonFunction("g_creatures", "loadStaticData", &CreatureManager::loadStaticData, &g_creatures);
     g_lua.bindSingletonFunction("g_creatures", "getCreatures", &CreatureManager::getCreatures, &g_creatures);
     g_lua.bindSingletonFunction("g_creatures", "getCreatureByName", &CreatureManager::getCreatureByName, &g_creatures);
     g_lua.bindSingletonFunction("g_creatures", "getCreatureByLook", &CreatureManager::getCreatureByLook, &g_creatures);
@@ -366,6 +377,8 @@ void Client::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_game", "sendGemAtelierAction", &Game::gemAction, &g_game);
     g_lua.bindSingletonFunction("g_game", "sendWeaponProficiencyAction", &Game::sendWeaponProficiencyAction, &g_game);
     g_lua.bindSingletonFunction("g_game", "sendWeaponProficiencyApply", &Game::sendWeaponProficiencyApply, &g_game);
+    g_lua.bindSingletonFunction("g_game", "sendInspectionObject", &Game::sendInspectionObject, &g_game);
+    g_lua.bindSingletonFunction("g_game", "sendInspectionNormalObject", &Game::sendInspectionNormalObject, &g_game);
     g_lua.bindSingletonFunction("g_game", "applyImbuement", &Game::applyImbuement, &g_game);
     g_lua.bindSingletonFunction("g_game", "clearImbuement", &Game::clearImbuement, &g_game);
     g_lua.bindSingletonFunction("g_game", "closeImbuingWindow", &Game::closeImbuingWindow, &g_game);
@@ -485,6 +498,7 @@ void Client::registerLuaFunctions()
     g_lua.bindClassMemberFunction<Thing>("isFullGround", &Thing::isFullGround);
     g_lua.bindClassMemberFunction<Thing>("isMarketable", &Thing::isMarketable);
     g_lua.bindClassMemberFunction<Thing>("getMarketData", &Thing::getMarketData);
+    g_lua.bindClassMemberFunction<Thing>("getProficiencyId", &Thing::getProficiencyId);
     g_lua.bindClassMemberFunction<Thing>("isUsable", &Thing::isUsable);
     g_lua.bindClassMemberFunction<Thing>("isWrapable", &Thing::isWrapable);
     g_lua.bindClassMemberFunction<Thing>("isUnwrapable", &Thing::isUnwrapable);
@@ -665,6 +679,7 @@ void Client::registerLuaFunctions()
     g_lua.bindClassMemberFunction<ThingType>("getMinimapColor", &ThingType::getMinimapColor);
     g_lua.bindClassMemberFunction<ThingType>("getLensHelp", &ThingType::getLensHelp);
     g_lua.bindClassMemberFunction<ThingType>("getClothSlot", &ThingType::getClothSlot);
+    g_lua.bindClassMemberFunction<ThingType>("isAmmo", &ThingType::isAmmo);
     g_lua.bindClassMemberFunction<ThingType>("getElevation", &ThingType::getElevation);
     g_lua.bindClassMemberFunction<ThingType>("isGround", &ThingType::isGround);
     g_lua.bindClassMemberFunction<ThingType>("isGroundBorder", &ThingType::isGroundBorder);
@@ -705,7 +720,11 @@ void Client::registerLuaFunctions()
     g_lua.bindClassMemberFunction<ThingType>("isCloth", &ThingType::isCloth);
     g_lua.bindClassMemberFunction<ThingType>("isMarketable", &ThingType::isMarketable);
     g_lua.bindClassMemberFunction<ThingType>("getMarketData", &ThingType::getMarketData);
+    // appearances upgrade classification (cyclopedia item summary tier gate);
+    // do NOT confuse with Item:getClassification, which returns the weapon type
+    g_lua.bindClassMemberFunction<ThingType>("getClassification", &ThingType::getClassification);
     g_lua.bindClassMemberFunction<ThingType>("getWeaponType", &ThingType::getWeaponType);
+    g_lua.bindClassMemberFunction<ThingType>("getProficiencyId", &ThingType::getProficiencyId);
     g_lua.bindClassMemberFunction<ThingType>("isUsable", &ThingType::isUsable);
     g_lua.bindClassMemberFunction<ThingType>("isWrapable", &ThingType::isWrapable);
     g_lua.bindClassMemberFunction<ThingType>("isUnwrapable", &ThingType::isUnwrapable);
@@ -727,6 +746,11 @@ void Client::registerLuaFunctions()
     g_lua.bindClassMemberFunction<Item>("getContainerItem", &Item::getContainerItem);
     g_lua.bindClassMemberFunction<Item>("setCount", &Item::setCount);
     g_lua.bindClassMemberFunction<Item>("getCount", &Item::getCount);
+    g_lua.bindClassMemberFunction<Item>("getPriceValue", &Item::getPriceValue);
+    g_lua.bindClassMemberFunction<Item>("getAverageMarketValue", &Item::getAverageMarketValue);
+    g_lua.bindClassMemberFunction<Item>("getDefaultValue", &Item::getDefaultValue);
+    g_lua.bindClassMemberFunction<Item>("getDefaultBuyPrice", &Item::getDefaultBuyPrice);
+    g_lua.bindClassMemberFunction<Item>("getNPCSaleData", &Item::getNPCSaleData);
     g_lua.bindClassMemberFunction<Item>("getSubType", &Item::getSubType);
     g_lua.bindClassMemberFunction<Item>("getCountOrSubType", &Item::getCountOrSubType);
     g_lua.bindClassMemberFunction<Item>("getId", &Item::getId);
@@ -767,6 +791,13 @@ void Client::registerLuaFunctions()
     g_lua.bindClassMemberFunction<Item>("setObtainFlags", &Item::setObtainFlags);
     g_lua.bindClassMemberFunction<Item>("getWeaponType", &Item::getWeaponType);
     g_lua.bindClassMemberFunction<Item>("getClassification", &Item::getClassification);
+    // game_actionbar canEquipItem / equipmentpreset isValidEquipSlot surface.
+    // "hasWearout" (lowercase "out") is the exact name the Lua call sites use.
+    g_lua.bindClassMemberFunction<Item>("isAmmo", &Item::isAmmo);
+    g_lua.bindClassMemberFunction<Item>("hasWearout", &Item::hasWearOut);
+    g_lua.bindClassMemberFunction<Item>("hasExpireStop", &Item::hasExpireStop);
+    g_lua.bindClassMemberFunction<Item>("hasCharges", &Item::hasCharges);
+    g_lua.bindClassMemberFunction<Item>("getCharges", &Item::getCharges);
     g_lua.bindClassMemberFunction<Item>("setShader", &Item::setShader);
     g_lua.bindClassMemberFunction<Item>("getShader", &Item::getShader);
     g_lua.bindClassMemberFunction<Item>("setCustomAttribute", &Item::setCustomAttribute);
@@ -844,10 +875,17 @@ void Client::registerLuaFunctions()
     g_lua.bindClassMemberFunction<LocalPlayer>("getLevelPercent", &LocalPlayer::getLevelPercent);
     g_lua.bindClassMemberFunction<LocalPlayer>("getMana", &LocalPlayer::getMana);
     g_lua.bindClassMemberFunction<LocalPlayer>("getMaxMana", &LocalPlayer::getMaxMana);
+    g_lua.bindClassMemberFunction<LocalPlayer>("getManaShield", &LocalPlayer::getManaShield);
+    g_lua.bindClassMemberFunction<LocalPlayer>("getMaxManaShield", &LocalPlayer::getMaxManaShield);
     g_lua.bindClassMemberFunction<LocalPlayer>("getMagicLevel", &LocalPlayer::getMagicLevel);
     g_lua.bindClassMemberFunction<LocalPlayer>("getMagicLevelPercent", &LocalPlayer::getMagicLevelPercent);
     g_lua.bindClassMemberFunction<LocalPlayer>("getSoul", &LocalPlayer::getSoul);
     g_lua.bindClassMemberFunction<LocalPlayer>("getStamina", &LocalPlayer::getStamina);
+    g_lua.bindClassMemberFunction<LocalPlayer>("getBaseExpRate", &LocalPlayer::getBaseExpRate);
+    g_lua.bindClassMemberFunction<LocalPlayer>("getLowLevelRate", &LocalPlayer::getLowLevelRate);
+    g_lua.bindClassMemberFunction<LocalPlayer>("getExpBoostRate", &LocalPlayer::getExpBoostRate);
+    g_lua.bindClassMemberFunction<LocalPlayer>("getStaminaRate", &LocalPlayer::getStaminaRate);
+    g_lua.bindClassMemberFunction<LocalPlayer>("getStoreExpBoostTime", &LocalPlayer::getStoreExpBoostTime);
     g_lua.bindClassMemberFunction<LocalPlayer>("getOfflineTrainingTime", &LocalPlayer::getOfflineTrainingTime);
     g_lua.bindClassMemberFunction<LocalPlayer>("getRegenerationTime", &LocalPlayer::getRegenerationTime);
     g_lua.bindClassMemberFunction<LocalPlayer>("getBaseMagicLevel", &LocalPlayer::getBaseMagicLevel);
@@ -975,6 +1013,8 @@ void Client::registerLuaFunctions()
     g_lua.bindClassStaticFunction<UICreature>("create", []{ return std::make_shared<UICreature>(); } );
     g_lua.bindClassMemberFunction<UICreature>("setCreature", &UICreature::setCreature);
     g_lua.bindClassMemberFunction<UICreature>("setOutfit", &UICreature::setOutfit);
+    g_lua.bindClassMemberFunction<UICreature>("setOutfitId", &UICreature::setOutfitId);
+    g_lua.bindClassMemberFunction<UICreature>("setOutfitColors", &UICreature::setOutfitColors);
     g_lua.bindClassMemberFunction<UICreature>("setFixedCreatureSize", &UICreature::setFixedCreatureSize);
     g_lua.bindClassMemberFunction<UICreature>("getCreature", &UICreature::getCreature);
     g_lua.bindClassMemberFunction<UICreature>("getOutfit", &UICreature::getOutfit);

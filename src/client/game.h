@@ -328,6 +328,10 @@ public:
     void sendWeaponProficiencyAction(uint8_t actionType, uint16_t itemId = 0);
     void sendWeaponProficiencyApply(uint16_t itemId, const std::vector<uint8_t>& levels, const std::vector<uint8_t>& perkPositions);
 
+    // item inspection (cyclopedia / proficiency / npc trade / normal object)
+    void sendInspectionObject(Otc::InspectObjectTypes inspectionType, uint16_t itemId, uint8_t itemCount);
+    void sendInspectionNormalObject(const Position& position);
+
     //void reportRuleViolation2();
     void ping();
     void newPing();

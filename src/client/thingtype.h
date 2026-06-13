@@ -104,6 +104,15 @@ enum ThingAttr : uint8 {
     ThingAttrOpacity          = 100,
     ThingAttrNotPreWalkable   = 101,
 
+    // 15.24 item flags consumed by ProtocolGame::getItem (AddItem schema)
+    ThingAttrExpire           = 110,
+    ThingAttrExpireStop       = 111,
+    ThingAttrClockExpire      = 112,
+    ThingAttrWearOut          = 113,
+    ThingAttrWrapKit          = 114,
+    ThingAttrPodium           = 115,
+    ThingAttrAmmo             = 116,
+
     ThingAttrFloorChange      = 252,
     ThingAttrNoMoveAnimation  = 253, // 10.10: real value is 16, but we need to do this for backwards compatibility
     ThingAttrChargeable       = 254, // deprecated
@@ -118,7 +127,12 @@ struct MarketData {
     std::string name;
     int category;
     uint16 requiredLevel;
+    // Legacy single-vocation field kept for the old .dat serialization path
+    // (thingtype.cpp unserialize/serialize). Lua-facing code uses the full list.
     uint16 restrictVocation;
+    // Full restriction list from the appearances protobuf. Pushed to Lua as the
+    // `restrictVocation` TABLE the CIP-style mods expect (#list / table.contains).
+    std::vector<uint16> restrictVocations;
     uint16 showAs;
     uint16 tradeAs;
 };
@@ -131,13 +145,33 @@ struct StoreCategory {
     std::string parent;
 };
 
+// One purchasable variant of a store offer (offer.offers[] in the Lua UI module).
+struct StoreSubOffer {
+    int id = 0;
+    int count = 1;
+    int price = 0;
+    int basePrice = 0;
+    int coinType = 0;
+    int disabledReason = -1;        // index into the category's reason list, -1 = enabled
+    int saleValidUntilTimestamp = 0;
+};
+
 struct StoreOffer {
-    int id;
+    int id = 0;
     std::string name;
     std::string description;
-    int price;
-    int state;
+    int price = 0;
+    int state = 0;
     std::string icon;
+    // crystalserver/Canary 13+ fields consumed by mods/game_store (Offers/Home Lua UI).
+    int offerType = 0;              // 0=none/icon 1=mount 2=outfit 3=item 4=hireling
+    int itemId = 0;                 // SHOW_ITEM type
+    int mountId = 0;                // SHOW_MOUNT type (client id)
+    int maleOutfit = 0;             // SHOW_OUTFIT look id
+    int head = 0, body = 0, legs = 0, feet = 0; // outfit colors
+    int tryMode = 0;                // tryOn type: enables the "Try" button in the store UI
+    int requiresConfiguration = 0;  // SHOW_CONFIGURE: button reads "Configure" instead of "Buy"
+    std::vector<StoreSubOffer> subOffers;
 };
 
 struct Imbuement {
@@ -209,11 +243,11 @@ public:
     void exportImage(std::string fileName);
     void replaceSprites(std::map<uint32_t, ImagePtr>& replacements, std::string fileName);
 
-    DrawQueueItem* draw(const Point& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, Color color = Color::white, LightView* lightView = nullptr);
+    DrawQueueItem* draw(const Point& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, Color color = Color::white, LightView* lightView = nullptr, uint8_t order = DRAW_ORDER_THIRD);
     DrawQueueItem* draw(const Rect& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, Color color = Color::white);
     std::shared_ptr<DrawOutfitParams> drawOutfit(const Point& dest, int maskLayer, int xPattern, int yPattern, int zPattern, int animationPhase, Color color = Color::white, LightView* lightView = nullptr);
     Rect getDrawSize(const Point& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase);
-    void drawWithShader(const Point& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, const std::string& shader, Color color = Color::white, LightView* lightView = nullptr);
+    void drawWithShader(const Point& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, const std::string& shader, Color color = Color::white, LightView* lightView = nullptr, uint8_t order = DRAW_ORDER_THIRD);
     void drawWithShader(const Rect& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, const std::string& shader, Color color = Color::white);
     bool drawToImage(const Point& dest, int xPattern, int yPattern, int zPattern, ImagePtr image);
 
@@ -230,10 +264,12 @@ public:
     int getExactSize(int layer = 0, int xPattern = 0, int yPattern = 0, int zPattern = 0, int animationPhase = 0);
     int getRealSize() { return m_realSize; }
     int getLayers() { return m_layers; }
-    int getNumPatternX() { return m_numPatternX; }
-    int getNumPatternY() { return m_numPatternY; }
-    int getNumPatternZ() { return m_numPatternZ; }
-    int getAnimationPhases() { return m_animationPhases; }
+    // clamped to >=1: callers use these as divisors (e.g. pos % getNumPatternX());
+    // null/unloaded appearance ids would otherwise crash with integer division by zero
+    int getNumPatternX() { return m_numPatternX > 0 ? m_numPatternX : 1; }
+    int getNumPatternY() { return m_numPatternY > 0 ? m_numPatternY : 1; }
+    int getNumPatternZ() { return m_numPatternZ > 0 ? m_numPatternZ : 1; }
+    int getAnimationPhases() { return m_animationPhases > 0 ? m_animationPhases : 1; }
     AnimatorPtr getAnimator() { return m_animator; }
     AnimatorPtr getIdleAnimator() { return m_idleAnimator; }
     Point getDisplacement() { return m_displacement; }
@@ -252,6 +288,14 @@ public:
     int getWeaponType();
     bool isGround() { return m_attribs.has(ThingAttrGround); }
     bool isGroundBorder() { return m_attribs.has(ThingAttrGroundBorder); }
+    // A "single" ground/border is a 1x1 (32x32) tile piece. Only those belong in the
+    // FIRST/SECOND map draw-order layers (below everything). A multi-tile ground sprite
+    // (e.g. a 2x2 stone wall flagged as ground) must composite as normal content (THIRD),
+    // otherwise it is hoisted UNDER the player and the player draws on top of the wall —
+    // mirrors mehah's isSingleGround/isSingleGroundBorder gating.
+    bool isSingleDimension() { return m_size.width() == 1 && m_size.height() == 1; }
+    bool isSingleGround() { return isGround() && isSingleDimension(); }
+    bool isSingleGroundBorder() { return isGroundBorder() && isSingleDimension(); }
     bool isOnBottom() { return m_attribs.has(ThingAttrOnBottom); }
     bool isOnTop() { return m_attribs.has(ThingAttrOnTop); }
     bool isContainer() { return m_attribs.has(ThingAttrContainer); }
@@ -292,6 +336,61 @@ public:
     bool isUnwrapable() { return m_attribs.has(ThingAttrUnwrapable); }
     bool isTopEffect() { return m_attribs.has(ThingAttrTopEffect); }
     bool hasBones() { return m_attribs.has(ThingAttrBones); }
+    // 15.24 item flags (AddItem optional fields)
+    bool hasExpire() { return m_attribs.has(ThingAttrExpire); }
+    bool hasExpireStop() { return m_attribs.has(ThingAttrExpireStop); }
+    bool hasClockExpire() { return m_attribs.has(ThingAttrClockExpire); }
+    bool hasWearOut() { return m_attribs.has(ThingAttrWearOut); }
+    bool isWrapKit() { return m_attribs.has(ThingAttrWrapKit); }
+    bool isPodium() { return m_attribs.has(ThingAttrPodium); }
+    bool isAmmo() { return m_attribs.has(ThingAttrAmmo); }
+    uint16 getClassification() { return m_classification; }
+    void setClassification(uint16 c) { m_classification = c; }
+    // Base (tier-0/unit) market price pushed by the server via 0xCD ItemsPrices.
+    // Consumed by Item::getPriceValue() for loot-value coloring and the analysers.
+    uint64_t getPriceValue() { return m_priceValue; }
+    void setPriceValue(uint64_t price) { m_priceValue = price; }
+
+    // NPC trade data from the appearances protobuf (npcsaledata): which NPCs buy/sell
+    // this item and for how much. salePrice = the NPC sells for (player buys),
+    // buyPrice = the NPC pays (player sells).
+    struct NpcSaleInfo {
+        std::string name;
+        std::string location;
+        uint32_t salePrice = 0;
+        uint32_t buyPrice = 0;
+        // alternative currency (protobuf currency_object_type_id /
+        // currency_quest_flag_display_name); empty/0 = plain gold
+        uint32_t currencyObjectTypeId = 0;
+        std::string currencyQuestFlagDisplayName;
+    };
+    // Appearance display name (protobuf Appearance.name); used by the cyclopedia mods
+    // when an item has no market data name.
+    const std::string& getAppearanceName() { return m_appearanceName; }
+    void setAppearanceName(std::string name) { m_appearanceName = std::move(name); }
+
+    // Weapon proficiency id (protobuf AppearanceFlagProficiency); 0 = none.
+    uint16_t getProficiencyId() { return m_proficiencyId; }
+    void setProficiencyId(uint16_t id) { m_proficiencyId = id; }
+
+    // Weapon type from the appearances protobuf (WEAPON_TYPE_*: 0=none, 1=sword, 2=axe,
+    // 3=club, 4=fist, 5=bow, 6=crossbow, 7=wand/rod, 8=throw — same numbering as the
+    // gamelib WEAPON_* Lua constants). getWeaponType() prefers this over the legacy OTB
+    // lookup, which returns 0 on OTB-less 15.x setups.
+    void setWeaponType(int type) { m_weaponType = type; }
+
+    const std::vector<NpcSaleInfo>& getNpcSaleData() { return m_npcSaleData; }
+    void addNpcSaleData(NpcSaleInfo info) {
+        // Derived defaults: best player-sell value (max NPC buy price) and cheapest
+        // player-buy cost (min non-zero NPC sale price).
+        if (info.buyPrice > m_npcSellValue)
+            m_npcSellValue = info.buyPrice;
+        if (info.salePrice > 0 && (m_npcBuyValue == 0 || info.salePrice < m_npcBuyValue))
+            m_npcBuyValue = info.salePrice;
+        m_npcSaleData.emplace_back(std::move(info));
+    }
+    uint32_t getNpcSellValue() { return m_npcSellValue; }
+    uint32_t getNpcBuyValue() { return m_npcBuyValue; }
 
     std::vector<int> getSprites() { return m_spritesIndex; }
 
@@ -317,6 +416,14 @@ private:
     AnimatorPtr m_idleAnimator;
     std::vector<Point> m_bones;
     int m_animationPhases;
+    uint16 m_classification = 0; // 15.24 upgrade/tier classification
+    uint64_t m_priceValue = 0; // unit price from server 0xCD ItemsPrices
+    std::vector<NpcSaleInfo> m_npcSaleData; // appearances npcsaledata
+    uint32_t m_npcSellValue = 0; // max NPC buy price (best value selling to NPC)
+    uint32_t m_npcBuyValue = 0; // min NPC sale price (cheapest buying from NPC)
+    std::string m_appearanceName; // protobuf Appearance.name
+    uint16_t m_proficiencyId = 0; // appearances proficiency flag (0 = none)
+    int m_weaponType = 0; // appearances weapon_type (0 = none/unset)
     int m_exactSize;
     int m_realSize;
     int m_numPatternX, m_numPatternY, m_numPatternZ;

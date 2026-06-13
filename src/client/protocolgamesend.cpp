@@ -98,21 +98,42 @@ void ProtocolGame::sendLoginPacket(uint challengeTimestamp, uint8 challengeRando
 {
     auto msg = std::make_shared<OutputMessage>();
 
-    msg->addU8(Proto::ClientPendingGame);
-    msg->addU16(g_game.getOs());
-    msg->addU16(g_game.getCustomProtocolVersion());
+    // Modern crystalserver (Tibia 13.x+/15.x) login packet layout. The server's
+    // server-sends-first path skips 4 (checksum) + 2 (protocol id) bytes, then
+    // reads: OS(u16), version(u16), clientVersion(u32), versionString,
+    // assetHash(string) if version>=1334, previewState(u8), RSA block. Match it.
+    const bool modernLogin = m_scaledPacketSize; // set for >=1300 game protocol
+    if (modernLogin) {
+        msg->addU16(Proto::ClientPendingGame); // 2-byte protocol id the server skips
+        msg->addU16(g_game.getOs());
+        msg->addU16(static_cast<uint16>(g_game.getProtocolVersion()));
+        if (g_game.getFeature(Otc::GameClientVersion))
+            msg->addU32(g_game.getClientVersion());
+        if (g_game.getFeature(Otc::GameTibia12Protocol) && g_game.getProtocolVersion() >= 1240)
+            msg->addString(std::to_string(g_game.getClientVersion()));
+        // assets hash string (>= 1334). crystalserver only reads it (getString),
+        // it does not validate the value, so an empty string keeps alignment.
+        if (g_game.getProtocolVersion() >= 1334)
+            msg->addString(std::string());
+        if (g_game.getFeature(Otc::GamePreviewState))
+            msg->addU8(0);
+    } else {
+        msg->addU8(Proto::ClientPendingGame);
+        msg->addU16(g_game.getOs());
+        msg->addU16(g_game.getCustomProtocolVersion());
 
-    if (g_game.getFeature(Otc::GameClientVersion))
-        msg->addU32(g_game.getClientVersion());
+        if (g_game.getFeature(Otc::GameClientVersion))
+            msg->addU32(g_game.getClientVersion());
 
-    if (g_game.getFeature(Otc::GameTibia12Protocol) && g_game.getProtocolVersion() >= 1240)
-        msg->addString(std::to_string(g_game.getClientVersion()));
+        if (g_game.getFeature(Otc::GameTibia12Protocol) && g_game.getProtocolVersion() >= 1240)
+            msg->addString(std::to_string(g_game.getClientVersion()));
 
-    if (g_game.getFeature(Otc::GameContentRevision))
-        msg->addU16(g_things.getContentRevision());
+        if (g_game.getFeature(Otc::GameContentRevision))
+            msg->addU16(g_things.getContentRevision());
 
-    if (g_game.getFeature(Otc::GamePreviewState))
-        msg->addU8(0);
+        if (g_game.getFeature(Otc::GamePreviewState))
+            msg->addU8(0);
+    }
 
     int offset = msg->getMessageSize();
     // first RSA byte must be 0
@@ -202,6 +223,21 @@ void ProtocolGame::sendLoginPacket(uint challengeTimestamp, uint8 challengeRando
 
     if(g_game.getFeature(Otc::GameProtocolChecksum))
         enableChecksum();
+
+    // Modern crystalserver scales the size header as (bodySize - 4) / 8, so the
+    // body length (checksum included) must satisfy (bodySize - 4) % 8 == 0, i.e.
+    // bodySize % 8 == 4. The login packet carries a 128-byte RSA block plus
+    // variable fields, so it is usually not 8-aligned; pad it up here, otherwise
+    // the integer division truncates and the server reads a short packet and
+    // drops the connection. +4 accounts for the checksum header writeMessageSize
+    // prepends after this point.
+    if (m_scaledPacketSize) {
+        int bodyWithChecksum = msg->getMessageSize() + 4;
+        int rem = bodyWithChecksum % 8;
+        int pad = (4 - rem + 8) % 8;
+        for (int i = 0; i < pad; ++i)
+            msg->addU8(0);
+    }
 
     send(msg);
 
@@ -983,6 +1019,32 @@ void ProtocolGame::sendWeaponProficiencyApply(const uint16_t itemId, const std::
         msg->addU8(levels[i]);
         msg->addU8(perkPositions[i]);
     }
+    send(msg);
+}
+
+void ProtocolGame::sendInspectionNormalObject(const Position& position)
+{
+    auto msg = std::make_shared<OutputMessage>();
+    msg->addU8(Proto::ClientInspectionObject);
+    msg->addU8(Otc::INSPECT_NORMALOBJECT);
+    addPosition(msg, position);
+    send(msg);
+}
+
+void ProtocolGame::sendInspectionObject(const Otc::InspectObjectTypes inspectionType, const uint16_t itemId, const uint8_t itemCount)
+{
+    // crystalserver parseInspectionObject only handles these item-based types; the
+    // normal (position-based) path goes through sendInspectionNormalObject above.
+    if (inspectionType != Otc::INSPECT_NPCTRADE &&
+        inspectionType != Otc::INSPECT_CYCLOPEDIA &&
+        inspectionType != Otc::INSPECT_PROFICIENCY)
+        return;
+
+    auto msg = std::make_shared<OutputMessage>();
+    msg->addU8(Proto::ClientInspectionObject);
+    msg->addU8(inspectionType);
+    msg->addU16(itemId);
+    msg->addU8(itemCount);
     send(msg);
 }
 

@@ -25,9 +25,11 @@
 
 #include "global.h"
 #include <framework/luaengine/declarations.h>
+#include "creatures.h"
 #include "game.h"
 #include "outfit.h"
 #include "staticdata.h"
+#include "thingtype.h"
 
 // outfit
 int push_luavalue(const Outfit& outfit);
@@ -40,6 +42,12 @@ bool luavalue_cast(int index, Position& pos);
 // market
 int push_luavalue(const MarketData& data);
 bool luavalue_cast(int index, MarketData& data);
+
+// npc sale data (appearances npcsaledata; cyclopedia sell-to/buy-from panels)
+int push_luavalue(const ThingType::NpcSaleInfo& info);
+
+// staticdata achievement (cyclopedia achievements panel locked/all lists)
+int push_luavalue(const StaticAchievement& achievement);
 
 // store category
 int push_luavalue(const StoreCategory& category);

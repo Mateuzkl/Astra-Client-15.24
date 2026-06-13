@@ -35,6 +35,10 @@ public:
     void setCreature(const CreaturePtr& creature) { m_creature = creature; }
     void setFixedCreatureSize(bool fixed) { m_scale = fixed ? 1.0 : 0; }
     void setOutfit(const Outfit& outfit);
+    // cyclopedia appearances helpers (mehah parity): tweak the current outfit
+    // in place; luabinder nil-fills a missing addons arg to 0 (familiar rows)
+    void setOutfitId(int id, int addons) { Outfit o = getOutfit(); o.setId(id); o.setAddons(addons); setOutfit(o); }
+    void setOutfitColors(int head, int body, int legs, int feet) { Outfit o = getOutfit(); o.setHead(head); o.setBody(body); o.setLegs(legs); o.setFeet(feet); setOutfit(o); }
 
     CreaturePtr getCreature() { return m_creature; }
     Outfit getOutfit() { return m_creature ? m_creature->getOutfit() : Outfit(); }

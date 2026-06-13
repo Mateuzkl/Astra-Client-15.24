@@ -47,6 +47,7 @@ Item::Item() :
     m_async(true),
     m_quickLootFlags(0),
     m_obtainFlags(0),
+    m_charges(0),
     m_tier(0),
     m_phase(0),
     m_lastPhase(0),
@@ -97,10 +98,10 @@ void Item::draw(const Point& dest, bool animate, LightView* lightView)
         color = m_color;
     size_t drawQueueSize = g_drawQueue->size();
     if (!m_shader.empty()) {
-        rawGetThingType()->drawWithShader(dest, 0, xPattern, yPattern, zPattern, animationPhase, m_shader, color, lightView);
+        rawGetThingType()->drawWithShader(dest, 0, xPattern, yPattern, zPattern, animationPhase, m_shader, color, lightView, m_drawOrder);
     }
     else {
-        rawGetThingType()->draw(dest, 0, xPattern, yPattern, zPattern, animationPhase, color, lightView);
+        rawGetThingType()->draw(dest, 0, xPattern, yPattern, zPattern, animationPhase, color, lightView, m_drawOrder);
     }
     if (m_marked) {
         g_drawQueue->setMark(drawQueueSize, updatedMarkedColor());
@@ -373,7 +374,11 @@ bool Item::inCorpse()
 
 int Item::getWeaponType()
 {
-    return g_things.getItemType(m_serverId)->getWeaponType();
+    // ThingType::getWeaponType prefers the appearances weapon_type and falls back
+    // to the OTB silently; going through getItemType(m_serverId) spammed
+    // "invalid thing type, server id: 0" on appearances-based setups (no OTB
+    // loaded, so m_serverId is always 0) and always returned 0.
+    return rawGetThingType()->getWeaponType();
 }
 
 ItemPtr Item::clone()
@@ -498,10 +503,11 @@ int Item::calculateAnimationPhase(bool animate)
             if(getAnimator() != nullptr)
                 return getAnimator()->getPhase();
 
+            const int ticksPerFrame = g_game.getFeature(Otc::GameEnhancedAnimations) ? Otc::ITEM_TICKS_PER_FRAME_FAST : Otc::ITEM_TICKS_PER_FRAME;
             if(m_async)
-                return (g_clock.millis() % ((g_game.getFeature(Otc::GameEnhancedAnimations) ? Otc::ITEM_TICKS_PER_FRAME_FAST : Otc::ITEM_TICKS_PER_FRAME) * getAnimationPhases())) / Otc::ITEM_TICKS_PER_FRAME;
+                return (g_clock.millis() % (ticksPerFrame * getAnimationPhases())) / ticksPerFrame;
             else {
-                if(g_clock.millis() - m_lastPhase >= (g_game.getFeature(Otc::GameEnhancedAnimations) ? Otc::ITEM_TICKS_PER_FRAME_FAST : Otc::ITEM_TICKS_PER_FRAME)) {
+                if(g_clock.millis() - m_lastPhase >= ticksPerFrame) {
                     m_phase = (m_phase + 1) % getAnimationPhases();
                     m_lastPhase = g_clock.millis();
                 }

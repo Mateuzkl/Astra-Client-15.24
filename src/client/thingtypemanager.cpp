@@ -303,33 +303,46 @@ bool ThingTypeManager::loadSpriteSheets(const std::string& assetsDir)
     return true;
 }
 
-std::string ThingTypeManager::getAppearancesPath(const std::string& assetsDir)
+// Phase 0 P0.8 (generalized): read catalog-content.json, find the entry with
+// the requested "type", and return its path. Used by the Lua boot path to
+// discover hashed <type>-<sha>.dat filenames without globbing or hardcoding.
+//
+// `assetsDir` may be a PHYSFS virtual path (e.g. "/things/1524"); Lua's
+// resolvepath returns those. Convert to a real FS path internally so
+// std::ifstream below can find the file.
+static std::string getCatalogEntryPath(const std::string& assetsDir, const std::string& entryType)
 {
-    // Phase 0 P0.8: read catalog-content.json, find the entry with
-    // "type":"appearances", and return the absolute filesystem path to it.
-    // Used by the Lua boot path to discover the hashed appearances-<sha>.dat
-    // filename without globbing or hardcoding.
-    //
-    // `assetsDir` may be a PHYSFS virtual path (e.g. "/things/1524"); Lua's
-    // resolvepath returns those. Convert to a real FS path internally so
-    // std::ifstream below can find the file.
     if (assetsDir.empty()) {
-        g_logger.error("ThingTypeManager::getAppearancesPath: empty assetsDir");
+        g_logger.error(stdext::format("getCatalogEntryPath(%s): empty assetsDir", entryType));
         return std::string();
     }
 
     try {
-        std::string dir = g_resources.resolvePath(assetsDir);
-        if (dir.empty())
-            dir = assetsDir;  // fallback: caller passed a real FS path directly
-        if (dir.back() != '/' && dir.back() != '\\')
-            dir.push_back('/');
+        // resolvePath returns a VIRTUAL PHYSFS path; std::ifstream needs a real
+        // filesystem path. getRealPath does the PHYSFS_getRealDir lookup +
+        // join. We keep the virtual path around for the return value so that
+        // the protobuf loaders (which ARE PHYSFS-aware) can open the catalog
+        // entries directly without re-resolving.
+        std::string virtualDir = g_resources.resolvePath(assetsDir);
+        if (virtualDir.empty())
+            virtualDir = assetsDir;
+        if (virtualDir.back() != '/' && virtualDir.back() != '\\')
+            virtualDir.push_back('/');
 
-        const std::string catalogPath = dir + "catalog-content.json";
+        std::string realDir = g_resources.getRealPath(virtualDir);
+        if (realDir.empty()) {
+            g_logger.error(stdext::format(
+                "getCatalogEntryPath(%s): cannot resolve '%s' to a real path", entryType, virtualDir));
+            return std::string();
+        }
+        if (realDir.back() != '/' && realDir.back() != '\\')
+            realDir.push_back('/');
+
+        const std::string catalogPath = realDir + "catalog-content.json";
         std::ifstream in(catalogPath, std::ios::in | std::ios::binary);
         if (!in.is_open()) {
             g_logger.error(stdext::format(
-                "ThingTypeManager::getAppearancesPath: cannot open '%s'", catalogPath));
+                "getCatalogEntryPath(%s): cannot open '%s'", entryType, catalogPath));
             return std::string();
         }
 
@@ -339,8 +352,8 @@ std::string ThingTypeManager::getAppearancesPath(const std::string& assetsDir)
 
         if (!catalog.is_array()) {
             g_logger.error(stdext::format(
-                "ThingTypeManager::getAppearancesPath: catalog '%s' is not a JSON array",
-                catalogPath));
+                "getCatalogEntryPath(%s): catalog '%s' is not a JSON array",
+                entryType, catalogPath));
             return std::string();
         }
 
@@ -351,21 +364,34 @@ std::string ThingTypeManager::getAppearancesPath(const std::string& assetsDir)
                 continue;
             if (fileIt == entry.end() || !fileIt->is_string())
                 continue;
-            if (typeIt->get<std::string>() != "appearances")
+            if (typeIt->get<std::string>() != entryType)
                 continue;
-            return dir + fileIt->get<std::string>();
+            // Return VIRTUAL path so PHYSFS-aware loaders (loadAppearances)
+            // can open it directly. Callers that need a real FS path should
+            // run PHYSFS_getRealDir on the returned virtual path.
+            return virtualDir + fileIt->get<std::string>();
         }
 
         g_logger.error(stdext::format(
-            "ThingTypeManager::getAppearancesPath: no 'appearances' entry in '%s'",
-            catalogPath));
+            "getCatalogEntryPath(%s): no matching entry in '%s'",
+            entryType, catalogPath));
         return std::string();
     } catch (const std::exception& e) {
         g_logger.error(stdext::format(
-            "ThingTypeManager::getAppearancesPath: exception parsing catalog in '%s': %s",
-            assetsDir, e.what()));
+            "getCatalogEntryPath(%s): exception parsing catalog in '%s': %s",
+            entryType, assetsDir, e.what()));
         return std::string();
     }
+}
+
+std::string ThingTypeManager::getAppearancesPath(const std::string& assetsDir)
+{
+    return getCatalogEntryPath(assetsDir, "appearances");
+}
+
+std::string ThingTypeManager::getStaticDataPath(const std::string& assetsDir)
+{
+    return getCatalogEntryPath(assetsDir, "staticdata");
 }
 
 // === end protobuf path ===
@@ -623,6 +649,11 @@ const ThingTypePtr& ThingTypeManager::getThingType(uint16 id, ThingCategory cate
 
 const ItemTypePtr& ThingTypeManager::getItemType(uint16 id)
 {
+    // 0 is the "no OTB entry" sentinel (findItemTypeByClientId returns the null
+    // item type whose server id is 0); on appearances-based setups no OTB is
+    // ever loaded, so don't log it as a missing entry.
+    if(id == 0)
+        return m_nullItemType;
     if(id >= m_itemTypes.size() || m_itemTypes[id] == m_nullItemType) {
         g_logger.error(stdext::format("invalid thing type, server id: %d", id));
         return m_nullItemType;
@@ -654,6 +685,27 @@ const ThingTypeList& ThingTypeManager::getThingTypes(ThingCategory category)
     if(category >= ThingLastCategory)
         stdext::throw_exception(stdext::format("invalid thing type category %d", category));
     return m_thingTypes[category];
+}
+
+ThingTypeList ThingTypeManager::getProficiencyThings()
+{
+    // All item types carrying a weapon-proficiency id (appearances proficiency flag).
+    // Consumed by mods/game_proficiency to build its weapon catalog.
+    ThingTypeList ret;
+    for (const ThingTypePtr& type : m_thingTypes[ThingCategoryItem]) {
+        if (type && type->getProficiencyId() > 0)
+            ret.push_back(type);
+    }
+    return ret;
+}
+
+std::string ThingTypeManager::getCyclopediaItemName(uint16 id)
+{
+    // Display name from the appearances protobuf (fallback used by the cyclopedia
+    // mods when an item has no market-data name).
+    if (!isValidDatId(id, ThingCategoryItem))
+        return {};
+    return m_thingTypes[ThingCategoryItem][id]->getAppearanceName();
 }
 
 /* vim: set ts=4 sw=4 et: */

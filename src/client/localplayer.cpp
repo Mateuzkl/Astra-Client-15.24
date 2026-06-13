@@ -27,6 +27,7 @@
 #include "tile.h"
 #include <framework/core/eventdispatcher.h>
 #include <framework/graphics/graphics.h>
+#include <framework/platform/platformwindow.h>
 #include <framework/util/extras.h>
 
 #include <algorithm>
@@ -172,6 +173,22 @@ void LocalPlayer::preWalk(Otc::Direction direction)
     if (!m_preWalking.empty())
         startPos = m_preWalking.back();
     Position newPos = startPos.translatedToDirection(direction);
+
+    // Hard wall guard at the source: never pre-walk onto a genuine wall (a tile that has
+    // ground but is not walkable). This is the last line of defence against the GM/GOD
+    // "walk into walls" desync — the Lua walk() guard can be bypassed by fast server-walking
+    // paths that recompute toPos from an advanced base, but every visible step still goes
+    // through here. Floor-change holes (no ground) and the Ctrl walk-through modifier are
+    // intentionally NOT blocked. Without this, a refused step still advanced the local
+    // position into the wall and never got corrected, leaving the char stuck on the wall.
+    // Note: isKeyPressed(Fw::KeyCtrl) is always false (processKeyDown early-returns for
+    // modifier keys, storing them only in keyboardModifiers), so check modifiers instead.
+    if (g_window.getKeyboardModifiers() != Fw::KeyboardCtrlModifier) {
+        const TilePtr& destTile = g_map.getTile(newPos);
+        if (destTile && destTile->getGround() && !destTile->isWalkable()) {
+            return;
+        }
+    }
 
     if (m_serverWalkEndEvent)
         m_serverWalkEndEvent->cancel();
@@ -625,6 +642,27 @@ void LocalPlayer::setStamina(double stamina)
         m_stamina = stamina;
 
         callLuaField("onStaminaChange", stamina, oldStamina);
+    }
+}
+
+void LocalPlayer::setExpRates(int base, int lowLevel, int storeBoost, int staminaMulti)
+{
+    if(m_baseXpGain != base || m_grindingXpBoost != lowLevel || m_storeXpBoostPercent != storeBoost || m_staminaXpBoost != staminaMulti) {
+        m_baseXpGain = base;
+        m_grindingXpBoost = lowLevel;
+        m_storeXpBoostPercent = storeBoost;
+        m_staminaXpBoost = staminaMulti;
+
+        callLuaField("onUpdateGainRate", base, lowLevel, storeBoost, staminaMulti);
+    }
+}
+
+void LocalPlayer::setStoreExpBoost(int seconds, bool canBuy)
+{
+    if(m_storeXpBoostTime != seconds) {
+        m_storeXpBoostTime = seconds;
+
+        callLuaField("onExpBoostChange", seconds, canBuy);
     }
 }
 

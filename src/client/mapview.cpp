@@ -42,6 +42,7 @@
 #include <framework/graphics/texturemanager.h>
 #include <framework/graphics/atlas.h>
 #include <framework/graphics/shadermanager.h>
+#include <framework/graphics/fontmanager.h>
 
 #include <framework/util/extras.h>
 #include <framework/core/adaptiverenderer.h>
@@ -150,6 +151,13 @@ void MapView::drawMapBackground(const Rect& rect, const TilePtr& crosshairTile) 
         }
         size_t floorStart = g_drawQueue->size();
         drawFloor(z, cameraPosition, crosshairTile);
+
+        // Sort THIS floor's submissions by draw-order layer (ground<border<items) so
+        // sprites stack correctly within the floor, without interleaving across floors
+        // (which would put an upper floor's ground under a lower floor's items). The
+        // range is per-floor so the deep-floor-first iteration above and the per-floor
+        // opacity range below both stay correct.
+        g_drawQueue->sortRangeByOrder(floorStart);
 
         if (fading < 0.99)
             g_drawQueue->setOpacity(floorStart, fading);
@@ -329,6 +337,37 @@ void MapView::drawMapForeground(const Rect& rect)
         animatedText->drawText(p, rect);
         if (--limit == 0)
             break;
+    }
+
+    // cavebot waypoint overlay: tile-anchored markers (fill + border + "N. Type" label)
+    // drawn here so they sit ON TOP of the map tiles/borders but UNDER the UI windows,
+    // and follow the smooth map scroll. Fed from Lua via g_map.addCavebotMark.
+    // Threading: this draw and the cavebot Lua that fills m_cavebotMarks both run on the
+    // dispatcher/worker thread (render() and poll() in the same producer cycle), so the
+    // vector is never touched concurrently -- no lock needed (same as m_staticTexts).
+    const auto& cbMarks = g_map.getCavebotMarks();
+    if (!cbMarks.empty()) {
+        static auto cbFont = g_fonts.getFont("verdana-11px-rounded");
+        if (!cbFont) cbFont = g_fonts.getFont("verdana-11px-rounded"); // retry if not loaded yet
+        const int ss = g_sprites.spriteSize();
+        const int tw = std::max<int>(1, (int)(ss * horizontalStretchFactor));
+        const int th = std::max<int>(1, (int)(ss * verticalStretchFactor));
+        int drawn = 0;
+        for (const auto& mark : cbMarks) {
+            if (mark.pos.z != cameraPosition.z)
+                continue;
+            Point mp = transformPositionTo2D(mark.pos, cameraPosition) - drawOffset;
+            mp.x *= horizontalStretchFactor;
+            mp.y *= verticalStretchFactor;
+            mp += rect.topLeft();
+            Rect tileRect(mp, Size(tw, th));
+            g_drawQueue->addFilledRect(tileRect, mark.color.opacity(0.30f));
+            g_drawQueue->addBoundingRect(tileRect, 2, mark.color);
+            if (cbFont && !mark.text.empty())
+                g_drawQueue->addText(cbFont, mark.text, Rect(mp.x - tw, mp.y - 13, tw * 3, 13),
+                                     Fw::AlignBottomCenter, mark.color, true);
+            if (++drawn >= 96) break; // safety cap; the Lua side already bounds to near-screen
+        }
     }
 
     // tile texts

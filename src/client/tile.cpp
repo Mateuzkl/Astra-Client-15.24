@@ -47,7 +47,7 @@ void Tile::drawGround(const Point& dest, LightView* lightView)
     m_topDraws = 0;
     m_drawElevation = 0;
     if (m_fill != Color::alpha) {
-        g_drawQueue->addFilledRect(Rect(dest, g_sprites.spriteSize(), g_sprites.spriteSize()), m_fill);
+        g_drawQueue->addFilledRect(Rect(dest, g_sprites.spriteSize(), g_sprites.spriteSize()), m_fill, DRAW_ORDER_FIRST);
         return;
     }
 
@@ -57,6 +57,26 @@ void Tile::drawGround(const Point& dest, LightView* lightView)
             break;
         if (thing->isHidden())
             continue;
+
+        // Assign the map draw-order layer so the framebuffer queue can stable-sort
+        // ground below border below everything else, across the whole floor. The
+        // m_drawElevation==0 guard mirrors the reference's agroup-fallback: a ground/
+        // border stacked above accumulated elevation (e.g. a "stone floor" on top of
+        // another tile thing, stackpos>0) falls back to THIRD so it composites in
+        // submission order instead of being hoisted under real ground.
+        // Only 1x1 ("single") grounds/borders belong in the FIRST/SECOND layers. A multi-tile
+        // ground sprite — e.g. a 2x2 stone wall that carries the ground flag — must stay in
+        // THIRD so it composites as normal content; otherwise it is hoisted under the player
+        // and the player renders ON TOP of the wall (the exact wall-layering bug). Mehah gates
+        // this the same way via isSingleGround()/isSingleGroundBorder().
+        uint8_t order = DRAW_ORDER_THIRD;
+        if (m_drawElevation == 0) {
+            if (thing->isSingleGround())
+                order = DRAW_ORDER_FIRST;
+            else if (thing->isSingleGroundBorder() && !thing->hasElevation())
+                order = DRAW_ORDER_SECOND;
+        }
+        thing->setDrawOrder(order);
 
         thing->draw(dest - m_drawElevation * g_sprites.getOffsetFactor(), true, lightView);
         m_drawElevation = std::min<uint8_t>(m_drawElevation + thing->getElevation(), Otc::MAX_ELEVATION);

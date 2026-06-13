@@ -158,6 +158,8 @@ public:
     void sendWheelGemAction(uint8_t actionType, uint8_t param, uint8_t pos);
     void sendWeaponProficiencyAction(uint8_t actionType, uint16_t itemId = 0);
     void sendWeaponProficiencyApply(uint16_t itemId, const std::vector<uint8_t>& levels, const std::vector<uint8_t>& perkPositions);
+    void sendInspectionObject(Otc::InspectObjectTypes inspectionType, uint16_t itemId, uint8_t itemCount);
+    void sendInspectionNormalObject(const Position& position);
 
     // otclient only
     void sendChangeMapAwareRange(int xrange, int yrange);
@@ -232,6 +234,12 @@ private:
     void parseAnimatedText(const InputMessagePtr& msg);
     void parseDistanceMissile(const InputMessagePtr& msg);
     void parseCreatureMark(const InputMessagePtr& msg);
+    void parseForgingData(const InputMessagePtr& msg);
+    void parseCreatureData(const InputMessagePtr& msg);
+    void parseHousesInfo(const InputMessagePtr& msg);
+    void parseWheelGiftOfLife(const InputMessagePtr& msg);
+    void parseCyclopediaMonsterTracker(const InputMessagePtr& msg);
+    void parseBosstiaryCooldownTimer(const InputMessagePtr& msg);
     void parseTrappers(const InputMessagePtr& msg);
     void parseCreatureHealth(const InputMessagePtr& msg);
     void parseCreatureLight(const InputMessagePtr& msg);
@@ -251,6 +259,7 @@ private:
     void parsePlayerInfo(const InputMessagePtr& msg);
     void parsePlayerStats(const InputMessagePtr& msg);
     void parsePlayerSkills(const InputMessagePtr& msg);
+    void parsePlayerSkillsModern(const InputMessagePtr& msg);
     void parsePlayerState(const InputMessagePtr& msg);
     void parsePlayerCancelAttack(const InputMessagePtr& msg);
     void parsePlayerModes(const InputMessagePtr& msg);
@@ -293,6 +302,11 @@ private:
     void parseMessageDialog(const InputMessagePtr& msg);
     void parseBlessDialog(const InputMessagePtr& msg);
     void parseResourceBalance(const InputMessagePtr& msg);
+    void parseHarmonyProtocol(const InputMessagePtr& msg);
+    void parseBosstiaryData(const InputMessagePtr& msg);
+    void parseBosstiarySlots(const InputMessagePtr& msg);
+    void parseBosstiaryEntries(const InputMessagePtr& msg);
+    void parseScreenshotAndBanner(const InputMessagePtr& msg);
     void parseOpenWheelWindow(const InputMessagePtr& msg);
     void parseWeaponProficiencyCatalog(const InputMessagePtr& msg);
     void parseWeaponProficiencyExperience(const InputMessagePtr& msg);
@@ -315,8 +329,10 @@ private:
     void parseSpecialContainer(const InputMessagePtr& msg);
     void parseDepotState(const InputMessagePtr& msg);
     void parseSupplyTracker(const InputMessagePtr& msg);
+    void parsePartyAnalyzer(const InputMessagePtr& msg);
     void parseTournamentLeaderboard(const InputMessagePtr& msg);
     void parseImpactTracker(const InputMessagePtr& msg);
+    void parseExperienceTracker(const InputMessagePtr& msg);
     void parseItemsPrices(const InputMessagePtr& msg);
     void parseLootTracker(const InputMessagePtr& msg);
     void parseItemDetail(const InputMessagePtr& msg);

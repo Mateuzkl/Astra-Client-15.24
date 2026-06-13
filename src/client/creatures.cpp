@@ -27,6 +27,11 @@
 #include <framework/xml/tinyxml.h>
 #include <framework/core/resourcemanager.h>
 
+// Tibia 12+ staticdata protobuf (monsters/bosses with bestiary race ids).
+// protoc output lands in $(IntDir)proto, which is on the include path.
+#include "staticdata.pb.h"
+#include <fstream>
+
 CreatureManager g_creatures;
 
 static bool isInZone(const Position& pos/* placePos*/,
@@ -177,7 +182,18 @@ std::map<int, std::tuple<std::string, int, int, int, int, int, int, int>> Creatu
             continue;
 
         const Outfit outfit = creature->getOutfit();
-        int raceId = outfit.getId() > 0 ? outfit.getId() : fallbackRaceId;
+
+        // staticdata entries carry the real bestiary race id; index by it so
+        // server race ids (bestiary/charms/bosstiary packets) resolve directly
+        int raceId = creature->getRaceId();
+        if(raceId > 0) {
+            if(list.find(raceId) == list.end())
+                list[raceId] = std::make_tuple(creature->getName(), outfit.getId(), outfit.getAuxId(), outfit.getHead(), outfit.getBody(), outfit.getLegs(), outfit.getFeet(), outfit.getAddons());
+            continue;
+        }
+
+        // legacy XML creatures have no race id: synthesize one from the looktype
+        raceId = outfit.getId() > 0 ? outfit.getId() : fallbackRaceId;
         while(list.find(raceId) != list.end())
             ++raceId;
 
@@ -186,6 +202,90 @@ std::map<int, std::tuple<std::string, int, int, int, int, int, int, int>> Creatu
     }
 
     return list;
+}
+
+bool CreatureManager::loadStaticData(const std::string& file)
+{
+    try {
+        // The Lua boot passes a PHYSFS virtual path; translate for std::ifstream
+        // (same pattern as AppearancesLoader).
+        std::string realPath = g_resources.getRealPath(file);
+        if(realPath.empty())
+            realPath = file;
+        std::ifstream in(realPath, std::ios::in | std::ios::binary);
+        if(!in.is_open()) {
+            g_logger.error(stdext::format("CreatureManager::loadStaticData: cannot open '%s' (real '%s')", file, realPath));
+            return false;
+        }
+
+        GOOGLE_PROTOBUF_VERIFY_VERSION;
+
+        otclient::protobuf::staticdata::Staticdata staticData;
+        if(!staticData.ParseFromIstream(&in)) {
+            g_logger.error(stdext::format("CreatureManager::loadStaticData: failed to parse '%s' (corrupt protobuf?)", file));
+            return false;
+        }
+        in.close();
+
+        // staticdata is the sole population source on the modern asset path;
+        // reload replaces the previous version's creatures
+        m_creatures.clear();
+        m_achievements.clear();
+
+        auto addEntry = [this](const auto& c) {
+            auto creatureType = std::make_shared<CreatureType>();
+            // staticdata names come lowercase ("orc warlord"); normalize like
+            // loadMonsters does so getCreatureByName's ucwords lookup matches
+            std::string name = c.has_name() ? c.name() : std::string();
+            stdext::trim(name);
+            stdext::ucwords(name);
+            creatureType->setName(name);
+            creatureType->setRaceId(c.has_raceid() ? static_cast<int32>(c.raceid()) : 0);
+
+            Outfit outfit;
+            if(c.has_outfit()) {
+                const auto& o = c.outfit();
+                outfit.setId(o.has_looktype() ? o.looktype() : 0);
+                outfit.setAuxId(o.has_lookitem() ? o.lookitem() : 0);
+                outfit.setAddons(o.has_lookaddons() ? o.lookaddons() : 0);
+                if(o.has_colors()) {
+                    const auto& colors = o.colors();
+                    outfit.setHead(colors.has_head() ? colors.head() : 0);
+                    outfit.setBody(colors.has_body() ? colors.body() : 0);
+                    outfit.setLegs(colors.has_legs() ? colors.legs() : 0);
+                    outfit.setFeet(colors.has_feet() ? colors.feet() : 0);
+                }
+            }
+            creatureType->setOutfit(outfit);
+            m_creatures.push_back(creatureType);
+        };
+
+        for(int i = 0; i < staticData.monsters_size(); ++i)
+            addEntry(staticData.monsters(i));
+        for(int i = 0; i < staticData.bosses_size(); ++i)
+            addEntry(staticData.bosses(i));
+
+        // achievements (cyclopedia 0xDA/5 resolves non-secret entries locally)
+        for(int i = 0; i < staticData.achievements_size(); ++i) {
+            const auto& a = staticData.achievements(i);
+            if(!a.has_id() || a.id() == 0)
+                continue;
+            StaticAchievement achievement;
+            achievement.id = static_cast<int>(a.id());
+            achievement.name = a.has_name() ? a.name() : std::string();
+            achievement.description = a.has_description() ? a.description() : std::string();
+            achievement.grade = a.has_grade() ? static_cast<int>(a.grade()) : 1;
+            m_achievements[achievement.id] = achievement;
+        }
+
+        m_loaded = true;
+        g_logger.info(stdext::format("Loaded %d monsters, %d bosses and %d achievements from %s",
+            staticData.monsters_size(), staticData.bosses_size(), (int)m_achievements.size(), file));
+        return true;
+    } catch(const std::exception& e) {
+        g_logger.error(stdext::format("CreatureManager::loadStaticData: exception loading '%s': %s", file, e.what()));
+        return false;
+    }
 }
 
 CreatureManager::CreatureManager()

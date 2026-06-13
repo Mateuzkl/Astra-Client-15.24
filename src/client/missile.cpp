@@ -64,7 +64,13 @@ void Missile::draw(const Point& dest, bool animate, LightView* lightView)
     }
 
     float fraction = m_animationTimer.ticksElapsed() / m_duration;
-    rawGetThingType()->draw(dest + m_delta * fraction, 0, xPattern, yPattern, 0, 0, Color::white, lightView);
+
+    Color color = Color::white;
+    const float alpha = g_map.getMissileAlpha();
+    if(alpha < 1.0f)
+        color.setAlpha(alpha);
+
+    rawGetThingType()->draw(dest + m_delta * fraction, 0, xPattern, yPattern, 0, 0, color, lightView);
 }
 
 void Missile::setPath(const Position& fromPosition, const Position& toPosition)

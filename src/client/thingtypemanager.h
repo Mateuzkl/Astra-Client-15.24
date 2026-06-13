@@ -90,14 +90,12 @@ public:
     // empty string on any error. Used by the Lua boot path to discover the
     // hashed appearances-<sha>.dat filename without globbing.
     std::string getAppearancesPath(const std::string& assetsDir);
-    // NOTE: loadStaticData() + getRaceData() / getRacesByName() / getAllRaces()
-    // and the BestiaryStorage pimpl from koliseu-otcv8 are intentionally
-    // deferred. They require staticdata.pb.h (no generated header in
-    // AstraClient yet) plus a RaceType struct that transitively pulls
-    // outfit.h, creating an include cycle with this header that the pimpl
-    // would have to break. Wire them in the same phase the bestiary UI
-    // lands; do not stub them here to avoid an empty API the Lua side might
-    // bind against and then silently rely on.
+    // Same catalog scan for the "type":"staticdata" entry (monsters/bosses
+    // with bestiary race ids). The actual loader lives in
+    // CreatureManager::loadStaticData — keeping staticdata.pb.h confined to
+    // creatures.cpp avoids the include cycle the koliseu-otcv8 pimpl existed
+    // to break.
+    std::string getStaticDataPath(const std::string& assetsDir);
     // === end protobuf path ===
     bool loadOtml(std::string file);
     void loadOtb(const std::string& file);
@@ -140,6 +138,8 @@ public:
 
     const ThingTypeList& getThingTypes(ThingCategory category);
     const ItemTypeList& getItemTypes() { return m_itemTypes; }
+    ThingTypeList getProficiencyThings();
+    std::string getCyclopediaItemName(uint16 id);
 
     uint32 getDatSignature() { return m_datSignature; }
     uint32 getOtbMajorVersion() { return m_otbMajorVersion; }
@@ -150,7 +150,13 @@ public:
     bool isXmlLoaded() { return m_xmlLoaded; }
     bool isOtbLoaded() { return m_otbLoaded; }
 
-    bool isValidDatId(uint16 id, ThingCategory category) { return id >= 1 && id < m_thingTypes[category].size(); }
+    // an id inside the range can still be a hole in the appearances file (nullType);
+    // treating it as valid lets Effect/Missile/Item draw a ThingType with zeroed
+    // pattern dimensions, which crashes on integer division
+    bool isValidDatId(uint16 id, ThingCategory category) {
+        return id >= 1 && id < m_thingTypes[category].size()
+            && m_thingTypes[category][id] && !m_thingTypes[category][id]->isNull();
+    }
     bool isValidOtbId(uint16 id) { return id >= 1 && id < m_itemTypes.size(); }
 
 private:

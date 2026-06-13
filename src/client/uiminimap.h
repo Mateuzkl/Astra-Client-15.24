@@ -65,6 +65,7 @@ protected:
 
 private:
     void update();
+    UIMapAnchorLayoutPtr ensureLayout();
 
     Rect m_mapArea;
     Position m_cameraPosition;

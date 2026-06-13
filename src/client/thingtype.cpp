@@ -55,6 +55,12 @@ int ThingType::getWeaponType()
     if(m_category != ThingCategoryItem)
         return 0;
 
+    // 15.x protobuf assets carry the weapon type directly; the legacy path below asks
+    // the OTB, which is not loaded on appearances-based setups (always yielded 0 and
+    // broke the proficiency mod's weapon categorization).
+    if (m_weaponType > 0)
+        return m_weaponType;
+
     return g_things.findItemTypeByClientId(m_id)->getWeaponType();
 }
 
@@ -414,6 +420,11 @@ void ThingType::exportImage(std::string fileName)
     if (m_spritesIndex.size() == 0)
         stdext::throw_exception("cannot export thingtype without sprites");
 
+    // protobuf assets store ONE full-bounding-square sprite per cell; the legacy
+    // w/h getSpriteIndex formula below would resolve to wrong sprites
+    if (g_sprites.isUsingProtobuf())
+        stdext::throw_exception("exportImage is not supported with protobuf assets");
+
     size_t spriteSize = g_sprites.spriteSize();
 
     auto image = std::make_shared<Image>(Size(spriteSize * m_size.width() * m_layers * m_numPatternX, spriteSize * m_size.height() * m_animationPhases * m_numPatternY * m_numPatternZ));
@@ -445,6 +456,11 @@ void ThingType::replaceSprites(std::map<uint32_t, ImagePtr>& replacements, std::
 
     if (m_spritesIndex.size() == 0)
         stdext::throw_exception("cannot export thingtype without sprites");
+
+    // protobuf assets store ONE full-bounding-square sprite per cell; the legacy
+    // w/h getSpriteIndex formula below would resolve to wrong sprites
+    if (g_sprites.isUsingProtobuf())
+        stdext::throw_exception("replaceSprites is not supported with protobuf assets");
 
     size_t spriteSize = g_sprites.spriteSize();
 
@@ -514,7 +530,7 @@ void ThingType::unload()
     m_loaded = false;
 }
 
-DrawQueueItem* ThingType::draw(const Point& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, Color color, LightView* lightView)
+DrawQueueItem* ThingType::draw(const Point& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, Color color, LightView* lightView, uint8_t order)
 {
     if (m_null)
         return nullptr;
@@ -542,7 +558,7 @@ DrawQueueItem* ThingType::draw(const Point& dest, int layer, int xPattern, int y
     if (lightView && hasLight())
         lightView->addLight(screenRect.center(), getLight());
 
-    return g_drawQueue->addTexturedRect(screenRect, texture, textureRect, color);
+    return g_drawQueue->addTexturedRect(screenRect, texture, textureRect, color, order);
 }
 
 DrawQueueItem* ThingType::draw(const Rect& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, Color color)
@@ -644,7 +660,7 @@ Rect ThingType::getDrawSize(const Point& dest, int layer, int xPattern, int yPat
     return Rect(dest + textureOffset - m_displacement - (m_size.toPoint() - Point(1, 1)) * g_sprites.spriteSize(), textureRect.size());
 }
 
-void ThingType::drawWithShader(const Point& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, const std::string& shader, Color color, LightView* lightView)
+void ThingType::drawWithShader(const Point& dest, int layer, int xPattern, int yPattern, int zPattern, int animationPhase, const std::string& shader, Color color, LightView* lightView, uint8_t order)
 {
     if (m_null)
         return;
@@ -673,6 +689,7 @@ void ThingType::drawWithShader(const Point& dest, int layer, int xPattern, int y
         lightView->addLight(screenRect.center(), getLight());
 
     DrawQueueItemTexturedRect* thing = new DrawQueueItemThingWithShader(screenRect, texture, textureRect, textureOffset, screenRect.center(), 0, shader);
+    thing->m_order = order;
     g_drawQueue->add(thing);
 
     //return g_drawQueue->addTexturedRect(screenRect, texture, textureRect, color);
@@ -730,6 +747,28 @@ bool ThingType::drawToImage(const Point& dest, int xPattern, int yPattern, int z
     bool anythingDrawn = false;
     int spriteSize = g_sprites.spriteSize();
 
+    if (g_sprites.isUsingProtobuf()) {
+        // 15.x: ONE sprite image is the full bounding square (e.g. 64x64 for a
+        // 2x2 thing) — no w/h sub-sprite loop. `dest` anchors the bottom-right
+        // cell (same as the legacy w==0,h==0 sub-sprite), so shift the blit
+        // up/left by the sprite's extra cells. Mirrors the legacy guard: the
+        // anchor cell must be inside the image (blit clips the rest).
+        if (dest.x >= 0 && dest.y >= 0) {
+            for (int l = 0; l < m_layers; ++l) {
+                uint spriteIndex = getSpriteIndex(-1, -1, l, xPattern, yPattern, zPattern, 0);
+                ImagePtr spriteImage = g_sprites.getSpriteImage(m_spritesIndex[spriteIndex]);
+                if (!spriteImage)
+                    continue;
+                Size spriteCells = spriteImage->getSize() / spriteSize;
+                anythingDrawn = true;
+                image->blit(Point(dest.x - (spriteCells.width() - 1) * spriteSize,
+                                  dest.y - (spriteCells.height() - 1) * spriteSize),
+                            spriteImage);
+            }
+        }
+        return anythingDrawn;
+    }
+
     for (int l = 0; l < m_layers; ++l) {
         for (int w = 0; w < m_size.width(); ++w)
         {
@@ -784,6 +823,8 @@ const TexturePtr& ThingType::getTexture(int animationPhase)
         m_texturesFramesOriginRects[animationPhase].resize(indexSize);
         m_texturesFramesOffsets[animationPhase].resize(indexSize);
 
+        const bool protobuf = g_sprites.isUsingProtobuf();
+
         for(int z = 0; z < m_numPatternZ; ++z) {
             for(int y = 0; y < m_numPatternY; ++y) {
                 for(int x = 0; x < m_numPatternX; ++x) {
@@ -794,16 +835,32 @@ const TexturePtr& ThingType::getTexture(int animationPhase)
                                                frameIndex / (textureSize.width() / m_size.width()) * m_size.height()) * spriteSize;
 
                         if (!useCustomImage) {
-                            for (int h = 0; h < m_size.height(); ++h) {
-                                for (int w = 0; w < m_size.width(); ++w) {
-                                    uint spriteIndex = getSpriteIndex(w, h, spriteMask ? 1 : l, x, y, z, animationPhase);
-                                    ImagePtr spriteImage = g_sprites.getSpriteImage(m_spritesIndex[spriteIndex]);
-                                    if (!spriteImage) {
-                                        continue;
-                                    }
-                                    Point spritePos = Point(m_size.width() - w - 1,
-                                                            m_size.height() - h - 1) * spriteSize;
+                            if (protobuf) {
+                                // 15.x: ONE sprite image is the full cell (e.g. 64x64
+                                // for a 2x2 thing). Blit it whole, anchored at the
+                                // bottom-right of the frame so it extends up/left into
+                                // the other SQMs (45° projection). The w/h sub-sprite
+                                // loop below is the legacy .spr layout only.
+                                uint spriteIndex = getSpriteIndex(-1, -1, spriteMask ? 1 : l, x, y, z, animationPhase);
+                                ImagePtr spriteImage = g_sprites.getSpriteImage(m_spritesIndex[spriteIndex]);
+                                if (spriteImage) {
+                                    Size spriteCells = spriteImage->getSize() / spriteSize;
+                                    Point spritePos = Point(m_size.width() - spriteCells.width(),
+                                                            m_size.height() - spriteCells.height()) * spriteSize;
                                     fullImage->blit(framePos + spritePos, spriteImage);
+                                }
+                            } else {
+                                for (int h = 0; h < m_size.height(); ++h) {
+                                    for (int w = 0; w < m_size.width(); ++w) {
+                                        uint spriteIndex = getSpriteIndex(w, h, spriteMask ? 1 : l, x, y, z, animationPhase);
+                                        ImagePtr spriteImage = g_sprites.getSpriteImage(m_spritesIndex[spriteIndex]);
+                                        if (!spriteImage) {
+                                            continue;
+                                        }
+                                        Point spritePos = Point(m_size.width() - w - 1,
+                                                                m_size.height() - h - 1) * spriteSize;
+                                        fullImage->blit(framePos + spritePos, spriteImage);
+                                    }
                                 }
                             }
                         }
@@ -869,15 +926,49 @@ Size ThingType::getBestTextureDimension(int w, int h, int count)
 }
 
 uint ThingType::getSpriteIndex(int w, int h, int l, int x, int y, int z, int a) {
-    uint index =
-        ((((((a % m_animationPhases)
-        * m_numPatternZ + z)
-        * m_numPatternY + y)
-        * m_numPatternX + x)
-        * m_layers + l)
-        * m_size.height() + h)
-        * m_size.width() + w;
-    VALIDATE(index < m_spritesIndex.size());
+    // Defensive wraps: callers derive patterns from server-sent outfit data
+    // (addons, mounts, directions) that can exceed what this appearance
+    // declares — e.g. an outfit with pattern_height=1 asked to draw addon 1
+    // would overflow into the next phase block. Wrap to the declared ranges.
+    if(m_numPatternX > 0) x %= m_numPatternX;
+    if(m_numPatternY > 0) y %= m_numPatternY;
+    if(m_numPatternZ > 0) z %= m_numPatternZ;
+    if(m_layers > 0 && l >= m_layers) l = m_layers - 1;
+    // same guard for the phase: a hole/corrupted appearance can have
+    // patterns > 0 with phases == 0, and a raw modulo would divide by zero
+    if(m_animationPhases > 0) a %= m_animationPhases;
+    else a = 0;
+
+    uint index;
+    if (w == -1 && h == -1) {
+        // Protobuf (15.x) assets store ONE sprite image per cell (the full
+        // 64x64/2x2 sprite, not split into 32x32 sub-sprites), so the index must
+        // drop the m_size width/height terms. getTexture passes -1,-1 in this mode.
+        index =
+            ((((a
+            * m_numPatternZ + z)
+            * m_numPatternY + y)
+            * m_numPatternX + x)
+            * m_layers + l);
+    } else {
+        index =
+            (((((a
+            * m_numPatternZ + z)
+            * m_numPatternY + y)
+            * m_numPatternX + x)
+            * m_layers + l)
+            * m_size.height() + h)
+            * m_size.width() + w;
+    }
+    // Defensive: a desynced map/packet can hand us a corrupted ThingType whose
+    // computed sprite index is out of range. Clamping (instead of the old
+    // VALIDATE, which aborts the whole client) keeps a parse/desync bug from
+    // turning into a hard crash — the appearance's last sprite is drawn instead.
+    if (index >= m_spritesIndex.size()) {
+        g_logger.traceError(stdext::format("sprite index %u out of range (size %zu) for thing id %d",
+            index, m_spritesIndex.size(), m_id));
+        return m_spritesIndex.empty() ? 0 : (uint)(m_spritesIndex.size() - 1);
+    }
     return index;
 }
 
@@ -889,11 +980,22 @@ uint ThingType::getTextureIndex(int l, int x, int y, int z) {
 
 int ThingType::getExactSize(int layer, int xPattern, int yPattern, int zPattern, int animationPhase)
 {
+    // same bounds-guards as draw(): this is exposed raw to Lua, so a bad
+    // phase/pattern must not index m_textures/m_texturesFramesOriginRects OOB
     if(m_null)
         return 0;
 
-    getTexture(animationPhase); // we must calculate it anyway.
-    int frameIndex = getTextureIndex(layer, xPattern, yPattern, zPattern);
+    if(animationPhase < 0 || animationPhase >= m_animationPhases)
+        return 0;
+
+    const TexturePtr& texture = getTexture(animationPhase); // fills the lazy rect/offset caches
+    if(!texture)
+        return 0;
+
+    uint frameIndex = getTextureIndex(layer, xPattern, yPattern, zPattern);
+    if(frameIndex >= m_texturesFramesOriginRects[animationPhase].size())
+        return 0;
+
     Size size = m_texturesFramesOriginRects[animationPhase][frameIndex].size() - m_texturesFramesOffsets[animationPhase][frameIndex].toSize();
     return std::max<int>(size.width(), size.height());
 }

@@ -121,6 +121,7 @@ namespace Proto {
         GameServerMissleEffect              = 133,
         GameServerMarkCreature              = 134,
         GameServerTrappers                  = 135,
+        GameServerCreatureData              = 139, // crystalserver creature update/icon/mana/vocation
         GameServerCreatureHealth            = 140,
         GameServerCreatureLight             = 141,
         GameServerCreatureOutfit            = 142,
@@ -169,7 +170,18 @@ namespace Proto {
         GameServerFloorChangeUp             = 190,
         GameServerFloorChangeDown           = 191,
         GameServerLootContainers            = 192,
+        GameServerAllowBugReport            = 26,  // crystalserver: 0x1A allow bug report
+        GameServerBosstiaryData             = 97,  // crystalserver: 0x61 bosstiary thresholds
+        GameServerBosstiarySlots            = 98,  // crystalserver: 0x62 bosstiary slots
+        GameServerBosstiaryEntries          = 115, // crystalserver: 0x73 boss cyclopedia entry list
+        GameServerScreenshotBanner          = 117, // crystalserver: 0x75 screenshot/banner on advance
+        GameServerPartyAnalyzer             = 43,  // crystalserver: 0x2B party hunt analyzer
+        GameServerHarmonyProtocol           = 193, // crystalserver: Harmony/Serene/Virtue
         GameServerWeaponProficiencyInfo      = 196,
+        GameServerHousesInfo                 = 198, // crystalserver: 0xC6 houses info
+        GameServerWheelGiftOfLife            = 94,  // crystalserver: 0x5E wheel gift-of-life cooldown
+        GameServerCyclopediaMonsterTracker   = 185, // crystalserver: 0xB9 bestiary/bosstiary tracker
+        GameServerBosstiaryCooldownTimer     = 189, // crystalserver: 0xBD boss cooldown timers
         GameServerTournamentLeaderboard     = 197,
         GameServerChooseOutfit              = 200,
         GameServerImpactTracker             = 204,
@@ -314,6 +326,7 @@ namespace Proto {
         ClientRefreshContainer              = 202,
         ClientBrowseField                   = 203,
         ClientSeekInContainer               = 204,
+        ClientInspectionObject              = 205,
         ClientRequestOutfit                 = 210,
         ClientChangeOutfit                  = 211,
         ClientMount                         = 212, // 870

@@ -70,6 +70,8 @@ public:
     void setBaseMagicLevel(double baseMagicLevel);
     void setSoul(double soul);
     void setStamina(double stamina);
+    void setExpRates(int base, int lowLevel, int storeBoost, int staminaMulti);
+    void setStoreExpBoost(int seconds, bool canBuy);
     void setKnown(bool known) { m_known = known; }
     void setPendingGame(bool pending) { m_pending = pending; }
     void setInventoryItem(Otc::InventorySlot inventory, const ItemPtr& item);
@@ -98,11 +100,20 @@ public:
     double getLevelPercent() { return m_levelPercent; }
     double getMana() { return m_mana; }
     double getMaxMana() { return std::max<double>(m_mana, m_maxMana); }
+    // Magic shield (utamo vita) capacity from AddPlayerStats. remaining>0 == shield active.
+    double getManaShield() { return m_manaShield; }
+    double getMaxManaShield() { return m_maxManaShield; }
+    void setManaShield(double remaining, double total) { m_manaShield = remaining; m_maxManaShield = total; }
     double getMagicLevel() { return m_magicLevel; }
     double getMagicLevelPercent() { return m_magicLevelPercent; }
     double getBaseMagicLevel() { return m_baseMagicLevel; }
     double getSoul() { return m_soul; }
     double getStamina() { return m_stamina; }
+    int getBaseExpRate() { return m_baseXpGain; }
+    int getLowLevelRate() { return m_grindingXpBoost; }
+    int getExpBoostRate() { return m_storeXpBoostPercent; }
+    int getStaminaRate() { return m_staminaXpBoost; }
+    int getStoreExpBoostTime() { return m_storeXpBoostTime; }
     double getRegenerationTime() { return m_regenerationTime; }
     double getOfflineTrainingTime() { return m_offlineTrainingTime; }
     std::vector<int> getSpells() { return m_spells; }
@@ -213,6 +224,13 @@ private:
 
     int m_states;
     int m_vocation;
+    // xp gain rates from 0xA0 (percent values; -1 = not received yet so the
+    // first server update always fires the change events)
+    int m_baseXpGain = -1;
+    int m_grindingXpBoost = -1;
+    int m_storeXpBoostPercent = -1;
+    int m_staminaXpBoost = -1;
+    int m_storeXpBoostTime = -1;
     int m_blessings;
     int m_taints;
     int m_groupType;
@@ -230,6 +248,8 @@ private:
     double m_levelPercent;
     double m_mana;
     double m_maxMana;
+    double m_manaShield = 0;
+    double m_maxManaShield = 0;
     double m_magicLevel;
     double m_magicLevelPercent;
     double m_baseMagicLevel;

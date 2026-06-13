@@ -184,18 +184,36 @@ bool SpriteSheetLoader::loadCatalog(const std::string& assetsDir)
                       return a.firstSpriteId < b.firstSpriteId;
                   });
 
-        // Sanity check: no overlapping ranges. Overlap would make
-        // findSheetIndex() ambiguous; flag and bail.
-        for (size_t i = 1; i < m_sheets.size(); ++i) {
-            if (m_sheets[i].firstSpriteId <= m_sheets[i - 1].lastSpriteId) {
-                g_logger.error(stdext::format(
-                    "SpriteSheetLoader: overlapping ranges in catalog: sheet '%s' "
-                    "[%d..%d] overlaps '%s' [%d..%d]",
-                    m_sheets[i - 1].file, m_sheets[i - 1].firstSpriteId,
-                    m_sheets[i - 1].lastSpriteId, m_sheets[i].file,
-                    m_sheets[i].firstSpriteId, m_sheets[i].lastSpriteId));
-                return false;
+        // Deduplicate overlapping ranges instead of aborting the whole sprite
+        // system. Real catalogs (e.g. crystalserver's 15.24 assets) sometimes ship
+        // several sheets claiming the SAME spriteId range (regenerated/superseded
+        // sheets the pipeline never pruned). Bailing here left findSheetIndex() with
+        // no sheets at all -> every sprite blank -> fully black game screen. Since
+        // the sheets are sorted by firstSpriteId, we keep the first sheet of each
+        // range and drop any later sheet that overlaps the previous kept one, so
+        // findSheetIndex() stays unambiguous and the rest of the catalog still loads.
+        {
+            std::vector<SheetEntry> kept;
+            kept.reserve(m_sheets.size());
+            int dropped = 0;
+            for (auto& sheet : m_sheets) {
+                if (!kept.empty() && sheet.firstSpriteId <= kept.back().lastSpriteId) {
+                    if (dropped < 5) {
+                        g_logger.warning(stdext::format(
+                            "SpriteSheetLoader: dropping overlapping sheet '%s' [%d..%d] "
+                            "(already covered by '%s' [%d..%d])",
+                            sheet.file, sheet.firstSpriteId, sheet.lastSpriteId,
+                            kept.back().file, kept.back().firstSpriteId, kept.back().lastSpriteId));
+                    }
+                    ++dropped;
+                    continue;
+                }
+                kept.push_back(std::move(sheet));
             }
+            if (dropped > 0)
+                g_logger.warning(stdext::format(
+                    "SpriteSheetLoader: dropped %d overlapping/duplicate sheet(s) from catalog", dropped));
+            m_sheets = std::move(kept);
         }
 
         m_spritesCount = (maxLastId >= 0) ? (maxLastId + 1) : 0;
@@ -226,7 +244,7 @@ bool SpriteSheetLoader::loadCatalog(const std::string& assetsDir)
 ImagePtr SpriteSheetLoader::getSpriteImage(int spriteId)
 {
     try {
-        if (spriteId < 0)
+        if (spriteId <= 0) // id 0 = "no sprite" sentinel (appearances pad m_spritesIndex with zeros)
             return nullptr;
 
         const int sheetIndex = findSheetIndex(spriteId);

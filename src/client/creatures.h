@@ -37,7 +37,8 @@ enum CreatureAttr : uint8
     CreatureAttrOutfit    = 2,
     CreatureAttrSpawnTime = 3,
     CreatureAttrDir       = 4,
-    CreatureAttrRace      = 5
+    CreatureAttrRace      = 5,
+    CreatureAttrRaceId    = 6
 };
 
 enum CreatureRace : uint8
@@ -100,10 +101,25 @@ public:
     void setRace(CreatureRace race) { m_attribs.set(CreatureAttrRace, race); }
     CreatureRace getRace() { return m_attribs.get<CreatureRace>(CreatureAttrRace); }
 
+    // bestiary race id from staticdata.dat; 0 for legacy XML-loaded creatures
+    void setRaceId(int32 raceId) { m_attribs.set(CreatureAttrRaceId, raceId); }
+    int32 getRaceId() { return m_attribs.get<int32>(CreatureAttrRaceId); }
+
     CreaturePtr cast();
 
 private:
     stdext::dynamic_storage<uint8> m_attribs;
+};
+
+// staticdata.dat achievement entry. Plain struct (no protobuf types) so
+// staticdata.pb.h stays confined to creatures.cpp — see the include-cycle
+// note on ThingTypeManager::getStaticDataPath.
+struct StaticAchievement
+{
+    int id = 0;
+    std::string name;
+    std::string description;
+    int grade = 0;
 };
 
 class CreatureManager
@@ -115,6 +131,9 @@ public:
     void terminate();
 
     void loadMonsters(const std::string& file);
+    // populate m_creatures from the Tibia 12+ staticdata protobuf (monsters +
+    // bosses with their real bestiary race ids); used by the modern asset boot
+    bool loadStaticData(const std::string& file);
     void loadSingleCreature(const std::string& file);
     void loadNpcs(const std::string& folder);
     void loadCreatureBuffer(const std::string& buffer);
@@ -135,12 +154,16 @@ public:
 
     const std::vector<CreatureTypePtr>& getCreatures() { return m_creatures; }
     std::map<int, std::tuple<std::string, int, int, int, int, int, int, int>> getMonsterList();
+    // staticdata achievements keyed by id; cyclopedia 0xDA/5 sends only
+    // id+timestamp for non-secret entries, the rest is resolved from here
+    std::map<int, StaticAchievement> getAchievementList() { return m_achievements; }
 
 protected:
     void internalLoadCreatureBuffer(TiXmlElement* elem, const CreatureTypePtr& m);
 
 private:
     std::vector<CreatureTypePtr> m_creatures;
+    std::map<int, StaticAchievement> m_achievements;
     std::unordered_map<Position, SpawnPtr, PositionHasher> m_spawns;
     stdext::boolean<false> m_loaded, m_spawnLoaded;
     CreatureTypePtr m_nullCreature;

@@ -26,12 +26,19 @@
 #include "const.h"
 #include <framework/core/declarations.h>
 #include <framework/graphics/declarations.h>
+#include <memory>
+
+// Forward decl so the unique_ptr<SpriteSheetLoader> field below doesn't drag
+// the loader's full header (and protobuf) into every TU that pulls in
+// SpriteManager. Defaulted ctor/dtor live in the .cpp for the same reason.
+class SpriteSheetLoader;
 
 //@bindsingleton g_sprites
 class SpriteManager
 {
 public:
     SpriteManager();
+    ~SpriteManager();
 
     void terminate();
 
@@ -55,6 +62,20 @@ public:
     float getOffsetFactor() const { return static_cast<float>(m_spriteSize) / 32.0f; }
     bool isHdMod() const { return m_isHdMod; }
 
+    // Pixel cell dimensions (w,h) of the sprite that owns `spriteId`, taken from
+    // the owning sheet's catalog "spritetype" (0=32x32, 1=32x64, 2=64x32, 3=64x64).
+    // This is the AUTHORITATIVE storage size for proto (15.x) assets — needed so a
+    // ThingType's m_size matches the real sprite footprint (a 2x2/64x64 sprite that
+    // extends into the 3 SQMs above/left of its tile). Falls back to (spriteSize,
+    // spriteSize) on the legacy .spr path or when the id is unmapped.
+    std::pair<int, int> getSpriteCellSize(int spriteId) const;
+
+    // True when sprites come from the 15.x protobuf sheet pipeline (catalog +
+    // LZMA sheets) rather than the legacy .spr/.cwm. In protobuf mode one sprite
+    // image is the full cell (e.g. 64x64) instead of being split into 32x32 sub-
+    // sprites, so ThingType::getTexture must blit it whole.
+    bool isUsingProtobuf() const { return m_sheetLoader != nullptr; }
+
 private:
     bool loadCasualSpr(std::string file);
     bool loadCwmSpr(std::string file);
@@ -70,6 +91,11 @@ private:
     FileStreamPtr m_spritesFile;
     std::vector<std::vector<uint8_t>> m_sprites;
     std::unordered_map<uint32, std::string> m_cachedData;
+
+    // 15.24 protobuf path: when loadSpr is called with a directory containing
+    // catalog-content.json, we own a SpriteSheetLoader that decompresses and
+    // caches LZMA sheets on demand. Null when running the legacy .spr/.cwm path.
+    std::unique_ptr<SpriteSheetLoader> m_sheetLoader;
 };
 
 extern SpriteManager g_sprites;

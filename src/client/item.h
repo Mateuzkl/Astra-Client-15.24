@@ -107,6 +107,25 @@ public:
     int getCountOrSubType() { return m_countOrSubType; }
     int getSubType();
     int getCount();
+    // Item value APIs used by gamelib getItemColor and the game_cyclopedia/game_analyser
+    // mods (CIP-client API surface):
+    //  - getAverageMarketValue: the per-item average the server pushes via 0xCD ItemsPrices.
+    //  - getDefaultValue: best NPC sell value (what the player gets selling it), from the
+    //    appearances npcsaledata; falls back to the market average so mods without their
+    //    own fallback never see a surprise 0.
+    //  - getDefaultBuyPrice: cheapest NPC buy cost (what the player pays for supplies),
+    //    same fallback rationale.
+    double getPriceValue() { return static_cast<double>(rawGetThingType()->getPriceValue()); }
+    double getAverageMarketValue() { return getPriceValue(); }
+    double getDefaultValue() {
+        const uint32_t v = rawGetThingType()->getNpcSellValue();
+        return v > 0 ? static_cast<double>(v) : getPriceValue();
+    }
+    double getDefaultBuyPrice() {
+        const uint32_t v = rawGetThingType()->getNpcBuyValue();
+        return v > 0 ? static_cast<double>(v) : getPriceValue();
+    }
+    std::vector<ThingType::NpcSaleInfo> getNPCSaleData() { return rawGetThingType()->getNpcSaleData(); }
     uint32 getId() { return m_clientId; }
     uint16 getClientId() { return m_clientId; }
     uint16 getServerId() { return m_serverId; }
@@ -121,6 +140,12 @@ public:
     uint64 getDurationTime() { return m_durationTime; }
     ticks_t getDurationTimePaused() { return m_durationTimePaused; }
     bool isDurationPaused() const { return m_durationIsPaused; }
+
+    // Instance charges from the server AddItem wearOut block (U32 charges + U8
+    // brand-new). 0 for items not parsed from the wire (e.g. UIItem:setItemId).
+    void setCharges(uint32 charges) { m_charges = charges; }
+    uint32 getCharges() { return m_charges; }
+    bool hasCharges() { return m_charges > 0; }
 
     void unserializeItem(const BinaryTreePtr& in);
     void serializeItem(const OutputBinaryTreePtr& out);
@@ -205,6 +230,7 @@ private:
 
     uint32 m_quickLootFlags;
     uint32 m_obtainFlags;
+    uint32 m_charges;
     int m_tier;
     uint8 m_phase;
     ticks_t m_lastPhase;

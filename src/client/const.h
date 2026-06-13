@@ -337,6 +337,15 @@ namespace Otc
         MessageMana                    = 41,
         MessageBeyondLast              = 42,
 
+        // crystalserver/Canary 13+ message classes (server codes 48-52). Mapped so
+        // the translation table knows them and parseTextMessage reads them via the
+        // string-only default branch instead of throwing "unknown message mode".
+        MessageAttention               = 53,
+        MessageBoostedCreature         = 54,
+        MessageOfflineTraining         = 55,
+        MessageTransaction             = 56,
+        MessagePotion                  = 57,
+
         // deprecated
         MessageMonsterYell             = 43,
         MessageMonsterSay              = 44,
@@ -668,6 +677,18 @@ namespace Otc
         WEAPON_PROFICIENCY_APPLY_PERKS = 3
     };
 
+    // mirrors crystalserver server_definitions.hpp InspectObjectTypes. The on-wire
+    // reply type byte (sendItemInspection) is 0x00 normal / 0x01 cyclopedia /
+    // 0x02 proficiency, written by the server and NOT equal to these enum values.
+    enum InspectObjectTypes : uint8_t
+    {
+        INSPECT_NORMALOBJECT = 0,
+        INSPECT_NPCTRADE = 1,
+        INSPECT_PLAYERTRADE = 2,
+        INSPECT_CYCLOPEDIA = 3,
+        INSPECT_PROFICIENCY = 4
+    };
+
     enum WheelGemQuality_t : uint8_t
     {
         WheelGemQuality_Lesser = 0,
@@ -677,12 +698,14 @@ namespace Otc
     };
 
     enum MagicEffectsType_t : uint8_t {
-        MAGIC_EFFECTS_END_LOOP = 0,
-        MAGIC_EFFECTS_DELTA = 1,
-        MAGIC_EFFECTS_DELAY = 2,
-        MAGIC_EFFECTS_CREATE_EFFECT = 3,
-        MAGIC_EFFECTS_CREATE_DISTANCEEFFECT = 4,
-        MAGIC_EFFECTS_CREATE_DISTANCEEFFECT_REVERSED = 5,
+        MAGIC_EFFECTS_END_LOOP = 0,                       // ends the effect loop
+        MAGIC_EFFECTS_DELTA = 1,                          // + uint8_t delta
+        MAGIC_EFFECTS_DELAY = 2,                          // + uint16_t delay (ms)
+        MAGIC_EFFECTS_CREATE_EFFECT = 3,                  // + uint16_t effectId, uint8_t source
+        MAGIC_EFFECTS_CREATE_DISTANCEEFFECT = 4,          // + uint16_t shotId, int8 dx, int8 dy, uint8_t source
+        MAGIC_EFFECTS_CREATE_DISTANCEEFFECT_REVERSED = 5, // same payload as 4
+        MAGIC_EFFECTS_CREATE_SOUND_MAIN_EFFECT = 6,       // + uint8_t soundSource, uint16_t soundId
+        MAGIC_EFFECTS_CREATE_SOUND_SECONDARY_EFFECT = 7,  // + uint8_t soundSource, uint16_t soundId
     };
 }
 

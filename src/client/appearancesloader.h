@@ -35,6 +35,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 // Forward-declare the protobuf types so consumers don't need the generated
 // header (which is large) just to talk to the loader.
@@ -75,6 +76,23 @@ public:
     int getCategoryCount(ThingCategory category) const;
 
 private:
+    // Per-frame-group layout recorded by applyFrameGroup. buildThingType uses it
+    // to re-layout m_spritesIndex when an outfit's groups disagree on dims:
+    // ThingType::getSpriteIndex indexes ALL phases with a single stride taken
+    // from the last group, so divergent groups would scramble sprites otherwise.
+    struct FrameGroupLayout
+    {
+        int layers;
+        int patternX;
+        int patternY;
+        int patternZ;
+        int phases;
+        int spriteOffset; // first index of this group's block in m_spritesIndex
+        int cellW;
+        int cellH;
+        int realSize;
+    };
+
     bool buildThingType(const Crystal::protobuf::appearances::Appearance& app,
                         ThingCategory category,
                         ThingTypePtr& out);
@@ -86,7 +104,8 @@ private:
     void applyFrameGroup(const Crystal::protobuf::appearances::FrameGroup& fg,
                          ThingCategory category,
                          ThingType& out,
-                         int& totalSpritesCount);
+                         int& totalSpritesCount,
+                         std::vector<FrameGroupLayout>& groupLayouts);
 
     AnimatorPtr buildAnimator(const Crystal::protobuf::appearances::SpriteAnimation& anim,
                               int phases);

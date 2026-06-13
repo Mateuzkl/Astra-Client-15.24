@@ -29,13 +29,21 @@
 #include <framework/util/crypt.h>
 #include <framework/util/pngunpacker.h>
 
+#include "spritesheetloader.h"
+#include <framework/luaengine/luainterface.h>
+
 SpriteManager g_sprites;
 
+// Defaulted ctor/dtor live in the .cpp so std::unique_ptr<SpriteSheetLoader>
+// only needs the forward-decl in the header.
 SpriteManager::SpriteManager()
 {
     m_spritesCount = 0;
     m_signature = 0;
+    m_spriteSize = 32;
 }
+
+SpriteManager::~SpriteManager() = default;
 
 void SpriteManager::terminate()
 {
@@ -44,6 +52,45 @@ void SpriteManager::terminate()
 
 bool SpriteManager::loadSpr(std::string file)
 {
+    unload();
+
+    if (file.empty()) {
+        g_logger.error("SpriteManager::loadSpr: empty path");
+        return false;
+    }
+
+    // === 15.24 protobuf path: catalog-content.json in a directory ===========
+    // things.lua passes the assets directory (e.g. "/things/1524") for modern
+    // clients. Some legacy callers historically passed a fake filename stem
+    // like "/things/1524/Tibia"; tolerate that by peeling off the last segment
+    // when the path doesn't resolve to an existing directory.
+    std::string candidate = file;
+    if (!g_resources.directoryExists(candidate)) {
+        const auto slashPos = candidate.find_last_of("/\\");
+        if (slashPos != std::string::npos)
+            candidate = candidate.substr(0, slashPos);
+    }
+    if (g_resources.directoryExists(candidate)) {
+        const std::string realDir = g_resources.getRealPath(candidate);
+        if (!realDir.empty()) {
+            auto loader = std::make_unique<SpriteSheetLoader>();
+            if (loader->loadCatalog(realDir)) {
+                m_sheetLoader  = std::move(loader);
+                m_spritesCount = m_sheetLoader->getSpritesCount();
+                m_spriteSize   = m_sheetLoader->getSpriteSize();
+                // The Tibia 15.24 server skips the spr signature in the login
+                // packet (skipBytes(17) in protocollogin.cpp). We keep emitting
+                // 0 to satisfy the legacy wire-format slot. See memo
+                // project_protocol_pipeline_1524.
+                m_signature = 0;
+                m_loaded = true;
+                g_lua.callGlobalField("g_sprites", "onLoadSpr", file);
+                return true;
+            }
+        }
+    }
+
+    // === Legacy .cwm / .spr path (≤ Tibia 11.x) =============================
     m_spritesCount = 0;
     m_signature = 0;
     m_loaded = false;
@@ -296,20 +343,35 @@ void SpriteManager::dumpSprites(std::string dir)
 
 void SpriteManager::unload()
 {
+    m_loaded = false;
+    m_isHdMod = false;
     m_spritesCount = 0;
     m_signature = 0;
+    m_spriteSize = 32;
     m_spritesFile = nullptr;
     m_sprites.clear();
+    m_cachedData.clear(); // HD-mod (.cwm) PNG blobs — keep them from outliving the pack
+    m_sheetLoader.reset();
 }
 
 ImagePtr SpriteManager::getSpriteImage(int id)
 {
+    if (m_sheetLoader)
+        return m_sheetLoader->getSpriteImage(id);
     if (m_isHdMod) {
         return getSpriteImageHd(id);
     }
     else {
         return getSpriteImageCasual(id);
     }
+}
+
+std::pair<int, int> SpriteManager::getSpriteCellSize(int spriteId) const
+{
+    if (m_sheetLoader)
+        return m_sheetLoader->getSpriteCellSize(spriteId);
+    // Legacy .spr/.cwm path: every sprite is one canonical cell.
+    return { m_spriteSize, m_spriteSize };
 }
 
 bool SpriteManager::loadCasualSpr(std::string file)
@@ -407,14 +469,21 @@ ImagePtr SpriteManager::getSpriteImageCasual(int id)
             int writePos = 0;
 
             size_t bufferPos = 2;
-            while (bufferPos != buffer.size()) {
+            // bound every read/write: corrupt or wrongly-decrypted data must not run past
+            // buffer (OOB read) or past the 32x32x4 pixel allocation (heap overflow)
+            while (bufferPos + 4 <= buffer.size()) {
                 uint16_t transparentPixels = *(uint16_t*)(&buffer[bufferPos]);
                 bufferPos += 2;
                 uint16_t coloredPixels = *(uint16_t*)(&buffer[bufferPos]);
                 bufferPos += 2;
 
+                if (writePos + (int)transparentPixels * 4 > spriteDataSize)
+                    break;
                 writePos += transparentPixels * 4;
                 for (int i = 0; i < coloredPixels; ++i) {
+                    const int need = hasAlpha ? 4 : 3;
+                    if (bufferPos + need > buffer.size() || writePos + 4 > spriteDataSize)
+                        break;
                     pixels[writePos++] = buffer[bufferPos++];
                     pixels[writePos++] = buffer[bufferPos++];
                     pixels[writePos++] = buffer[bufferPos++];
@@ -464,9 +533,13 @@ ImagePtr SpriteManager::getSpriteImageCasual(int id)
             uint16 coloredPixels = m_spritesFile->getU16();
 
             writePos += transparentPixels * 4;
+            if (writePos >= spriteDataSize)
+                break;
 
             if (useAlpha) {
-                m_spritesFile->read(&pixels[writePos], std::min<uint16>(coloredPixels * 4, spriteDataSize - writePos));
+                // signed math: a negative remainder must not wrap to a huge uint16 read length
+                int toRead = std::min<int>(coloredPixels * 4, spriteDataSize - writePos);
+                m_spritesFile->read(&pixels[writePos], toRead);
                 writePos += coloredPixels * 4;
                 read += 4 + (4 * coloredPixels);
             }

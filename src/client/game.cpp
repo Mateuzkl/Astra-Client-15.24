@@ -1595,6 +1595,20 @@ void Game::sendWeaponProficiencyApply(const uint16_t itemId, const std::vector<u
     m_protocolGame->sendWeaponProficiencyApply(itemId, levels, perkPositions);
 }
 
+void Game::sendInspectionObject(const Otc::InspectObjectTypes inspectionType, const uint16_t itemId, const uint8_t itemCount)
+{
+    if (!canPerformGameAction())
+        return;
+    m_protocolGame->sendInspectionObject(inspectionType, itemId, itemCount);
+}
+
+void Game::sendInspectionNormalObject(const Position& position)
+{
+    if (!canPerformGameAction())
+        return;
+    m_protocolGame->sendInspectionNormalObject(position);
+}
+
 void Game::ping()
 {
     if(!m_protocolGame || !m_protocolGame->isConnected())
@@ -1675,6 +1689,9 @@ void Game::setProtocolVersion(int version)
 
 void Game::setClientVersion(int version)
 {
+    if(m_clientVersion == version)
+        return;
+
     if(isOnline())
         stdext::throw_exception("Unable to change client version while online");
 
@@ -1753,6 +1770,21 @@ int Game::getOs()
 {
     if(m_clientCustomOs >= 0)
         return m_clientCustomOs;
+
+    // Modern servers (Canary/crystalserver, Tibia 12+/15.x) only switch the
+    // game connection to SEQUENCE framing (sequenced packets + zlib
+    // compression, no adler checksum) when the client announces an
+    // OTCLIENT_* operating system (10..12). The OTCLIENTV8_* range (20..25)
+    // leaves the server on CHECKSUM_METHOD_NONE, which desyncs framing against
+    // a modern client and yields "got a network message with invalid checksum".
+    // So for modern clients we report the OTCLIENT_* OS; legacy keeps OTCv8.
+    if (isModernClient()) {
+        if(g_app.getOs() == "mac")
+            return 12; // CLIENTOS_OTCLIENT_MAC
+        if(g_app.getOs() == "windows")
+            return 11; // CLIENTOS_OTCLIENT_WINDOWS
+        return 10;     // CLIENTOS_OTCLIENT_LINUX
+    }
 
     if(g_app.getOs() == "windows")
         return 20;

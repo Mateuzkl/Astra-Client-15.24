@@ -149,12 +149,56 @@ int push_luavalue(const MarketData& data)
     g_lua.setField("name");
     g_lua.pushInteger(data.requiredLevel);
     g_lua.setField("requiredLevel");
-    g_lua.pushInteger(data.restrictVocation);
+    // The CIP-style mods (proficiency/cyclopedia/market filters) expect a TABLE of
+    // vocation ids here (#list / table.contains / pairs) — pushing the legacy single
+    // integer crashed proficiency_data.lua:258 the moment proficiency XP arrived.
+    push_luavalue(data.restrictVocations);
     g_lua.setField("restrictVocation");
     g_lua.pushInteger(data.showAs);
     g_lua.setField("showAs");
     g_lua.pushInteger(data.tradeAs);
     g_lua.setField("tradeAs");
+    return 1;
+}
+
+int push_luavalue(const ThingType::NpcSaleInfo& info)
+{
+    // Field names match what mods/game_cyclopedia/classes/items.lua showNpcData reads.
+    g_lua.createTable(0, 6);
+    g_lua.pushString(info.name);
+    g_lua.setField("name");
+    g_lua.pushString(info.location);
+    g_lua.setField("location");
+    g_lua.pushInteger(info.salePrice);
+    g_lua.setField("salePrice");
+    g_lua.pushInteger(info.buyPrice);
+    g_lua.setField("buyPrice");
+    g_lua.pushInteger(info.currencyObjectTypeId);
+    g_lua.setField("currencyObjectTypeId");
+    // always set (mods compare against ''): empty string = plain gold currency
+    g_lua.pushString(info.currencyQuestFlagDisplayName);
+    g_lua.setField("currencyQuestFlagDisplayName");
+    return 1;
+}
+
+int push_luavalue(const StaticAchievement& achievement)
+{
+    // Shape mirrors the unlocked entries built by cyclopediaprotocol.lua's 0xDA/5
+    // parser: character.lua's createAchievementList renders timestamp/secret on
+    // locked entries from g_things.getAchievementList() too, so both are required.
+    g_lua.createTable(0, 6);
+    g_lua.pushInteger(achievement.id);
+    g_lua.setField("id");
+    g_lua.pushString(achievement.name);
+    g_lua.setField("name");
+    g_lua.pushString(achievement.description);
+    g_lua.setField("description");
+    g_lua.pushInteger(achievement.grade);
+    g_lua.setField("grade");
+    g_lua.pushBoolean(false);
+    g_lua.setField("secret");
+    g_lua.pushInteger(0);
+    g_lua.setField("timestamp");
     return 1;
 }
 
@@ -168,7 +212,16 @@ bool luavalue_cast(int index, MarketData& data)
         g_lua.getField("requiredLevel", index);
         data.requiredLevel = g_lua.popInteger();
         g_lua.getField("restrictVocation", index);
-        data.restrictVocation = g_lua.popInteger();
+        if (g_lua.isTable(-1)) {
+            // mirror of push_luavalue: a table/list of vocation ids
+            luavalue_cast(-1, data.restrictVocations);
+            g_lua.pop();
+            data.restrictVocation = data.restrictVocations.empty() ? 0 : data.restrictVocations.front();
+        } else {
+            data.restrictVocation = g_lua.popInteger();
+            if (data.restrictVocation > 0)
+                data.restrictVocations.push_back(data.restrictVocation);
+        }
         g_lua.getField("showAs", index);
         data.showAs = g_lua.popInteger();
         g_lua.getField("tradeAs", index);
@@ -214,7 +267,10 @@ bool luavalue_cast(int index, StoreCategory& data)
 
 int push_luavalue(const StoreOffer& offer)
 {
-    g_lua.createTable(0, 6);
+    // Mirror the shape mods/game_store expects (storeprotocol.lua buildOffer): top-level
+    // fields + an offers[] sub-offer array. Missing fields previously made Offers.lua /
+    // Home.lua compare/iterate nil values.
+    g_lua.createTable(0, 18);
     g_lua.pushInteger(offer.id);
     g_lua.setField("id");
     g_lua.pushString(offer.name);
@@ -227,6 +283,73 @@ int push_luavalue(const StoreOffer& offer)
     g_lua.setField("state");
     g_lua.pushString(offer.icon);
     g_lua.setField("icon");
+    g_lua.pushInteger(offer.offerType);
+    g_lua.setField("offerType");
+    g_lua.pushInteger(offer.itemId);
+    g_lua.setField("itemId");
+    g_lua.pushInteger(offer.mountId);
+    g_lua.setField("mountId");
+    // The UI uses `type`/`maleOutfit` as the look id for mount/outfit preview.
+    g_lua.pushInteger(offer.offerType == 1 ? offer.mountId : offer.maleOutfit);
+    g_lua.setField("type");
+    g_lua.pushInteger(offer.maleOutfit);
+    g_lua.setField("maleOutfit");
+    g_lua.pushInteger(offer.head);
+    g_lua.setField("head");
+    g_lua.pushInteger(offer.body);
+    g_lua.setField("body");
+    g_lua.pushInteger(offer.legs);
+    g_lua.setField("legs");
+    g_lua.pushInteger(offer.feet);
+    g_lua.setField("feet");
+    g_lua.pushInteger(0);
+    g_lua.setField("TimesBought");
+    g_lua.pushInteger(offer.tryMode);
+    g_lua.setField("tryMode");
+    g_lua.pushInteger(offer.requiresConfiguration);
+    g_lua.setField("RequiresConfiguration");
+    // crystalserver's 0xFC stream carries no bundle block; Offers.lua does
+    // `#offer.bundles > 0`, so always provide the (empty) table
+    g_lua.createTable(0, 0);
+    g_lua.setField("bundles");
+
+    // offers[] sub-offer array
+    g_lua.createTable(static_cast<int>(offer.subOffers.size()), 0);
+    int idx = 1;
+    for (const StoreSubOffer& sub : offer.subOffers) {
+        g_lua.createTable(0, 8);
+        g_lua.pushInteger(sub.id);
+        g_lua.setField("id");
+        g_lua.pushInteger(sub.count);
+        g_lua.setField("count");
+        g_lua.pushInteger(sub.price);
+        g_lua.setField("price");
+        g_lua.pushInteger(sub.basePrice);
+        g_lua.setField("basePrice");
+        g_lua.pushInteger(sub.coinType);
+        g_lua.setField("coinType");
+        // disabledReasons: Offers.lua/Home.lua iterate it expecting tables with a
+        // reasonId field (`Offers.reasons[i.reasonId]`). The wire index is 0-based
+        // (crystalserver assigns #disableReasons before table.insert) while the
+        // Lua reasons array is 1-based, hence the +1.
+        if (sub.disabledReason >= 0) {
+            g_lua.createTable(1, 0);
+            g_lua.createTable(0, 1);
+            g_lua.pushInteger(sub.disabledReason + 1);
+            g_lua.setField("reasonId");
+            g_lua.rawSeti(1);
+        } else {
+            g_lua.createTable(0, 0);
+        }
+        g_lua.setField("disabledReasons");
+        g_lua.pushString("");
+        g_lua.setField("disabledReason");
+        g_lua.pushInteger(sub.saleValidUntilTimestamp);
+        g_lua.setField("saleValidUntilTimestamp");
+        g_lua.rawSeti(idx++);
+    }
+    g_lua.setField("offers");
+
     return 1;
 }
 

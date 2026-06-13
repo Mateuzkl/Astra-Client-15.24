@@ -498,7 +498,18 @@ void Creature::updateWalkAnimation(uint8 totalPixelsWalked)
     // Since mount is a different outfit we need to get the mount animation phases
     if (m_outfit.getMount() != 0) {
         ThingType* type = g_things.rawGetThingType(m_outfit.getMount(), m_outfit.getCategory());
-        footAnimPhases = std::min<int>(footAnimPhases, type->getAnimationPhases() - 1);
+        // m_animationPhases is the SUM of all frame groups (idle+walk) for
+        // frame-group assets (appearancesloader.cpp accumulates per group).
+        // drawMount offsets the walk phase by (idlePhases - 1), so the clamp
+        // must use the mount's WALK-group phase count, not the total, or the
+        // final phase exceeds m_animationPhases and ThingType::draw rejects
+        // it (mount blinks out mid-walk).
+        int mountWalkPhases = type->getAnimationPhases() - 1; // legacy: phase 0 = stand
+        if (const AnimatorPtr& mountWalkAnimator = type->getAnimator())
+            mountWalkPhases = mountWalkAnimator->getAnimationPhases();
+        else if (const AnimatorPtr& mountIdleAnimator = type->getIdleAnimator())
+            mountWalkPhases = std::max<int>(1, type->getAnimationPhases() - mountIdleAnimator->getAnimationPhases());
+        footAnimPhases = std::min<int>(footAnimPhases, mountWalkPhases);
     }
 
     if (footAnimPhases == 0) {
@@ -1063,30 +1074,33 @@ void Creature::addDirectionalWidget(const UIWidgetPtr& widget)
 
 void Creature::removeTopWidget(const UIWidgetPtr& widget)
 {
-    auto it = std::remove(m_topWidgets.begin(), m_topWidgets.end(), widget);
-    while(it != m_topWidgets.end()) {
-        (*it)->destroy();
-        it = m_topWidgets.erase(it);
+    if (!widget) return;
+    const auto it = std::find(m_topWidgets.begin(), m_topWidgets.end(), widget);
+    if (it != m_topWidgets.end()) {
+        // erase before destroy so a reentrant onDestroy callback cannot see a stale iterator
+        m_topWidgets.erase(it);
+        widget->destroy();
     }
 }
 
 void Creature::removeBottomWidget(const UIWidgetPtr& widget)
 {
-    auto it = std::remove(m_bottomWidgets.begin(), m_bottomWidgets.end(), widget);
-    while (it != m_topWidgets.end()) {
-        (*it)->destroy();
-        it = m_bottomWidgets.erase(it);
+    if (!widget) return;
+    const auto it = std::find(m_bottomWidgets.begin(), m_bottomWidgets.end(), widget);
+    if (it != m_bottomWidgets.end()) {
+        m_bottomWidgets.erase(it);
+        widget->destroy();
     }
 }
 
 void Creature::removeDirectionalWidget(const UIWidgetPtr& widget)
-{    
-    auto it = m_directionalWidgets.erase(std::remove(m_directionalWidgets.begin(), m_directionalWidgets.end(), widget));
-    while (it != m_topWidgets.end()) {
-        (*it)->destroy();
-        it = m_directionalWidgets.erase(it);
+{
+    if (!widget) return;
+    const auto it = std::find(m_directionalWidgets.begin(), m_directionalWidgets.end(), widget);
+    if (it != m_directionalWidgets.end()) {
+        m_directionalWidgets.erase(it);
+        widget->destroy();
     }
-
 }
 
 std::list<UIWidgetPtr> Creature::getTopWidgets()
