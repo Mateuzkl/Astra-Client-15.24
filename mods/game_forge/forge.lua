@@ -9,213 +9,284 @@ selectedItemFusionRadio = nil
 selectedConvergenceFusionRadio = nil
 selectedItemFusionConvectionRadio = nil
 
-local forgeProtocolGame = nil
 local forgeProtocolRegistered = false
 
-local ForgeOpcode = {
-  Request = 0xE2,
-  Send = 0xE3
+-- crystalserver native Exalted Forge protocol (13.30+ / 15.24).
+-- Validated byte-for-byte against the server source
+-- (src/server/network/protocol/protocolgame.cpp) and the reference client
+-- (koliseu-otc src/client/protocolgameparse.cpp).
+--
+-- client -> server
+local ForgeClient = {
+  Enter = 0xBF,        -- parseForgeEnter
+  BrowseHistory = 0xC0 -- parseForgeBrowseHistory
+}
+-- ForgeAction_t (src/enums/forge_conversion.hpp)
+local ForgeAction = {
+  Fusion = 0,
+  Transfer = 1,
+  DustToSlivers = 2,
+  SliversToCores = 3,
+  IncreaseLimit = 4
+}
+-- server -> client. NOTE: the 0x86/0x87 bytes are reused: in the modern protocol the
+-- server sends forge data on these opcodes, while the C++ switch maps 0x86 to
+-- parseForgingData (a no-op stub) and 0x87 to parseTrappers (a dead legacy opcode that
+-- crystalserver never sends). 0x88/0x89/0x8A have NO GameServer enum entry in this
+-- client, so without a Lua handler they crash the parser with "unhandled opcode".
+-- ProtocolGame:onOpcode runs BEFORE the C++ switch and consumes the message whenever a
+-- handler is registered, so these handlers fully shadow the C++ path.
+local ForgeServer = {
+  Data = 0x86,    -- sendForgingData  (classification price table + config)
+  Open = 0x87,    -- sendOpenForge    (fusion/transfer item lists)
+  History = 0x88, -- sendForgeHistory
+  Close = 0x89,   -- closeForgeWindow
+  Result = 0x8A   -- sendForgeResult  (fusion/transfer result)
 }
 
-local ForgeRequest = {
-  Open = 1,
-  Close = 2,
-  Fusion = 3,
-  Transfer = 4,
-  Convert = 5,
-  History = 6
-}
-
-local ForgeResponse = {
-  Message = 0,
-  Init = 1,
-  Data = 2,
-  Fusion = 3,
-  Transfer = 4,
-  History = 5,
-  Close = 6
-}
+local function getForgeProtocol()
+  return g_game.getProtocolGame()
+end
 
 local function sendForgeMessage(msg)
-  local protocolGame = forgeProtocolGame or g_game.getProtocolGame()
+  local protocolGame = getForgeProtocol()
   if protocolGame then
     protocolGame:send(msg)
   end
 end
 
-local function readPriceTable(msg)
-  local result = {}
+-- 0x86 sendForgingData: classification price table + forge config bytes.
+-- Maps onto ForgeSystem.init(classPrice, transferMap, fusionPrices, transferPrices,
+-- baseMultipier, slivers, totalSlivers, dustCost, dustPrice, maxDust, dustFusion,
+-- convergenceDustFusion, dustTransfer, convergenceDustTransfer, success,
+-- improveRateSuccess, tierLoss).
+local function parseForgingData(protocolGame, msg)
+  -- classification table: [U8 count]{ [U8 id][U8 tierCount]{ [U8 tier-1][U64 price] } }
+  local classPrice = {}
   local classCount = msg:getU8()
   for i = 1, classCount do
-    local classification = msg:getU8()
+    local classId = msg:getU8()
     local tierPrices = {}
     local tierCount = msg:getU8()
     for j = 1, tierCount do
-      tierPrices[msg:getU8()] = msg:getU64()
+      tierPrices[msg:getU8()] = msg:getU64() -- key = tier-1 (server-sent)
     end
-    result[classification] = { [2] = tierPrices }
+    classPrice[classId] = { [2] = tierPrices }
   end
-  return result
-end
 
-local function readNumberMap(msg)
-  local result = {}
-  local count = msg:getU8()
-  for i = 1, count do
-    result[msg:getU8()] = msg:getU64()
+  -- exalted core table per tier: [U8 count]{ [U8 tier][U8 cores] }
+  local transferMap = {}
+  local coreCount = msg:getU8()
+  for i = 1, coreCount do
+    transferMap[msg:getU8()] = msg:getU8()
   end
-  return result
-end
 
-local function readByteMap(msg)
-  local result = {}
-  local count = msg:getU8()
-  for i = 1, count do
-    result[msg:getU8()] = msg:getU8()
+  -- convergence fusion prices: [U8 count]{ [U8 tier-1][U64 price] }
+  local fusionPrices = {}
+  local fusionCount = msg:getU8()
+  for i = 1, fusionCount do
+    fusionPrices[msg:getU8()] = msg:getU64()
   end
-  return result
-end
 
-local function readForgeItems(msg)
-  local result = {}
-  local count = msg:getU16()
-  for i = 1, count do
-    local entry = {
-      msg:getU16(),
-      msg:getU8(),
-      msg:getU16(),
-      {},
-      msg:getU8(),
-      msg:getU8()
-    }
-
-    local subItemCount = msg:getU16()
-    for j = 1, subItemCount do
-      entry[4][msg:getU16()] = msg:getU16()
-    end
-    table.insert(result, entry)
+  -- convergence transfer prices: [U8 count]{ [U8 tier][U64 price] }
+  local transferPrices = {}
+  local transferCount = msg:getU8()
+  for i = 1, transferCount do
+    transferPrices[msg:getU8()] = msg:getU64()
   end
-  return result
-end
 
-local function setForgeResourceBalances(balances)
-  local player = g_game.getLocalPlayer()
-  if not player or not player.setResourceValue then
-    return
-  end
-  for resourceType, amount in pairs(balances) do
-    player:setResourceValue(resourceType, amount)
-    signalcall(g_game.onResourceBalance, resourceType, amount)
-  end
-end
+  -- config bytes (fixed order):
+  local costOneSliver = msg:getU8()  -- dust to make 1 sliver
+  local sliverAmount = msg:getU8()   -- slivers produced
+  local coreCost = msg:getU8()       -- slivers to make 1 core
+  local increaseBase = msg:getU8()   -- 75 (dust-limit increase base)
+  local dustLevel = msg:getU16()     -- player's current stored dust limit
+  local maxDust = msg:getU16()       -- max stored dust limit (cap)
+  local dustFusion = msg:getU8()
+  local convergenceDustFusion = msg:getU8()
+  local dustTransfer = msg:getU8()
+  local convergenceDustTransfer = msg:getU8()
+  local success = msg:getU8()
+  local improveRateSuccess = msg:getU8()
+  local tierLoss = msg:getU8()
 
-local function parseForgeInit(msg)
   ForgeSystem.init(
-    readPriceTable(msg),
-    readByteMap(msg),
-    readNumberMap(msg),
-    readNumberMap(msg),
-    msg:getU16(),
-    msg:getU16(),
-    msg:getU16(),
-    msg:getU16(),
-    msg:getU16(),
-    msg:getU16(),
-    msg:getU16(),
-    msg:getU16(),
-    msg:getU16(),
-    msg:getU16(),
-    msg:getU8(),
-    msg:getU8(),
-    msg:getU8()
+    classPrice,
+    transferMap,
+    fusionPrices,
+    transferPrices,
+    costOneSliver,          -- baseMultipier (dust per sliver)
+    sliverAmount,           -- slivers produced
+    coreCost,               -- totalSlivers (slivers per core)
+    increaseBase,           -- dustCost (limit-increase base, 75)
+    dustLevel,              -- dustPrice (current dust limit; sets maxPlayerDust)
+    maxDust,                -- maxDust (cap)
+    dustFusion,
+    convergenceDustFusion,
+    dustTransfer,
+    convergenceDustTransfer,
+    success,
+    improveRateSuccess,
+    tierLoss
   )
 end
 
-local function parseForgeData(msg)
+-- 0x87 sendOpenForge: fusion items, convergence fusion items, transfer items,
+-- convergence transfer items, dust level. Built into the {id, tier, count, subItems}
+-- entries ForgeSystem expects.
+local function parseOpenForge(protocolGame, msg)
+  -- fusion items: [U16 count]{ [U8 friendCount=1][U16 id][U8 tier][U16 count] }
+  local fusionData = {}
+  local fusionCount = msg:getU16()
+  for i = 1, fusionCount do
+    msg:getU8() -- friend-item count (always 1)
+    local id = msg:getU16()
+    local tier = msg:getU8()
+    local count = msg:getU16()
+    table.insert(fusionData, { id, tier, count, {} })
+  end
+
+  -- convergence fusion: [U16 slotCount]{ [U8 itemCount]{ [U16 id][U8 tier][U16 count] } }
+  -- ForgeSystem.fusionConvergenceData is a flat list of {id, tier, count} entries.
+  local fusionConvergenceData = {}
+  local convFusionCount = msg:getU16()
+  for i = 1, convFusionCount do
+    local items = msg:getU8()
+    for j = 1, items do
+      local id = msg:getU16()
+      local tier = msg:getU8()
+      local count = msg:getU16()
+      table.insert(fusionConvergenceData, { id, tier, count, {} })
+    end
+  end
+
+  -- transfer items: [U8 donorGroups]{ [U16 donorCount]{ [U16 id][U8 tier][U16 count] }
+  --   [U16 receiverCount]{ [U16 id][U16 count] } }
+  -- ForgeSystem.transferData is a flat list of donor {id, tier, count, subItems} where
+  -- subItems is a map receiverId->count (the items that can receive this tier).
+  local function readTransferGroups(groupCount)
+    local result = {}
+    for i = 1, groupCount do
+      local donors = {}
+      local donorCount = msg:getU16()
+      for j = 1, donorCount do
+        local id = msg:getU16()
+        local tier = msg:getU8()
+        local count = msg:getU16()
+        table.insert(donors, { id, tier, count })
+      end
+      local receivers = {}
+      local receiverCount = msg:getU16()
+      for j = 1, receiverCount do
+        local id = msg:getU16()
+        local count = msg:getU16()
+        receivers[id] = count
+      end
+      -- attach the same receiver map to every donor in this group
+      for _, donor in ipairs(donors) do
+        table.insert(result, { donor[1], donor[2], donor[3], receivers })
+      end
+    end
+    return result
+  end
+
+  local transferData = readTransferGroups(msg:getU8())
+  local transferConvergenceData = readTransferGroups(msg:getU8())
+
   local maxPlayerDust = msg:getU16()
-  setForgeResourceBalances({
-    [ResourceBank] = msg:getU64(),
-    [ResourceInventary] = msg:getU64(),
-    [ResourceForgeDust] = msg:getU64(),
-    [ResourceForgeSlivers] = msg:getU64(),
-    [ResourceForgeExaltedCore] = msg:getU64()
-  })
 
   ForgeSystem.onForgeData(
-    readForgeItems(msg),
-    readForgeItems(msg),
-    readForgeItems(msg),
-    readForgeItems(msg),
+    fusionData,
+    fusionConvergenceData,
+    transferData,
+    transferConvergenceData,
     maxPlayerDust
   )
 end
 
-local function parseForgeFusion(msg)
-  ForgeSystem.onForgeFusion(
-    msg:getU8() ~= 0,
-    msg:getU8() ~= 0,
-    msg:getU16(),
-    msg:getU8(),
-    msg:getU16(),
-    msg:getU8(),
-    msg:getU8(),
-    msg:getU16(),
-    msg:getU8(),
-    msg:getU16()
-  )
-end
-
-local function parseForgeTransfer(msg)
-  ForgeSystem.onForgeTransfer(
-    msg:getU8() ~= 0,
-    msg:getU8() ~= 0,
-    msg:getU16(),
-    msg:getU8(),
-    msg:getU16(),
-    msg:getU8()
-  )
-end
-
-local function parseForgeHistory(msg)
+-- 0x88 sendForgeHistory: [U16 page][U16 lastPage][U8 count]{ [U32 createdAt]
+--   [U8 actionType][String description][U8 bonusFlag] }
+local function parseForgeHistory(protocolGame, msg)
+  msg:getU16() -- current page (0-based)
+  msg:getU16() -- last page
+  local count = msg:getU8()
   local history = {}
-  local count = msg:getU16()
   for i = 1, count do
-    table.insert(history, {
-      msg:getU32(),
-      msg:getU8(),
-      msg:getString()
-    })
+    local createdAt = msg:getU32()
+    local actionType = msg:getU8()
+    local description = msg:getString()
+    msg:getU8() -- bonus flag (1 if forge bonus rolled)
+    table.insert(history, { createdAt, actionType, description })
   end
   ForgeSystem.onForgeHistory(history)
 end
 
-local function parseForgeMessage(protocolGame, msg)
-  local response = msg:getU8()
-  if response == ForgeResponse.Message then
-    displayInfoBox(tr("Forge"), msg:getString())
-  elseif response == ForgeResponse.Init then
-    parseForgeInit(msg)
-  elseif response == ForgeResponse.Data then
-    parseForgeData(msg)
-  elseif response == ForgeResponse.Fusion then
-    parseForgeFusion(msg)
-  elseif response == ForgeResponse.Transfer then
-    parseForgeTransfer(msg)
-  elseif response == ForgeResponse.History then
-    parseForgeHistory(msg)
-  elseif response == ForgeResponse.Close then
-    offlineForge()
-  end
-  return true
+-- 0x89 closeForgeWindow: empty payload.
+local function parseCloseForge(protocolGame, msg)
+  offlineForge()
 end
+
+-- 0x8A sendForgeResult: [U8 actionType][U8 convergence][U8 success][U16 leftItemId]
+--   [U8 leftTier][U16 rightItemId][U8 rightTier] then per action a bonus block.
+local function parseForgeResult(protocolGame, msg)
+  local actionType = msg:getU8()
+  local convergence = msg:getU8() ~= 0
+  local success = msg:getU8() ~= 0
+  local leftItemId = msg:getU16()
+  local leftTier = msg:getU8()
+  local rightItemId = msg:getU16()
+  local rightTier = msg:getU8()
+
+  local bonus = 0
+  local bonusItem = 0
+  local bonusTier = 0
+  local coreCount = 0
+
+  if actionType == ForgeAction.Transfer then
+    msg:getU8() -- bonus type is always 0x00 for transfer
+    ForgeSystem.onForgeTransfer(convergence, success, leftItemId, leftTier, rightItemId, rightTier)
+    return
+  end
+
+  -- fusion
+  bonus = msg:getU8()
+  if bonus == 2 then
+    coreCount = msg:getU8()
+  elseif bonus >= 4 and bonus <= 8 then
+    bonusItem = msg:getU16()
+    bonusTier = msg:getU8()
+  end
+
+  ForgeSystem.onForgeFusion(
+    convergence,
+    success,
+    leftItemId,   -- otherItem (donor / source, drawn white)
+    leftTier,
+    rightItemId,  -- itemId (receiver / result, drawn black)
+    rightTier,
+    bonus,        -- resultType
+    bonusItem,    -- itemResult (only for bonus 4-8)
+    bonusTier,    -- tierResult
+    coreCount     -- count (kept cores, only for bonus 2)
+  )
+end
+
+local forgeOpcodeHandlers = {
+  [ForgeServer.Data] = parseForgingData,
+  [ForgeServer.Open] = parseOpenForge,
+  [ForgeServer.History] = parseForgeHistory,
+  [ForgeServer.Close] = parseCloseForge,
+  [ForgeServer.Result] = parseForgeResult
+}
 
 local function registerForgeProtocol()
   if forgeProtocolRegistered then
     return
   end
-  ProtocolGame.unregisterOpcode(ForgeOpcode.Send)
-  ProtocolGame.registerOpcode(ForgeOpcode.Send, parseForgeMessage)
-  forgeProtocolGame = g_game.getProtocolGame()
+  for opcode, handler in pairs(forgeOpcodeHandlers) do
+    ProtocolGame.unregisterOpcode(opcode)
+    ProtocolGame.registerOpcode(opcode, handler)
+  end
   forgeProtocolRegistered = true
 end
 
@@ -223,47 +294,52 @@ local function unregisterForgeProtocol()
   if not forgeProtocolRegistered then
     return
   end
-  ProtocolGame.unregisterOpcode(ForgeOpcode.Send)
-  forgeProtocolGame = nil
+  for opcode in pairs(forgeOpcodeHandlers) do
+    ProtocolGame.unregisterOpcode(opcode)
+  end
   forgeProtocolRegistered = false
 end
 
-local function sendForgeRequest(action)
-  local msg = OutputMessage.create()
-  msg:addU8(ForgeOpcode.Request)
-  msg:addU8(action)
-  sendForgeMessage(msg)
-end
-
+-- 0xBF parseForgeEnter. The first byte is the ForgeAction_t. Fusion/Transfer carry the
+-- item payload; conversions (dust->sliver / sliver->core / increase-limit) carry only
+-- the action byte.
 local function sendForgeOpen()
-  sendForgeRequest(ForgeRequest.Open)
+  -- crystalserver opens the forge window server-side as part of action handling /
+  -- the talkaction; there is no dedicated "open" request. The forge data (0x86/0x87)
+  -- is pushed by the server. Nothing to send here.
 end
 
 local function sendForgeClose()
-  sendForgeRequest(ForgeRequest.Close)
+  -- No close packet in the native protocol; the window is closed locally.
 end
 
-local function sendForgeHistory()
-  sendForgeRequest(ForgeRequest.History)
+local function sendForgeHistory(page)
+  local msg = OutputMessage.create()
+  msg:addU8(ForgeClient.BrowseHistory)
+  msg:addU8(page or 0)
+  sendForgeMessage(msg)
 end
 
 local function sendForgeFusion(convergence, itemId, tier, secondItemId, boostSuccess, protectTierLoss)
   local msg = OutputMessage.create()
-  msg:addU8(ForgeOpcode.Request)
-  msg:addU8(ForgeRequest.Fusion)
+  msg:addU8(ForgeClient.Enter)
+  msg:addU8(ForgeAction.Fusion)
   msg:addU8(convergence and 1 or 0)
   msg:addU16(itemId)
   msg:addU8(tier)
   msg:addU16(secondItemId)
-  msg:addU8(boostSuccess and 1 or 0)
-  msg:addU8(protectTierLoss and 1 or 0)
+  -- server only reads usedCore/reduceTierLoss when NOT convergence
+  if not convergence then
+    msg:addU8(boostSuccess and 1 or 0)
+    msg:addU8(protectTierLoss and 1 or 0)
+  end
   sendForgeMessage(msg)
 end
 
 local function sendForgeTransfer(convergence, itemId, tier, secondItemId)
   local msg = OutputMessage.create()
-  msg:addU8(ForgeOpcode.Request)
-  msg:addU8(ForgeRequest.Transfer)
+  msg:addU8(ForgeClient.Enter)
+  msg:addU8(ForgeAction.Transfer)
   msg:addU8(convergence and 1 or 0)
   msg:addU16(itemId)
   msg:addU8(tier)
@@ -271,10 +347,11 @@ local function sendForgeTransfer(convergence, itemId, tier, secondItemId)
   sendForgeMessage(msg)
 end
 
+-- action: ForgeRequest legacy values (2=dust->sliver, 3=sliver->core, 4=increase limit)
+-- map straight onto ForgeAction_t (DustToSlivers/SliversToCores/IncreaseLimit).
 local function sendForgeConverter(action)
   local msg = OutputMessage.create()
-  msg:addU8(ForgeOpcode.Request)
-  msg:addU8(ForgeRequest.Convert)
+  msg:addU8(ForgeClient.Enter)
   msg:addU8(action)
   sendForgeMessage(msg)
 end
@@ -350,15 +427,16 @@ function terminate()
 end
 
 function toggle()
-  ForgeSystem.fusionData = {}
-  ForgeSystem.fusionConvergenceData = {}
-  ForgeSystem.transferData = {}
-  ForgeSystem.transferConvergenceData = {}
   if forgeWindow:isVisible() then
     sendForgeClose()
     forgeWindow:hide()
     g_client.setInputLockWidget(nil)
   else
+    -- crystalserver has no "open forge" request opcode: the fusion/transfer item lists
+    -- (0x86/0x87) are pushed only when the player uses a forge object in-game, which
+    -- auto-opens the window via ForgeSystem.onForgeData -> show(). The sidebutton just
+    -- re-shows the window so the player can browse the last received data and use the
+    -- resource conversion tab (which only needs the 0xEE resource balances).
     sendForgeOpen()
     forgeWindow:show(true)
     g_client.setInputLockWidget(forgeWindow)
@@ -372,6 +450,15 @@ end
 function hideForge()
   forgeWindow:hide()
   g_client.setInputLockWidget(nil)
+end
+
+-- exported so game_sidebuttons' forceCloseButton can close us before opening
+-- the next exclusive dialog (sendForgeClose is only sent on user-initiated
+-- toggle; forge traffic stays choked off for crystalserver)
+function hide()
+  if forgeWindow and forgeWindow:isVisible() then
+    hideForge()
+  end
 end
 
 function show()
