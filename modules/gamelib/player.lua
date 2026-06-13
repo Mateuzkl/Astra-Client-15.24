@@ -124,30 +124,39 @@ function Player:isPartyMember()
           shield == ShieldBlue)
 end
 
-function Player:isInSameParty(name)
-  local partyData = g_minimap.getPartyMembersData()
-  if table.empty(partyData) then
-    return false
+-- g_minimap.getPartyMembersData() is a koliseu C++ binding not present in this
+-- build (only clean/loadImage/saveImage/loadOtmm/saveOtmm are bound), so calling
+-- it broke the VIP-list context menu for party leaders. Use it when available;
+-- otherwise fall back to scanning on-screen creatures for a party-shielded
+-- player with the given name (off-screen members simply aren't found).
+local function findPartyMemberIdByName(localPlayer, name)
+  if g_minimap.getPartyMembersData then
+    for _, data in pairs(g_minimap.getPartyMembersData() or {}) do
+      if data.name == name then
+        return data.id
+      end
+    end
+    return nil
   end
-
-  for _, data in pairs(partyData) do
-    if data.name == name then
-      return true
+  local pos = localPlayer and localPlayer:getPosition()
+  if not pos then
+    return nil
+  end
+  for _, creature in ipairs(g_map.getSpectators(pos, true)) do
+    if creature:isPlayer() and creature:getName() == name
+        and creature.isPartyMember and creature:isPartyMember() then
+      return creature:getId()
     end
   end
+  return nil
+end
+
+function Player:isInSameParty(name)
+  return findPartyMemberIdByName(self, name) ~= nil
 end
 
 function Player:getPartyCreatureId(name)
-  local partyData = g_minimap.getPartyMembersData()
-  if table.empty(partyData) then
-    return 0
-  end
-
-  for _, data in pairs(partyData) do
-    if data.name == name then
-      return data.id
-    end
-  end
+  return findPartyMemberIdByName(self, name) or 0
 end
 
 function Player:isPartySharedExperienceActive()
@@ -164,6 +173,21 @@ function Player:hasVip(creatureName)
   for id, vip in pairs(g_game.getVips()) do
     if (vip[1] == creatureName) then return true end
   end
+  return false
+end
+
+-- isInMarket has no C++ binding; the market is purely a client window here, so
+-- derive the state from the market module's window visibility. Used by the item
+-- right-click menu (gameinterface "Show in Market") and textmessages.lua.
+function Player:isInMarket()
+  local market = modules.game_tibia_market
+  return market ~= nil and market.marketWindow ~= nil and market.marketWindow:isVisible()
+end
+
+-- canBuyExpBoost has no C++ binding (the daily store XP-boost availability is not
+-- pushed to this client); default to false so the cyclopedia/stats store button
+-- stays hidden instead of erroring. Wire to a real packet if/when one exists.
+function Player:canBuyExpBoost()
   return false
 end
 
@@ -263,6 +287,109 @@ end
 function Player:setMagicBoost(combatType, value)
   self.magicBoosts = self.magicBoosts or {}
   self.magicBoosts[combatType] = value or 0
+end
+
+-- Magic shield (mana shield) active state. The C++ LocalPlayer in this build does
+-- not expose useMagicShield(), so several UI modules (topbar mana bar) crashed with
+-- "attempt to call method 'useMagicShield' (a nil value)". Provide a Lua-side getter
+-- (defaults to false) so those modules work; setUseMagicShield can flip it later.
+function Player:useMagicShield()
+  return self.m_useMagicShield == true
+end
+
+function Player:setUseMagicShield(value)
+  self.m_useMagicShield = value and true or false
+end
+
+-- ---------------------------------------------------------------------------
+-- koliseu-client Player getters/setters not bound by this C++ build.
+-- The UI modules (topbar, inventory, cyclopedia) call these directly and would
+-- otherwise crash with "attempt to call method 'X' (a nil value)". Back them with
+-- plain Lua fields and safe defaults; the protocol/UI layer can set them later.
+-- ---------------------------------------------------------------------------
+
+-- Mana shield / magic shield points (topbar mana-shield bar).
+function Player:getMagicShield()
+  return self.m_magicShield or 0
+end
+
+function Player:setMagicShield(value)
+  self.m_magicShield = value or 0
+end
+
+function Player:getMaxMagicShield()
+  return self.m_maxMagicShield or 0
+end
+
+function Player:setMaxMagicShield(value)
+  self.m_maxMagicShield = value or 0
+end
+
+-- Harmony / Serenity (vocation resource bars).
+function Player:getHarmony()
+  return self.m_harmony or 0
+end
+
+function Player:setHarmony(value)
+  self.m_harmony = value or 0
+end
+
+function Player:isSerenity()
+  return self.m_serenity == true
+end
+
+function Player:setSerenity(value)
+  self.m_serenity = value and true or false
+end
+
+-- Blessing window status (inventory blessed button): 0/nil = none, 1 = grey, 2 = gold.
+function Player:getBlessingStatus()
+  return self.m_blessingStatus or 0
+end
+
+function Player:setBlessingStatus(value)
+  self.m_blessingStatus = value or 0
+end
+
+-- Cyclopedia market-price preferences (game_cyclopedia items.lua).
+function Player:setCyclopediaMarketList(value)
+  self.m_cyclopediaMarketList = value
+end
+
+function Player:getCyclopediaMarketList()
+  return self.m_cyclopediaMarketList
+end
+
+function Player:setCyclopediaCustomPrice(value)
+  self.m_cyclopediaCustomPrice = value
+end
+
+function Player:getCyclopediaCustomPrice()
+  return self.m_cyclopediaCustomPrice
+end
+
+-- Market list holds itemIds as strings (loadJson fills it from JSON object
+-- keys), while call sites pass numeric item:getId() — hence tostring below.
+function Player:updateCyclopediaMarketList(itemId, remove)
+  local list = self.m_cyclopediaMarketList or {}
+  self.m_cyclopediaMarketList = list
+  local key = tostring(itemId)
+  for i = #list, 1, -1 do
+    if tostring(list[i]) == key then
+      table.remove(list, i)
+    end
+  end
+  if not remove then
+    table.insert(list, key)
+  end
+end
+
+-- Custom price map is keyed by numeric itemId (mirrors loadJson's
+-- customPrice[tonumber(k) or k] = v).
+function Player:updateCyclopediaCustomPrice(itemId, price)
+  local prices = self.m_cyclopediaCustomPrice or {}
+  self.m_cyclopediaCustomPrice = prices
+  prices[tonumber(itemId) or itemId] = price
 end
 
 if not Analyzer then

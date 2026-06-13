@@ -71,9 +71,15 @@ ResourceMaxEchoeBalance = 33
 
 ResourceHuntingTask = 50
 ResourceNpcStorageTrade = 60
-ResourceForgeDust = 20
-ResourceForgeSlivers = 21
-ResourceForgeExaltedCore = 22
+-- crystalserver/Canary 13+ pushes forge balances via opcode 0xEE
+-- (parseResourceBalance) keyed by the raw server Resource_t values
+-- (RESOURCE_FORGE_DUST=0x46, RESOURCE_FORGE_SLIVER=0x47, RESOURCE_FORGE_CORES=0x48).
+-- The C++ parseResourceBalance stores by that raw type, so the client constants
+-- MUST equal the server values or getResourceValue() reads the wrong slot (and the
+-- old 20/21/22 also collided with ResourceReward/ResourceJokerReward).
+ResourceForgeDust = 70        -- 0x46
+ResourceForgeSlivers = 71     -- 0x47
+ResourceForgeExaltedCore = 72 -- 0x48
 ResourceWheelPoints = 80
 ResourceLesserGem = 81
 ResourceRegularGem = 82
@@ -415,13 +421,18 @@ MessageModes = {
   Red                     = 45,
   Blue                    = 46,
   RVRChannel              = 47,
-  Notification            = 48,
+  RVRAnswer               = 48,
   RVRContinue             = 49,
   GameHighlight           = 50,
   NpcFromStartBlock       = 51,
-  BoostedMessage          = 52,
-  Potion                  = 53,
-  Last                    = 54,
+  -- crystalserver/Canary 13+ classes. These MUST match Otc::MessageMode in
+  -- src/client/const.h (the C++ translateMessageModeFromServer returns these enum
+  -- values), or the Lua handler reports "Unhandled onTextMessage message mode N".
+  Attention               = 53,
+  BoostedCreature         = 54,
+  OfflineTraining         = 55,
+  Transaction             = 56,
+  Potion                  = 57,
   Invalid                 = 255,
 }
 
@@ -638,9 +649,15 @@ MessageTypes = {
   [MessageModes.GameHighlight] = SpeakTypesSettings.centerRed,
   [MessageModes.HotkeyUse] = SpeakTypesSettings.centerHKGreen,
 
-  [MessageModes.BoostedMessage] = SpeakTypesSettings.statusBoosted,
   [MessageModes.Market] = SpeakTypesSettings.consoleRed, -- necessita fazer a UI
-  [MessageModes.Notification] = SpeakTypesSettings.statusOwn,
+
+  -- crystalserver/Canary 13+ classes (see MessageModes sync above). "Today's boosted
+  -- creature/boss" and the VIP-xp line arrive as BoostedCreature; treat them like
+  -- status/boosted so they show on the Server Log + status label instead of erroring.
+  [MessageModes.Attention] = SpeakTypesSettings.statusOwn,
+  [MessageModes.BoostedCreature] = SpeakTypesSettings.statusBoosted,
+  [MessageModes.OfflineTraining] = SpeakTypesSettings.status,
+  [MessageModes.Transaction] = SpeakTypesSettings.statusOwn,
 
   [254] = SpeakTypesSettings.private
 

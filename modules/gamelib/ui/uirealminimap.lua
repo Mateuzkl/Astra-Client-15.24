@@ -299,6 +299,10 @@ function UIRealMinimap:onMouseRelease(pos, button)
         else
           g_realMinimap.removeWidget(widgetInfo.widgetId)
         end
+        -- drop it from the shared 'Minimap' node too, so the delete sticks
+        if widgetInfo.pos then
+          RealMap.removeUserFlag(widgetInfo.pos)
+        end
       end)
       menu:display(pos)
       return true
@@ -375,7 +379,12 @@ function UIRealMinimap:createFlagWindow(pos)
   local successFunc = function()
     modules.game_cyclopedia.toggleRedirect("Map")
     local map = modules.game_cyclopedia.MapCyclopedia.getWidget()
-    map:addWidget("data/images/game/minimap/flag"..flagRadioGroup:getSelectedWidget().icon..".png", {width = 11, height = 11}, pos, description:getText())
+    local imagePath = "data/images/game/minimap/flag"..flagRadioGroup:getSelectedWidget().icon..".png"
+    local imageSize = {width = 11, height = 11}
+    map:addWidget(imagePath, imageSize, pos, description:getText())
+    -- persist to the shared 'Minimap' node so the mark survives a restart and
+    -- also shows on the regular game_minimap.
+    RealMap.saveUserFlag(imagePath, imageSize, pos, description:getText())
     self:destroyFlagWindow(pos)
   end
 

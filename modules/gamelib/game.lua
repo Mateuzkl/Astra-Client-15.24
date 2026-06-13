@@ -76,7 +76,12 @@ function g_game.getSupportedClients()
     1073, 1074, 1075, 1076, 1080,
     1081, 1082, 1090, 1091, 1092,
     1093, 1094, 1095, 1096, 1097,
-    1098, 1099, 1312
+    1098, 1099, 1312,
+    -- 15.24 upgrade — Tibia 12.40+ / 15.x packet schema (memo
+    -- project_protocol_pipeline_1524). Order matters: getSupportedClients
+    -- returns this list as-is and corelib/globals.lua picks the last entry
+    -- as the boot default, so 1524 must stay at the tail.
+    1300, 1400, 1500, 1524
   }
 end
 

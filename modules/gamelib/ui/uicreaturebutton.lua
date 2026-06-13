@@ -143,7 +143,14 @@ function UICreatureButton:updateLifeBarPercent()
     return
   end
   local percent = self.creature:getHealthPercent()
-  self.percent = percent
+  -- Dirty-check: the battle list calls this ~10x/s per creature; skipping the two
+  -- widget setters + the color lookup when the HP% is unchanged is the single biggest
+  -- CPU win here. Uses its own field (not self.percent, which updateManaBarPercent
+  -- also wrote — they were clobbering each other's cache).
+  if self.lifePercent == percent then
+    return
+  end
+  self.lifePercent = percent
   self.lifeBarWidget:setPercent(percent)
 
   local color
@@ -164,7 +171,10 @@ function UICreatureButton:updateManaBarPercent()
   local percent = -1
   if self.creature.getManaBarPercent then
     percent = self.creature:getManaBarPercent()
-  elseif self.creature.getManaPercent and self.creature.isLocalPlayer and self.creature:isLocalPlayer() then
+  elseif self.creature.getManaPercent then
+    -- m_manaPercent defaults to -1 (bar hidden); only party members get it set
+    -- via 0x8B type 11 (sendPartyPlayerMana — the sender is included in the
+    -- broadcast, so the local player's own row renders too).
     percent = self.creature:getManaPercent()
   end
 
@@ -174,11 +184,11 @@ function UICreatureButton:updateManaBarPercent()
   end
 
   self.manaBarWidget:setVisible(true)
-  if self.percent == percent then
+  if self.manaPercent == percent then
     return
   end
 
-  self.percent = percent
+  self.manaPercent = percent
   self.manaBarWidget:setPercent(percent)
 end
 

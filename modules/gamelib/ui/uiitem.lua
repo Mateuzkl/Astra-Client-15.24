@@ -1,5 +1,20 @@
 local toolTipLabel = nil
 
+-- setTier/getTier are Item methods, not native UIItem methods; mehah-ported
+-- windows (e.g. game_tibia_imbui) call them on the UIItem widget. Forward to
+-- the underlying item so the call no longer errors with 'a nil value'.
+function UIItem:setTier(tier)
+  local item = self:getItem()
+  if item then
+    item:setTier(tier)
+  end
+end
+
+function UIItem:getTier()
+  local item = self:getItem()
+  return item and item:getTier() or 0
+end
+
 function UIItem:onDragMove(mousePos, mouseMoved)
   if self.dragClone then
     self.dragClone:setX(mousePos.x + 12)
@@ -296,4 +311,20 @@ function UIItem:onItemChange()
     tooltip = self:getItem():getTooltip()
   end
   self:setTooltip(tooltip)
+end
+
+-- Compatibility shim for the game_store mod (Offers/Home), which calls item:hook()
+-- after setItemId() to register a virtual item preview. Other forks use this to make
+-- the item drawable/virtual; our UIItem already renders from setItemId, so we only
+-- need to ensure the widget is in virtual mode and not eaten by drag/drop handlers.
+function UIItem:hook()
+  self:setVirtual(true)
+end
+
+-- Compatibility shim for game_cyclopedia bestiary loot ("1"/"1+" overlay).
+-- Other forks bind setVirtualCount in C++; here we emulate it with widget text,
+-- which UIItem renders via drawText() at the end of UIItem::drawSelf.
+function UIItem:setVirtualCount(count)
+  self:setText(tostring(count))
+  self:setTextAlign(AlignBottomRight)
 end

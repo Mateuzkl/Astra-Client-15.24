@@ -209,3 +209,13 @@ end
 function Creature:isMonk()
   return self:getVocation() == 5 or self:getVocation() == 15
 end
+
+-- UICreature has no race id in C++; mods (cyclopedia bosstiary/boss slots,
+-- prey hunting, monster podium) tag widgets with it, so store it as a Lua field.
+function UICreature:setRaceID(raceId)
+  self.raceId = raceId
+end
+
+function UICreature:getRaceID()
+  return self.raceId
+end
