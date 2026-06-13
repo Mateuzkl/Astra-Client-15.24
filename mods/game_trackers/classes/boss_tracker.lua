@@ -43,20 +43,33 @@ function BossTracker.resetWindow()
 end
 
 function BossTracker.showTrackerData()
+	-- Render whenever the window object exists. Do NOT early-return on isVisible():
+	-- a docked/minimized mini-window can report not-visible while genuinely open, and
+	-- that silently dropped every toggle-driven update (the regression). The tracked
+	-- list is small, so rebuilding into a hidden panel is cheap and always correct.
+	if not bossTrackerWindow then
+		return
+	end
+
 	bossTrackerWindow.contentsPanel:destroyChildren()
 
 	if not BossTrackerList or #BossTrackerList == 0 then
 		return
 	end
 
-	local monsterList = g_things.getMonsterList()
+	local monsterList = Trackers.getMonsterList()
 	table.sort(BossTrackerList, function(a, b)
-		local nameA = monsterList[a[1]][1]
-		local nameB = monsterList[b[1]][1]
+		-- a tracked raceId may be missing from staticdata (synthesized/incomplete
+		-- list); guard so one unknown boss can't abort the whole render.
+		local nameA = (monsterList[a[1]] or {})[1] or ''
+		local nameB = (monsterList[b[1]] or {})[1] or ''
 		local completionA = (a[5] - a[2])
 		local completionB = (b[5] - b[2])
-        local percentA = (a[2] / a[5]) * 100
-        local percentB = (b[2] / b[5]) * 100
+        -- Guard the division: a 0x73-rebuilt entry can carry a 0 threshold before
+        -- 0x61 base data arrives; nan from x/0 makes table.sort raise "invalid order
+        -- function" and abort the whole render (leaving the tracker blank).
+        local percentA = (a[5] > 0) and (a[2] / a[5]) * 100 or 0
+        local percentB = (b[5] > 0) and (b[2] / b[5]) * 100 or 0
 
 		if sortFirst == sortTypes.NAME then
 			if sortSecond == sortTypes.ASCENDING then
@@ -82,8 +95,11 @@ function BossTracker.showTrackerData()
 			end
 		end
 	end)
-	local layout = bossTrackerWindow.contentsPanel:getLayout()
-	layout:disableUpdates()
+	-- NOTE: no layout:disableUpdates()/enableUpdates() wrapper here (unlike before).
+	-- That wrapper uses a counter: any error inside the loop skips enableUpdates and
+	-- leaves the verticalBox layout PERMANENTLY disabled, so widgets pile up
+	-- unpositioned ("rendered outside the box") on this and every later render. The
+	-- working bestiary tracker lays out per-add with no wrapper; do the same here.
 	for _, data in ipairs(BossTrackerList) do
 		local creature = monsterList[data[1]]
 		if not creature then
@@ -120,15 +136,15 @@ function BossTracker.showTrackerData()
 		widget.trackerContainer1.killsBar1:setTooltip(tr("%s / %s", comma_value(currentKills), comma_value(secondUnlock)))
 		widget.trackerContainer2.killsBar2:setTooltip(tr("%s / %s", comma_value(currentKills), comma_value(thirdUnlock)))
 
-		local firstPercent = math.min((currentKills * 100) / firstUnlock, 100)
+		local firstPercent = firstUnlock > 0 and math.min((currentKills * 100) / firstUnlock, 100) or 0
 		widget.trackerContainer.killsBar:setPercent(firstPercent)
 
-		if currentKills > firstUnlock then
+		if currentKills > firstUnlock and secondUnlock > firstUnlock then
 			local secondPercent = math.min(((currentKills - firstUnlock) * 100) / (secondUnlock - firstUnlock), 100)
 			widget.trackerContainer1.killsBar1:setPercent(secondPercent)
 		end
 
-		if currentKills > secondUnlock then
+		if currentKills > secondUnlock and thirdUnlock > secondUnlock then
 			local thirdPercent = math.min(((currentKills - secondUnlock) * 100) / (thirdUnlock - secondUnlock), 100)
 			widget.trackerContainer2.killsBar2:setPercent(thirdPercent)
 		end
@@ -164,8 +180,6 @@ function BossTracker.showTrackerData()
 
 		:: continue ::
 	end
-
-	layout:enableUpdates()
 end
 
 function BossTracker.onRedirect(widget)
@@ -286,6 +300,11 @@ function BossTracker.onLogin(bossTrackerWidgetOptions)
 		sortOptions[sortTypes.REMAINING_KILLS] = true
 		BossTracker.selectFirstSection(sortTypes.REMAINING_KILLS)
 	end
+
+	-- The default name+ascending sort short-circuits both select* helpers above,
+	-- so render explicitly here to show the (possibly cache-seeded) list on login.
+	-- showTrackerData destroys+recreates and is a no-op for an empty list.
+	BossTracker.showTrackerData()
 end
 
 function BossTracker.checkTrackerCooldown(name, cooldown)

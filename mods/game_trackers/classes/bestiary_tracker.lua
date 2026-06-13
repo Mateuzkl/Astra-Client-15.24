@@ -134,10 +134,12 @@ function BestiaryTracker.updateWidgetShowTracker(data, monsterList)
 end
 
 function BestiaryTracker.updateTrackerList()
-	local monsterList = g_things.getMonsterList()
+	local monsterList = Trackers.getMonsterList()
 	table.sort(BestiaryTrackerList, function(a, b)
-		local nameA = monsterList[a[1]][1]
-		local nameB = monsterList[b[1]][1]
+		-- a tracked raceId may be missing from staticdata (cache seeded from a prior
+		-- session/asset version); guard so one unknown entry can't abort the render.
+		local nameA = (monsterList[a[1]] or {})[1] or ''
+		local nameB = (monsterList[b[1]] or {})[1] or ''
 		local completionA = (a[5] - a[2])
 		local completionB = (b[5] - b[2])
     	local percentA = (a[2] / a[5]) * 100
@@ -182,6 +184,13 @@ function BestiaryTracker.updateTrackerList()
 end
 
 function BestiaryTracker.showTrackerData(update)
+	-- Visibility guard: skip the widget rebuild while the window is hidden. The
+	-- data list (BestiaryTrackerList) stays current; toggleBestiaryTracker calls
+	-- showTrackerData again once the window is opened, so nothing is lost.
+	if not bestiaryTrackerWindow:isVisible() then
+		return
+	end
+
 	if BestiaryTrackerList and #BestiaryTrackerList == bestiaryTrackerWindow.contentsPanel:getChildCount() and not update then
 		BestiaryTracker.updateTrackerList()
 		return
@@ -192,10 +201,12 @@ function BestiaryTracker.showTrackerData(update)
 		return
 	end
 
-	local monsterList = g_things.getMonsterList()
+	local monsterList = Trackers.getMonsterList()
 	table.sort(BestiaryTrackerList, function(a, b)
-		local nameA = monsterList[a[1]][1]
-		local nameB = monsterList[b[1]][1]
+		-- a tracked raceId may be missing from staticdata (cache seeded from a prior
+		-- session/asset version); guard so one unknown entry can't abort the render.
+		local nameA = (monsterList[a[1]] or {})[1] or ''
+		local nameB = (monsterList[b[1]] or {})[1] or ''
 		local completionA = (a[5] - a[2])
 		local completionB = (b[5] - b[2])
     	local percentA = (a[2] / a[5]) * 100
@@ -353,5 +364,8 @@ function BestiaryTracker.onLogin(bestiaryTrackerWidgetOptions)
 		BestiaryTracker.selectFirstSection(sortTypes.REMAINING_KILLS)
 	end
 
-	BestiaryTracker.updateTrackerList()
+	-- Render the (possibly cache-seeded) list. updateTrackerList only refreshes
+	-- already-created widgets, so on login it would leave a seeded list invisible;
+	-- showTrackerData creates the widgets and is a no-op for an empty list.
+	BestiaryTracker.showTrackerData()
 end

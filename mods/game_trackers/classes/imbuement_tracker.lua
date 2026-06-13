@@ -31,95 +31,116 @@ function ImbuementTracker.showTrackerData()
 	imbuementTrackerWindow.contentsPanel:destroyChildren()
 
 	for _, data in pairs(imbuementData) do
-		local canShow = true
-		local emptySlots = 0
-		for k, v in pairs(data.slots) do
-			if v.imbuementId == 0 then
-				emptySlots = emptySlots + 1
-				goto continue
+		-- crystalserver's playerRequestInventoryImbuements (game.cpp) sends EVERY
+		-- equipped item, not just imbuement-capable ones; items with no imbuement
+		-- slots arrive with totalSlots == 0 and an empty slots map. Such an item is
+		-- never imbuement-trackable, so skip it before the duration/active filters
+		-- (otherwise it renders an empty ImbuePanel).
+		if (data.totalSlots or 0) > 0 then
+			-- The C++ dispatch only sends imbued slots in data.slots (empties are
+			-- skipped server-side); empties are derived from totalSlots - activeSlots.
+			local canShow = true
+			local activeSlots = 0
+			for _, v in pairs(data.slots) do
+				activeSlots = activeSlots + 1
+
+				local hours = math.floor(v.duration / 3600)
+
+				if not sortOptions[sortTypes.LESS_THAN_ONE] and hours < 1 then
+					canShow = false
+				end
+
+				if not sortOptions[sortTypes.LAST_BETWEEN] and (hours >= 1 and hours <= 3) then
+					canShow = false
+				end
+
+				if not sortOptions[sortTypes.MORE_THAN_THREE] and hours > 3 then
+					canShow = false
+				end
 			end
 
-			canShow = true
-			local hours = math.floor(v.time / 3600)
-			local minutes = math.floor((v.time % 3600) / 60)
-			if v.imbuementId ~= 0 then
-				if not sortOptions[sortTypes.LESS_THAN_ONE] and hours < 1 and emptySlots < k then
-					canShow = false
-				end
-
-				if not sortOptions[sortTypes.LAST_BETWEEN] and (hours >= 1 and hours <= 3) and emptySlots < k then
-					canShow = false
-				end
-
-				if not sortOptions[sortTypes.MORE_THAN_THREE] and hours > 3 and emptySlots < k then
-					canShow = false
-				end
+			local emptySlots = (data.totalSlots or 0) - activeSlots
+			if not sortOptions[sortTypes.NO_ACTIVE] and activeSlots == 0 and emptySlots > 0 then
+				canShow = false
 			end
 
-			:: continue ::
-		end
-
-		if not sortOptions[sortTypes.NO_ACTIVE] and emptySlots == #data.slots then
-			canShow = false
-		end
-
-		if canShow then
-			table.insert(sortedData, data)
+			if canShow then
+				table.insert(sortedData, data)
+			end
 		end
 	end
 
 	for _, data in pairs(sortedData) do
 		local widget = g_ui.createWidget('ImbuePanel', imbuementTrackerWindow.contentsPanel)
+		-- UIItem:setItem already renders the (virtual) item icon for a display-only
+		-- slot. The old setPosition/setStaticThing dance is unnecessary: setStaticThing
+		-- has no Item/Thing binding (it never existed on Item in mehah/koliseu-otc
+		-- either), and the x=65535 marker only feeds pattern math (% numPatternX),
+		-- which is a no-op for single-pattern equipment. Containers are never
+		-- imbuement-trackable, so the updateFlags() branch was dead code.
 		widget.itemSlot:setItem(data.item)
 
-		local position = {x = 65535, y = data.slotPosition, z = 0}
-		local item = widget.itemSlot:getItem()
-		item:setPosition(position)
-		item:setStaticThing(true)
-		if item:isContainer() then
-			updateFlags(item, widget.itemSlot)
+		-- The C++ dispatch only sends imbued slots in data.slots (empties are
+		-- skipped server-side); each entry's .id is the 0-based slotIndex, so +1
+		-- maps to the 1-based panel/imbueContainer numbering. Index the filled
+		-- slots by panel index so every slot 1..totalSlots can be rendered, with
+		-- the empties falling back to the otui placeholder artwork.
+		local filled = {}
+		for _, v in pairs(data.slots) do
+			filled[v.id + 1] = v
 		end
 
-		for k, v in pairs(data.slots) do
-			local hours = math.floor(v.time / 3600)
-			local minutes = math.floor((v.time % 3600) / 60)
+		for panelIndex = 1, data.totalSlots do
+			local panel = widget:recursiveGetChildById("panel" .. panelIndex)
+			local source = widget:recursiveGetChildById("imbueContainer" .. panelIndex)
+			if panel and source then
+				source:setVisible(true)
+				panel:setVisible(true)
 
-			local panel = widget:recursiveGetChildById("panel" .. k)
-			local source = widget:recursiveGetChildById("imbueContainer" .. k)
-			source:setVisible(true)
-			panel:setVisible(true)
+				local v = filled[panelIndex]
+				if v then
+					local total_seconds = v.duration
+					local hours = math.floor(total_seconds / 3600)
+					local minutes = math.floor((total_seconds % 3600) / 60)
+					local seconds = total_seconds % 60
 
-			if v.imbuementId ~= 0 then
-				local total_seconds = v.time
-				local hours = math.floor(total_seconds / 3600)
-				local minutes = math.floor((total_seconds % 3600) / 60)
-				local seconds = total_seconds % 60
+					local formatted_minutes = string.format("%02d", minutes)
+					local formatted_seconds = string.format("%02d", seconds)
 
-				local formatted_minutes = string.format("%02d", minutes)
-				local formatted_seconds = string.format("%02d", seconds)
+					source:setImageSource("/images/game/imbuing/imbuement-icons-64")
+        			source:setImageClip(getFramePosition(v.iconId, 64, 64, 21) .. " 64 64")
+					source:setTooltip(tr("%s\n\nTime remaining: %sh %smin", v.name, hours, minutes))
 
-				source:setImageSource("/images/game/imbuing/imbuement-icons-64")
-        		source:setImageClip(getFramePosition(v.imbuementId, 64, 64, 21) .. " 64 64")
-				source:setTooltip(tr("%s\n\nTime remaining: %sh %smin", v.description, hours, minutes))
+					if hours >= 10 then
+						source:setText(hours .. "h")
+					elseif hours < 10 and hours >= 1 then
+						source:setText(hours .. "h" .. formatted_minutes)
+					elseif hours < 1 and minutes >= 10 then
+						source:setText(formatted_minutes .. "m")
+					elseif minutes < 10 and minutes >= 1 then
+						source:setText(minutes .. "m" .. formatted_seconds)
+						source:setTooltip(tr("%s\n\nTime remaining: %sm %sseconds", v.name, minutes, seconds))
+					else
+						source:setText(formatted_seconds .. "s")
+						source:setTooltip(tr("%s\n\nTime remaining: %s seconds", v.name, seconds))
+					end
 
-				if hours >= 10 then
-					source:setText(hours .. "h")
-				elseif hours < 10 and hours >= 1 then
-					source:setText(hours .. "h" .. formatted_minutes)
-				elseif hours < 1 and minutes >= 10 then
-					source:setText(formatted_minutes .. "m")
-				elseif minutes < 10 and minutes >= 1 then
-					source:setText(minutes .. "m" .. formatted_seconds)
-					source:setTooltip(tr("%s\n\nTime remaining: %sm %sseconds", v.description, minutes, seconds))
+					if hours < 1 then
+						source:setColor("#d33c3c")
+					elseif hours < 3 then
+						source:setColor("#f8db38")
+					end
 				else
-					source:setText(formatted_seconds .. "s")
-					source:setTooltip(tr("%s\n\nTime remaining: %s seconds", v.description, seconds))
-				end
-
-				if hours < 3 then
-					source:setColor("#f8db38")
-				elseif hours < 1 then
-					source:setColor("#d33c3c")
+					-- Empty slot: the inactive-slot art Tibia/mehah uses for an
+					-- unfilled imbuement slot (imported from koliseu-otc:
+					-- /images/game/imbuing/slot_inactive, 66x66, single frame).
+					-- Clear the stale 64x64 imbuement-icons clip and reset
+					-- text/color/tooltip to the free-slot defaults.
+					source:setImageSource("/images/game/imbuing/slot_inactive")
+					source:setImageClip("0 0 66 66")
+					source:setText("")
+					source:setColor("#ffffff")
+					source:setTooltip(tr("Empty slot"))
 				end
 			end
 		end
