@@ -1,6 +1,23 @@
 Bestiary = {}
 Bestiary.__index = Bestiary
 
+-- g_things.getMonsterList() rebuilds and pushes the full ~2-3k monster map on
+-- every call; cache it keyed by client version (assets reload on version switch)
+local cachedMonsterList, cachedForVersion
+local function getMonsterList()
+  local version = g_game.getClientVersion()
+  if not cachedMonsterList or cachedForVersion ~= version then
+    local list = g_things.getMonsterList()
+    -- never pin an empty list (failed staticdata load): retry next call
+    if next(list) == nil then
+      return list
+    end
+    cachedMonsterList = list
+    cachedForVersion = version
+  end
+  return cachedMonsterList
+end
+
 local BestiaryGroups = {}
 local MonsterList = {}
 local overviewPage = 1
@@ -203,20 +220,36 @@ function Bestiary.bestiaryOverview()
     local monsterId = MonsterList[i][1]
     local currentLevel = MonsterList[i][2]
     local extraExperience = MonsterList[i][3]
-    local monster = g_things.getMonsterList()[monsterId]
+    local monster = getMonsterList()[monsterId]
     if not monster then
       g_logger.error("Bestiary Overview: failed to retrieve data from monster " .. monsterId)
       goto continue
 		end
 
-    local name = string.capitalize(monster[1])
-    widget:setTooltip(name)
-    widget:setText(short_text(name, 14))
-    widget:recursiveGetChildById("monster"):setOutfit({type = monster[2], auxType = monster[3], head = monster[4], body = monster[5], legs = monster[6], feet = monster[7], addons = monster[8]})
-    widget:recursiveGetChildById("monster"):setTooltip(name)
-    widget:recursiveGetChildById("monster").onClick = function() backMonster = name; g_game.bestiaryMonsterData(monsterId) end
-    widget:recursiveGetChildById("monsterButton").onClick = function() backMonster = name; g_game.bestiaryMonsterData(monsterId) end
-    widget.totalKill:setText(currentLevel - 1 .." / 3")
+    if currentLevel > 0 then
+      local name = string.capitalize(monster[1])
+      widget:setTooltip(name)
+      widget:setText(short_text(name, 14))
+      widget:recursiveGetChildById("monster"):setOutfit({type = monster[2], auxType = monster[3], head = monster[4], body = monster[5], legs = monster[6], feet = monster[7], addons = monster[8]})
+      widget:recursiveGetChildById("monster"):setTooltip(name)
+      -- click goes on the BUTTON (it owns the $pressed "sink" animation); the
+      -- UICreature child is phantom (otui) so the press reaches the button
+      widget:recursiveGetChildById("monsterButton").onClick = function() backMonster = name; g_game.bestiaryMonsterData(monsterId) end
+      widget.totalKill:setText(currentLevel - 1 .." / 3")
+    else -- progress 0 = unknown creature (zero kills): show black silhouette but block the data request
+      widget:setText(tr('Unknown'))
+      widget:setTooltip(tr('Unknown Creature'))
+      -- render the real outfit through the black-silhouette shader (identity stays hidden: no name, no click)
+      widget:recursiveGetChildById("monster"):setOutfit({type = monster[2], auxType = monster[3], head = monster[4], body = monster[5], legs = monster[6], feet = monster[7], addons = monster[8], shader = "outfit_black"})
+      widget:recursiveGetChildById("monster"):setTooltip(tr('Unknown Creature'))
+      -- Keep the card ENABLED so it looks like the others (the button's
+      -- $disabled state reuses the $pressed "sunken" clip, which made unknown
+      -- cards look permanently pressed). Just don't wire a click -> no data
+      -- request for an unknown creature.
+      widget:recursiveGetChildById("monsterButton").onClick = nil
+      widget:recursiveGetChildById("monsterButton"):setText('')
+      widget:recursiveGetChildById("totalKill"):setVisible(false)
+    end
     if extraExperience > 0 then
       widget.soulCoreIcon:setVisible(true)
       widget.soulCoreIcon:setTooltip(tr('The Animus Mastery for this creature is unlocked.\nIt yields 2%%, plus an additional 0.1%% for every 10 Animus Masteries unlocked, up to a maximum of 4%%.\nYou currently benefit from %.1f%% due to having unlocked %d Animus Masteries.', extraExperience, MasteryCount))
@@ -254,7 +287,12 @@ function Cyclopedia.bestiaryMonsterData(monsterId, bestiaryMonster, currentLevel
 
   VisibleCyclopediaPanel.backButton.onClick = function() Bestiary.bestiaryOverview() end
 
-  local monster = g_things.getMonsterList()[monsterId]
+  local monster = getMonsterList()[monsterId]
+  if not monster then
+    g_logger.error("Bestiary: failed to retrieve data from monster " .. monsterId)
+    return
+  end
+
   local widget = VisibleCyclopediaPanel.listOfMonsters
 
   widget:setText(monster[1])
@@ -712,7 +750,7 @@ function Bestiary.onSearch()
   local text = widget:getText():lower()
 
   local list = {}
-  for raceId, monsterInfo in pairs(g_things.getMonsterList()) do
+  for raceId, monsterInfo in pairs(getMonsterList()) do
     local name = monsterInfo[1]:lower()
     if string.find(name, string.escape(text)) then
       list[#list + 1] = raceId
@@ -733,6 +771,10 @@ end
 
 function Bestiary.onApplyCharm(monster, charm, monsterId)
   if messageBoxCharm then
+    return
+  end
+
+  if not charm or not charm.id then
     return
   end
 
@@ -765,6 +807,10 @@ end
 
 function Bestiary.onRemoveCharm(monster, charm, mosnterId)
   if messageBoxCharm then
+    return
+  end
+
+  if not charm or not charm.id then
     return
   end
 
@@ -832,6 +878,16 @@ function Bestiary.onCharm()
     charmOptions:addOption('None Unlocked')
     charmOptions:setCurrentIndex(1)
     charmOptions:setEnabled(false)
+
+    -- hide both action buttons so no stale clickable Assign/Clear survives a
+    -- major/minor branch switch (their onClick would carry a nil charm)
+    local selectAssignButton = VisibleCyclopediaPanel:recursiveGetChildById('selectAssignButton')
+    selectAssignButton:setVisible(false)
+    selectAssignButton:setEnabled(false)
+
+    local selectClearButton = VisibleCyclopediaPanel:recursiveGetChildById('selectClearButton')
+    selectClearButton:setVisible(false)
+    selectClearButton:setEnabled(false)
   elseif currentCharm.id == -1 then
     charmListUnlocked = {}
     charmOptions:removeOption('?')
@@ -847,6 +903,14 @@ function Bestiary.onCharm()
       charmOptions:clear()
       charmOptions:addOption('None Unlocked')
       charmOptions:setEnabled(false)
+
+      local selectAssignButton = VisibleCyclopediaPanel:recursiveGetChildById('selectAssignButton')
+      selectAssignButton:setVisible(false)
+      selectAssignButton:setEnabled(false)
+
+      local selectClearButton = VisibleCyclopediaPanel:recursiveGetChildById('selectClearButton')
+      selectClearButton:setVisible(false)
+      selectClearButton:setEnabled(false)
     else
       -- charmOptions:setCurrentIndex(1)
       charmOptions:setEnabled(true)
@@ -861,21 +925,22 @@ function Bestiary.onCharm()
 
       local data = charmOptions:getCurrentOption()
 
-      local monster = g_things.getMonsterList()[MonsterId]
+      local monster = getMonsterList()[MonsterId]
       selectAssignButton.onClick = function()
         local data = charmOptions:getCurrentOption()
+        if not data or not data.data then
+          return
+        end
         Bestiary.onApplyCharm(monster[1], data.data, MonsterId)
       end
     end
   elseif currentCharm.id > -1 then
     charmListUnlocked = {}
     charmOptions:removeOption('?')
-    for i, charm in pairs(charmList) do
-      if charm.creatureId == MonsterId then
-        table.insert(charmListUnlocked, charm)
-        charmOptions:addOption(charm.name, charm)
-      end
-    end
+    -- charmList only holds EMPTY slots here; the assigned charm is currentCharm itself.
+    -- clear() removes the onSetup '' placeholder and stale options from major/minor toggling.
+    charmOptions:clear()
+    charmOptions:addOption(currentCharm.name, currentCharm)
 
     charmOptions:setCurrentIndex(1)
     charmOptions:setEnabled(false)
@@ -899,7 +964,7 @@ function Bestiary.onCharm()
     local coinCostPanel = VisibleCyclopediaPanel:recursiveGetChildById('coinCostPanel')
     coinCostPanel:setVisible(true)
 
-    local monster = g_things.getMonsterList()[MonsterId]
+    local monster = getMonsterList()[MonsterId]
     selectClearButton.onClick = function()
       Bestiary.onRemoveCharm(monster[1], currentCharm, MonsterId)
     end

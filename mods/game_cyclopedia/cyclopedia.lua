@@ -1,9 +1,30 @@
+-- g_things.getMonsterList() rebuilds and pushes the full ~2-3k monster map on
+-- every call; cache it keyed by client version (assets reload on version switch)
+local cachedMonsterList, cachedForVersion
+local function getMonsterList()
+  local version = g_game.getClientVersion()
+  if not cachedMonsterList or cachedForVersion ~= version then
+    local list = g_things.getMonsterList()
+    -- never pin an empty list (failed staticdata load): retry next call
+    if next(list) == nil then
+      return list
+    end
+    cachedMonsterList = list
+    cachedForVersion = version
+  end
+  return cachedMonsterList
+end
+
 local order = {"Items", "Bestiary", "Charm", "Map", "Houses", "Character", "Bosstiary", "Boss Slots", "Magical Archive"}
 local options = {
   ["Items"] = {icon = "iteminfo", text = "Items", enabled = true, selected = true, assignSpellButton = false, aimTargetBox = false, coinsStatus = false, charmStatus = false, minorCharmStatus = false},
   ["Bestiary"] = {icon = "monsterinfo", text = "Bestiary", enabled = true, assignSpellButton = false, aimTargetBox = false, coinsStatus = true, charmStatus = true, minorCharmStatus = true},
   ["Charm"] =  {icon = "monsterbonusinfo", text = "Charm", enabled = true, assignSpellButton = false, aimTargetBox = false, coinsStatus = true, charmStatus = true, minorCharmStatus = true},
   ["Map"] = {icon = "map", text = "Map", enabled = true, assignSpellButton = false, aimTargetBox = false, coinsStatus = true, charmStatus = false, minorCharmStatus = false},
+  -- Houses/Character re-enabled: cyclopediaprotocol.lua ports the crystalserver
+  -- chains (0xE5 -> 0xDA per sub-type, 0xAD -> 0xC7/0xC3). Sub-panels whose
+  -- response sub-type has no Lua parser (achievements/item summary/appearances)
+  -- never send their request and stay blank by design.
   ["Houses"] = {icon = "houses", text = "Houses", enabled = true, assignSpellButton = false, aimTargetBox = false, coinsStatus = true, charmStatus = false, minorCharmStatus = false},
   ["Character"] = {icon = "characterinfo", text = "Character", enabled = true, assignSpellButton = false, aimTargetBox = false, coinsStatus = true,  charmStatus = true, minorCharmStatus = true},
   ["Bosstiary"] = {icon = "bosstiary", text = "Bosstiary", enabled = true, assignSpellButton = false, aimTargetBox = false, coinsStatus = false, charmStatus = false, minorCharmStatus = false},
@@ -175,9 +196,10 @@ function terminate()
 
   disconnect(g_game, {
     onResourceBalance = Charm.onResourceBalance,
-    onInspection = onInspection,
+    onInspection = CyclopediaItems.onInspection,
     onCharmData = Charm.onCharmData,
     onMonsterTrackerData = Bestiary.bestiaryTracker,
+    updateBestiaryMonsterData = Bestiary.updateBestiaryMonsterData,
     updateBestiaryGroup = Bestiary.updateBestiaryGroup,
     updateBestiaryOverview = Bestiary.updateBestiaryOverview,
     onBosstiaryBaseData = Bosstiary.onBosstiaryBaseData,
@@ -214,9 +236,10 @@ end
 function Cyclopedia:open()
   if cyclopediaWindow:isHidden() then
     cyclopediaWindow:show(true)
-    cyclopediaWindow:raise()
-    cyclopediaWindow:focus()
   end
+  -- always re-raise: another dialog may have been stacked over an open cyclopedia
+  cyclopediaWindow:raise()
+  cyclopediaWindow:focus()
 
   g_client.setInputLockWidget(cyclopediaWindow)
   searchFilterCharmText = ''
@@ -238,15 +261,26 @@ function Cyclopedia:open()
   g_keyboard.bindKeyPress('Shift+Tab', togglePreviousWindow, cyclopediaWindow)
 end
 
-function toggle()
-  if cyclopediaWindow:isVisible() then
+-- exported so game_sidebuttons' forceCloseButton can close us before opening
+-- the next exclusive dialog (same contract as questlog/wheel/prey/compendium)
+function hide()
+  if not cyclopediaWindow or cyclopediaWindow:isHidden() then
+    return
+  end
+  if VisibleCyclopediaPanel then
     local minimap = VisibleCyclopediaPanel:recursiveGetChildById('minimap')
     if minimap then
-        minimap:onHide()
+      minimap:onHide()
     end
-    Cyclopedia.endGame()
-    g_keyboard.unbindKeyPress('Tab', toggleNextWindow, cyclopediaWindow)
-    g_keyboard.unbindKeyPress('Shift+Tab', togglePreviousWindow, cyclopediaWindow)
+  end
+  Cyclopedia.endGame()
+  g_keyboard.unbindKeyPress('Tab', toggleNextWindow, cyclopediaWindow)
+  g_keyboard.unbindKeyPress('Shift+Tab', togglePreviousWindow, cyclopediaWindow)
+end
+
+function toggle()
+  if cyclopediaWindow:isVisible() then
+    hide()
   else
     Cyclopedia:open()
   end
@@ -263,7 +297,7 @@ function toggleRedirect(action, raceId)
     end
     g_game.bestiaryMonsterData(raceId)
   elseif action == "Bosstiary" then
-  	local monsterName = g_things.getMonsterList()[raceId]
+  	local monsterName = getMonsterList()[raceId]
     if monsterName then
       Bosstiary.onSideButtonRedirect(monsterName[1])
     end
@@ -357,6 +391,11 @@ function onOptionChange(widget)
   elseif widget.category:getText() == 'Bosstiary' then
     VisibleCyclopediaPanel = g_ui.createWidget('BosstiaryGroupPanel', cyclopediaWindow.optionsPanel)
     VisibleCyclopediaPanel:setId('BosstiaryGroupPanel')
+    -- optionsPanel is the bottom-most of the four overlapping option panels; like the
+    -- Bestiary/Items/Magical Archive branches it must be raised above its siblings or
+    -- the boss grid renders behind the empty optionsBosstiary/Bossslot/Character panels.
+    cyclopediaWindow.optionsPanel:focus()
+    VisibleCyclopediaPanel:focus()
     Bosstiary.reset()
     Bosstiary.requestData()
   elseif widget.category:getText() == 'Character' then
@@ -371,9 +410,10 @@ function onOptionChange(widget)
     g_game.requestResource(ResourceMaxCharmBalance)
     g_game.requestResource(ResourceMaxEchoeBalance)
 
-    -- Request windows
+    -- Request windows: 0 base information, 9 inspection (the main window needs
+    -- both). Sub-type 2 (combat stats) was dropped: it is unused on crystalserver
+    -- (always replies "no data") and is not whitelisted by the protocol port.
     g_game.requestCyclopediaData(0)
-    g_game.requestCyclopediaData(2)
     g_game.requestCyclopediaData(9)
 
     scheduleEvent(function() Character.initMainWindow() end, 200)

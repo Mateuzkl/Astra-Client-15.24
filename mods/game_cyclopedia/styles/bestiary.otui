@@ -406,6 +406,9 @@ CyclopediaCreatureWindow < FlatPanel
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.verticalCenter: parent.verticalCenter
       animate: true
+      // phantom so clicks fall through to monsterButton, which owns the
+      // $pressed "sink" click animation (the card was not animating before)
+      phantom: true
   Label
     id: totalKill
     font: $var-cip-font

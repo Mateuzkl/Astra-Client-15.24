@@ -1,3 +1,20 @@
+-- g_things.getMonsterList() rebuilds and pushes the full ~2-3k monster map on
+-- every call; cache it keyed by client version (assets reload on version switch)
+local cachedMonsterList, cachedForVersion
+local function getMonsterList()
+    local version = g_game.getClientVersion()
+    if not cachedMonsterList or cachedForVersion ~= version then
+        local list = g_things.getMonsterList()
+        -- never pin an empty list (failed staticdata load): retry next call
+        if next(list) == nil then
+            return list
+        end
+        cachedMonsterList = list
+        cachedForVersion = version
+    end
+    return cachedMonsterList
+end
+
 if not Charm then
     Charm = {}
     Charm.__index = Charm
@@ -89,8 +106,12 @@ function Charm:configureWidget(charm, charmList)
 
     local raceId = charm.creatureId
     if raceId ~= 0 then
-        local monster = g_things.getMonsterList()[raceId]
-        charmItem:recursiveGetChildById('creature'):setOutfit({type = monster[2], auxType = monster[3], head = monster[4], body = monster[5], legs = monster[6], feet = monster[7], addons = monster[8]})
+        local monster = getMonsterList()[raceId]
+        if monster then
+            charmItem:recursiveGetChildById('creature'):setOutfit({type = monster[2], auxType = monster[3], head = monster[4], body = monster[5], legs = monster[6], feet = monster[7], addons = monster[8]})
+        else
+            g_logger.warning("Charms: monster data missing for race id " .. raceId)
+        end
     end
     return charmItem
 end
@@ -159,10 +180,11 @@ function Charm:configureCreatureList(monsters)
     local monsterList = VisibleCyclopediaPanel:recursiveGetChildById('monsterList')
     monsterList:destroyChildren()
     for monsterId, charmId in pairs(monsters) do
-        local monster = g_things.getMonsterByID(monsterId)
+        -- staticdata lookup: {name, looktype, auxId, head, body, legs, feet, addons}
+        local monster = getMonsterList()[monsterId]
         if monster then
             local monsterItem = g_ui.createWidget('CharmListLabel', monsterList)
-            monsterItem:setText(string.capitalize(monster))
+            monsterItem:setText(string.capitalize(monster[1]))
             monsterItem:setId(monsterId)
         end
     end
@@ -496,7 +518,7 @@ function Charm:onMonsterFocusChange(widget, focused)
     local creatureWidget = VisibleCyclopediaPanel:recursiveGetChildById('creature')
     local raceId = tonumber(widget:getId())
     self.raceId = raceId
-    local monster = g_things.getMonsterList()[raceId]
+    local monster = getMonsterList()[raceId]
     creatureWidget:setOutfit({type = monster[2], auxType = monster[3], head = monster[4], body = monster[5], legs = monster[6], feet = monster[7], addons = monster[8]})
 
     local selectCreatureButton = VisibleCyclopediaPanel:recursiveGetChildById('selectCreatureButton')
@@ -592,7 +614,7 @@ function Charm:onSearchTextChange(text)
     local monsterList = VisibleCyclopediaPanel:recursiveGetChildById('monsterList')
     for _, child in pairs(monsterList:getChildren()) do
         local name = child:getText():lower()
-        if name:find(text:lower()) or text == '' or #text < 3 then
+        if name:find(text:lower(), 1, true) or text == '' or #text < 3 then
             child:setVisible(true)
         else
             child:setVisible(false)

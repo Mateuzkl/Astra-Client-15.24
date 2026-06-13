@@ -745,9 +745,16 @@ end
 
 function House.sortDataByStatus(houses)
 	local staticHouse = g_things.getHouseList()
-	table.sort(houses, function(a, b)
-		local a_static = staticHouse[a.houseId] or 0
-		local b_static = staticHouse[b.houseId] or 0
+	-- entries without static data cannot be compared; the display loop skips them anyway
+	local filtered = {}
+	for _, data in ipairs(houses) do
+		if staticHouse[data.houseId] then
+			table.insert(filtered, data)
+		end
+	end
+	table.sort(filtered, function(a, b)
+		local a_static = staticHouse[a.houseId]
+		local b_static = staticHouse[b.houseId]
 
 		if currentStatusSort == 1 then
 			local firstNameA = a_static[1]:split(" ")[1]
@@ -773,7 +780,7 @@ function House.sortDataByStatus(houses)
 		end
 		return false
 	end)
-	return houses
+	return filtered
 end
 
 function House.toggleHouseChecked(guildHall)

@@ -3706,6 +3706,7 @@ CharacterDataPanel < Panel
       image-clip: 0 0 43 20
       image-border: 1
       opacity: 1.0
+      @onClick: modules.game_wheel:toggle()
 
       $hover !disabled:
         image-clip: 0 0 43 20

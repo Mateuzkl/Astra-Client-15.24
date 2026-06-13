@@ -1,3 +1,20 @@
+-- g_things.getMonsterList() rebuilds and pushes the full ~2-3k monster map on
+-- every call; cache it keyed by client version (assets reload on version switch)
+local cachedMonsterList, cachedForVersion
+local function getMonsterList()
+    local version = g_game.getClientVersion()
+    if not cachedMonsterList or cachedForVersion ~= version then
+        local list = g_things.getMonsterList()
+        -- never pin an empty list (failed staticdata load): retry next call
+        if next(list) == nil then
+            return list
+        end
+        cachedMonsterList = list
+        cachedForVersion = version
+    end
+    return cachedMonsterList
+end
+
 ---------------------------
 -- Lua code author: R1ck --
 -- Company: VICTOR HUGO PERENHA - JOGOS ON LINE --
@@ -88,11 +105,12 @@ function Bosstiary.configureBossList(data, text)
 		data = {}
 	end
 
-	local monsterList = g_things.getMonsterList()
+	local monsterList = getMonsterList()
 
 	-- Insert outfit
 	for _, v in pairs(data) do
-		v[5] = monsterList[v[1]] or {}
+		-- keep nil for bosses missing from staticdata so the guard below skips them
+		v[5] = monsterList[v[1]]
 	end
 
 	table.sort(data, function(a, b)
@@ -178,7 +196,45 @@ function Bosstiary.onBosstiaryBaseData(killData, rewardData)
 	end
 end
 
+-- The 0x73 bosstiary-list resend is reliable (the server always emits it on a
+-- boss-track toggle, before the droppable 0xB9 push). Rebuild the boss tracker
+-- list from it so marking/unmarking a boss refreshes the tracker window even
+-- when the 0xB9 push is dropped server-side (malformed kill stages early-return).
+function Bosstiary.rebuildBossTrackerFromList(data)
+	if type(data) ~= 'table' then
+		return
+	end
+	-- bossTrackerWindow and BossTrackerList are globals in the SEPARATE
+	-- game_trackers sandbox; they do not resolve from this (game_cyclopedia)
+	-- sandbox. Reach them through the module registry (modules.game_trackers IS
+	-- the game_trackers sandbox env, so the field write below is visible to its
+	-- consumers, e.g. BossTracker.showTrackerData reading bare BossTrackerList).
+	local trackers = modules.game_trackers
+	if not trackers or not trackers.bossTrackerWindow then
+		return
+	end
+
+	local list = {}
+	for _, v in pairs(data) do
+		-- v = {bossId, category (0-based), kills, tracked}. The server tracked
+		-- flag (v[4]) is authoritative. NEVER drop a tracked boss for a missing
+		-- baseKill (0x61 base data may not have populated yet) — fall back to
+		-- zero unlock thresholds so opening the panel never wipes the tracker.
+		if v[4] == 1 then
+			local baseKill = baseKillData[v[2] + 1] or {}
+			list[#list + 1] = { v[1], v[3], baseKill.firstUnlock or 0, baseKill.secondUnlock or 0, baseKill.thirdUnlock or 0 }
+		end
+	end
+
+	trackers.BossTrackerList = list
+	trackers.BossTracker.showTrackerData()
+end
+
 function Bosstiary.onBosstiaryWindowData(data)
+	-- data is the authoritative tracked set; refresh the boss tracker from it
+	-- regardless of which branch below stores rawBosstiaryData.
+	Bosstiary.rebuildBossTrackerFromList(data)
+
 	-- Init fields
 	bosstiaryMonsterPanel = g_ui.getRootWidget():recursiveGetChildById('bosstiaryMonsterPanel')
 	pageCounter = g_ui.getRootWidget():recursiveGetChildById('pageCount')

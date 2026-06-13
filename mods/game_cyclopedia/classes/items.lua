@@ -70,7 +70,9 @@ function CyclopediaItems.loadJson()
 		table.insert(useMarketPrice, k)
 	end
 
-	local customPrice = g_things.getItemsPrice()
+	-- g_things.getItemsPrice may be missing in this 15.24 client build; fall back
+	-- to an empty table so the cyclopedia loader doesn't error out.
+	local customPrice = (g_things.getItemsPrice and g_things.getItemsPrice()) or {}
 	for k, v in pairs(itemsData["customSalePrices"]) do
 		local key = tonumber(k) or k
 		customPrice[key] = v
@@ -185,12 +187,23 @@ function CyclopediaItems.loadItems()
 end
 
 function CyclopediaItems.showCategories()
+	-- idempotency: callers (e.g. bestiary loot redirect) may invoke this twice on the same panel
+	VisibleCyclopediaPanel.leftInfo.categoriesList:destroyChildren()
 	local colorCount = 0
   	VisibleCyclopediaPanel.leftInfo.categoriesList.onChildFocusChange = function(self, selected) CyclopediaItems.categoryListChildFocus(self, selected) end
 
+	local MarketCategoryNames = {}
+	for name, id in pairs(MarketCategory) do
+		-- skip aliases so ids 1/31 map to their canonical names deterministically
+		if name ~= "First" and name ~= "Last" and name ~= "All" then
+			MarketCategoryNames[id] = name:gsub("(%l)(%u)", "%1 %2")
+		end
+	end
+
+	-- g_things.getMarketCategories() returns a sequential array of category ids
 	local categoryList = {}
-	for k, v in pairs(g_things.getMarketCategories()) do
-		table.insert(categoryList, {k, v})
+	for _, catId in ipairs(g_things.getMarketCategories()) do
+		table.insert(categoryList, {catId, MarketCategoryNames[catId] or ("Category " .. catId)})
 	end
 
 	table.insert(categoryList, {30, "Gold"})

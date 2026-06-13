@@ -1,3 +1,20 @@
+-- g_things.getMonsterList() rebuilds and pushes the full ~2-3k monster map on
+-- every call; cache it keyed by client version (assets reload on version switch)
+local cachedMonsterList, cachedForVersion
+local function getMonsterList()
+    local version = g_game.getClientVersion()
+    if not cachedMonsterList or cachedForVersion ~= version then
+        local list = g_things.getMonsterList()
+        -- never pin an empty list (failed staticdata load): retry next call
+        if next(list) == nil then
+            return list
+        end
+        cachedMonsterList = list
+        cachedForVersion = version
+    end
+    return cachedMonsterList
+end
+
 ---------------------------
 -- Lua code author: R1ck --
 -- Company: VICTOR HUGO PERENHA - JOGOS ON LINE --
@@ -73,7 +90,7 @@ function BosstiarySlot.showFirstSlot(data, sortText)
 	slotPanel.slot1.slot1Text:setVisible(false)
 
 	local state = data.state
-	local monsterList = g_things.getMonsterList()
+	local monsterList = getMonsterList()
 	local firstPanel = slotPanel.slot1.selectedBossPanel.panel1.bossSlotMonsterPanel
 
 	if state == 1 then
@@ -108,9 +125,14 @@ function BosstiarySlot.showFirstSlot(data, sortText)
 				:: continue ::
 			end
 		else
+			local monster = monsterList[data.raceID]
+			if not monster then
+				-- raceID missing from client staticdata: fall back to locked-style text
+				slotPanel.slot1.slot1Text:setVisible(true)
+				return
+			end
 			slotPanel.slot1.selectBoss:setVisible(true)
 
-			local monster = monsterList[data.raceID]
 			local name = string.capitalize(monster[1])
 			local baseKill = baseKillData[data.category + 1]
 			local baseReward = baseRewardData[data.category + 1]
@@ -195,7 +217,7 @@ function BosstiarySlot.showSecondSlot(data, sortText)
 	slotPanel.slot2.slot1Text:setVisible(false)
 
 	local state = data.state
-	local monsterList = g_things.getMonsterList()
+	local monsterList = getMonsterList()
 	local secondPanel = slotPanel.slot2.selectedBossPanel.panel1.bossSlotMonsterPanel
 
 	if state == 1 then
@@ -231,9 +253,14 @@ function BosstiarySlot.showSecondSlot(data, sortText)
 				:: continue ::
 			end
 		else
+			local monster = monsterList[data.raceID]
+			if not monster then
+				-- raceID missing from client staticdata: fall back to locked-style text
+				slotPanel.slot2.slot1Text:setVisible(true)
+				return
+			end
 			slotPanel.slot2.selectBoss:setVisible(true)
 
-			local monster = monsterList[data.raceID]
 			local name = string.capitalize(monster[1])
 			local baseKill = baseKillData[data.category + 1]
 			local baseReward = baseRewardData[data.category + 1]
@@ -326,7 +353,12 @@ local function updateMonsterName(monsterName)
 end
 
 function BosstiarySlot.showBoostedSlot(data)
-	local monster = g_things.getMonsterList()[data.raceID]
+	-- boosted raceID may be absent from client staticdata (custom boss/asset gap)
+	-- or 0; keep the slot in its default OTUI state instead of erroring out
+	local monster = getMonsterList()[data.raceID]
+	if not monster then
+		return
+	end
 	local baseKill = baseKillData[data.category + 1]
 	local baseReward = baseRewardData[data.category + 1]
 

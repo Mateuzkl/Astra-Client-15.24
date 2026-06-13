@@ -26,11 +26,13 @@ MapCyclopedia.setup = function()
 
     local minimap = VisibleCyclopediaPanel:recursiveGetChildById('minimap')
     if minimap then
+        -- setCameraPosition first: it installs the UIMapAnchorLayout before
+        -- the first child add, so setUIMarkers can batch its layout updates
+        RealMap.setCameraPosition(minimap, g_game.getLocalPlayer():getPosition())
         RealMap.setRegion(minimap)
         RealMap.setUIMarkers(minimap)
         minimap:clearWaypoints()
         minimap:clearRoutePath()
-        RealMap.setCameraPosition(minimap, g_game.getLocalPlayer():getPosition())
         RealMap.setCrossPosition(minimap, g_game.getLocalPlayer():getPosition())
         RealMap.setZoom(minimap, 2)
 
@@ -227,15 +229,24 @@ end
 function MapCyclopedia.onChangeButtonMarks(button, i)
     local icon = icon[i]
     local isChecked = button:isChecked()
-    local minimap = VisibleCyclopediaPanel:recursiveGetChildById('minimap')
-    minimap:ignoreWidget(icon)
+    local minimap = VisibleCyclopediaPanel and VisibleCyclopediaPanel:recursiveGetChildById('minimap')
+    if not minimap then
+        return
+    end
+    -- empty slots (i == 6,12,18) have no flag image: only flip the button, never
+    -- poison the ignore table with an "" key.
+    if icon ~= '' then
+        minimap:ignoreWidget(icon)
+    end
     if isChecked then
         button:setImageClip("0 0 43 20")
         button:setChecked(false)
     else
         button:setImageClip("0 20 43 20")
         button:setChecked(true)
-        minimap:unignoreWidget(icon)
+        if icon ~= '' then
+            minimap:unignoreWidget(icon)
+        end
     end
 end
 

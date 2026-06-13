@@ -1407,7 +1407,7 @@ function Character.getMagicSkillValue(player)
 		end
 	elseif value < baseValue then
 		color = "#c00000"
-		skill:setTooltip(baseValue .. ' ' .. (value - baseValue))
+		tooltip = (baseValue .. ' ' .. (value - baseValue))
 	else
 		color = "#bbbbbb" -- default
 	end
@@ -1817,10 +1817,13 @@ function Character.appearanceSort(data)
     local mount = Appearances:recursiveGetChildById('mounts'):isChecked()
     local familiar = Appearances:recursiveGetChildById('familiars'):isChecked()
     local optionBox = windowPanel:recursiveGetChildById('showAllBox')
-    local selectedOption = optionBox:getCurrentOption()
+    -- getCurrentOption() returns a {text, data} table, compare by its text
+    local currentOption = optionBox:getCurrentOption()
+    local selectedOption = currentOption and currentOption.text
 
     if outfit then
-        if selectedOption == "Show Standard Outfits" and data[4] ~= 1 then
+        -- server enum: NONE/standard = 0, QUEST = 1, STORE = 2
+        if selectedOption == "Show Standard Outfits" and data[4] ~= 0 then
             return false
         elseif selectedOption == "Show Quest Outfits" and data[4] ~= 1 then
             return false
@@ -1833,10 +1836,10 @@ function Character.appearanceSort(data)
         elseif selectedOption == "Show Store Mounts" and data[3] ~= 2 then
             return false
         end
-    elseif mount then
+    elseif familiar then
         if selectedOption == "Show Standard Familiars" and data[3] ~= 0 then
             return false
-        elseif selectedOption == "Show Quest Familiars" and data[3] ~= 2 then
+        elseif selectedOption == "Show Quest Familiars" and data[3] ~= 1 then
             return false
         end
     end

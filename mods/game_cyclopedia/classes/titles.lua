@@ -23,7 +23,7 @@ function Titles.initPanel()
 	currentTitleId = 0
 	lastSelectedIndex = 0
 	currentTitleEnabled = false
-	currentTitleLisr = {}
+	currentTitleList = {}
 
 	if optionsBox then
 		optionsBox:destroy()
