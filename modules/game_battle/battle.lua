@@ -314,21 +314,33 @@ local function sortCreaturesForBattle(battle, creatures, player)
   local sortType = (battle.sortType and battle.sortType[1]) or (battle.panel and battle.panel.sortType) or 'byAgeAscending'
   local descending = sortType:find('Descending') ~= nil
 
-  local function compareValue(a, b)
-    if sortType:find('Distance') then
-      local playerPos = player:getPosition()
-      return getDistanceBetween(playerPos, a:getPosition()), getDistanceBetween(playerPos, b:getPosition())
-    elseif sortType:find('Hitpoints') then
-      return a:getHealthPercent(), b:getHealthPercent()
-    elseif sortType:find('Name') then
-      return a:getName():lower(), b:getName():lower()
-    end
+  -- Resolve the sort key ONCE here instead of running string:find() inside the
+  -- comparator (which fires O(n log n) times per sort, 10x/s). The comparator then
+  -- only reads precomputed values.
+  local kind = 0 -- 0 = age (default)
+  local playerPos
+  if sortType:find('Distance') then
+    kind = 1
+    playerPos = player:getPosition()
+  elseif sortType:find('Hitpoints') then
+    kind = 2
+  elseif sortType:find('Name') then
+    kind = 3
+  end
 
-    return battleAges[a:getId()] or 0, battleAges[b:getId()] or 0
+  local function valueOf(c)
+    if kind == 1 then
+      return getDistanceBetween(playerPos, c:getPosition())
+    elseif kind == 2 then
+      return c:getHealthPercent()
+    elseif kind == 3 then
+      return c:getName():lower()
+    end
+    return battleAges[c:getId()] or 0
   end
 
   table.sort(creatures, function(a, b)
-    local valueA, valueB = compareValue(a, b)
+    local valueA, valueB = valueOf(a), valueOf(b)
     if valueA == valueB then
       valueA = battleAges[a:getId()] or 0
       valueB = battleAges[b:getId()] or 0
@@ -426,12 +438,43 @@ function checkCreatures()
     return
   end
 
-  local dimension = mapPanel:getVisibleDimension()
   local playerPos = player:getPosition()
-  local spectators = g_map.getSpectatorsInRangeEx(playerPos, false, math.floor(dimension.width / 2), math.floor(dimension.width / 2), math.floor(dimension.height / 2), math.floor(dimension.height / 2))
+  if not playerPos then
+    return
+  end
 
+  -- Primary source: full aware-range spectators. This is layout-independent and
+  -- mirrors the reference client (g_map.getSpectators / getMapPanel():getSpectators),
+  -- so it does NOT break when the map panel reports a zero/tiny visible dimension
+  -- (which would otherwise collapse the scan to the player's own tile -> empty list).
+  local spectators = g_map.getSpectators(playerPos, false) or {}
+
+  -- Defensive fallback to the visible-dimension range only if the aware-range query
+  -- returned nothing (e.g. spectators not yet populated). Guard against a 0-size
+  -- dimension by clamping to a sane minimum so the range is never collapsed to 0.
+  local dimension = mapPanel:getVisibleDimension()
+  if #spectators == 0 and dimension then
+    local halfW = math.max(math.floor((dimension.width or 0) / 2), 7)
+    local halfH = math.max(math.floor((dimension.height or 0) / 2), 5)
+    spectators = g_map.getSpectatorsInRangeEx(playerPos, false, halfW, halfW, halfH, halfH) or {}
+  end
+
+  -- Only rebuild battle windows that are actually OPEN. There are maxBattleWindow
+  -- (21) battle classes but typically just one is open; running the full
+  -- filter+sort+per-button setup (and lazily creating 30 buttons) for ~20 closed
+  -- windows every 100ms was the dominant cost of checkCreatures. A closed window
+  -- gets rebuilt on the next tick after it is opened (within 100ms), so nothing
+  -- is lost. The targeter/helper use their own scans, not this UI panel.
   for _, battle in pairs(battleClasses) do
-    updateBattleCreatures(battle, spectators, player)
+    -- The PRIMARY battle window (battle.secondary == false) is always rebuilt so it
+    -- can never go stale, even if a docked mini-window reports a misleading
+    -- isVisible(). The ~20 SECONDARY windows are only rebuilt while genuinely open;
+    -- a freshly opened one catches up on the next tick (<=100ms). The
+    -- targeter/helper use their own scans, not this UI panel, so nothing depends
+    -- on the closed ones being kept current.
+    if not battle.secondary or (battle.window and battle.window:isVisible()) then
+      updateBattleCreatures(battle, spectators, player)
+    end
   end
 
   updateBattleButtons()

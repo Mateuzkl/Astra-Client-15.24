@@ -444,14 +444,27 @@ function walk(dir, ticks)
     return
   end
 
+  -- GM/GOD Ctrl wall-walk: staff holding Ctrl alone may force-send steps into blocked tiles
+  -- (the server validates the actual access). Gate choice: the client cannot know the group
+  -- type -- LocalPlayer::m_groupType is never populated (no setter or parse site in the
+  -- client, and crystalserver never transmits the player's group), so getGroupType() is
+  -- always 0. Staff must opt in explicitly instead: g_settings.set('staffCtrlWallWalk', true)
+  -- (e.g. from the terminal). Safe even if a non-staff player flips it: the forced-send
+  -- branch below never prewalks, so a server-refused step costs one "Sorry, not possible"
+  -- with no desync. Computed once here and reused by the turn-modifier early-return, the
+  -- wall guard and the destination dispatch. With the toggle off (default), regular players
+  -- keep the exact previous behavior: Ctrl+arrow only turns, never walks.
+  local player = g_game.getLocalPlayer()
+  local modifiers = g_keyboard.getModifiers()
+  local ctrlWallWalk = player ~= nil and g_settings.getBoolean('staffCtrlWallWalk', false) and modifiers == KeyboardCtrlModifier
+
   -- Do not walk when turn modifiers keys are pressed
   local turnModifiers = {KeyboardCtrlModifier, KeyboardAltModifier, KeyboardShiftModifier}
-  if table.contains(turnModifiers, g_keyboard.getModifiers()) then
+  if not ctrlWallWalk and table.contains(turnModifiers, modifiers) then
     return
   end
 
   lastManualWalk = g_clock.millis()
-  local player = g_game.getLocalPlayer()
 
   if dir == lastWalkDir and not isWalkKeyPressed() then
     if player then
@@ -547,6 +560,47 @@ function walk(dir, ticks)
     return
   end
 
+  -- Wall guard: `toPos` is derived from the (possibly pre-walk-advanced) base position, so
+  -- during fast server-walking it can point one tile PAST a wall onto a walkable tile, which
+  -- let the player slide straight into walls (very visible on max-speed GM/GOD chars). Always
+  -- re-validate the step against the REAL server position: if the tile directly adjacent to
+  -- where the player actually stands is a genuine wall, block the step here. Only the GM/GOD
+  -- Ctrl wall-walk (ctrlWallWalk above) bypasses this guard — never group type alone, or GM
+  -- movement WITHOUT Ctrl would reintroduce the wall-slide desync this guard exists to stop.
+  if not ctrlWallWalk then
+    local realPos = player:getPosition()
+    if realPos then
+      local rx, ry, rz = realPos.x, realPos.y, realPos.z
+      if dir == North then ry = ry - 1
+      elseif dir == East then rx = rx + 1
+      elseif dir == South then ry = ry + 1
+      elseif dir == West then rx = rx - 1
+      elseif dir == NorthEast then rx, ry = rx + 1, ry - 1
+      elseif dir == SouthEast then rx, ry = rx + 1, ry + 1
+      elseif dir == SouthWest then rx, ry = rx - 1, ry + 1
+      elseif dir == NorthWest then rx, ry = rx - 1, ry - 1 end
+      local realDestTile = g_map.getTile({x = rx, y = ry, z = rz})
+      -- Only block a genuine wall: a tile that has ground but is not walkable. Missing tiles
+      -- and floor-change holes fall through to the existing floor-change logic below.
+      if realDestTile and realDestTile:getGround() ~= nil and not realDestTile:isWalkable() then
+        -- Elevation floor-change exemption: standing on a 3-elevation stack and stepping into a
+        -- blocked tile is the classic climb-up mechanic (ledge-down is the mirror case); the
+        -- server performs the floor change (game.cpp internalMoveCreature "try go up/down").
+        -- canChangeFloorUp/Down mutate the table passed, so pass fresh tables each call.
+        local playerTile = player:getTile()
+        local floorChange = (playerTile and playerTile:hasElevation(3) and canChangeFloorUp({x = rx, y = ry, z = rz}))
+            or canChangeFloorDown({x = rx, y = ry, z = rz})
+        if not floorChange then
+          nextWalkDir = nil
+          if m_settings.getOption("alwaysTurnTowardsMoveDirection") and dir ~= player:getDirection() then
+            g_game.turn(dir)
+          end
+          return
+        end
+      end
+    end
+  end
+
   if firstStep and lastWalkDir == dir and lastWalk + walkFirstStepDelay > g_clock.millis() then
     firstStep = false
     walkLock = lastWalk + walkFirstStepDelay
@@ -570,7 +624,7 @@ function walk(dir, ticks)
     if not player:isServerWalking() and not ignoredCanWalk then
       -- Diagonal pre-walk makes double step
       local diagonalDirs = {4, 5, 6, 7}
-      if not table.contains(diagonalDirs, dir) and (player:getPreWalkLockedDelay() < g_clock.millis() and not player:isParalyzed() and not not table.contains(diagonalDirs, lastWalkDir)) then
+      if not table.contains(diagonalDirs, dir) and (player:getPreWalkLockedDelay() < g_clock.millis() and not player:isParalyzed() and not table.contains(diagonalDirs, lastWalkDir)) then
         player:preWalk(dir)
         preWalked = true
       end
@@ -579,6 +633,12 @@ function walk(dir, ticks)
     local playerTile = player:getTile()
     if (playerTile and playerTile:hasElevation(3) and canChangeFloorUp(toPos)) or canChangeFloorDown(toPos) or (toTile and toTile:isEmpty() and not toTile:isBlocking()) then
       player:lockWalk(100)
+    elseif ctrlWallWalk and toTile then
+      -- GM/GOD Ctrl wall-walk: force-send the step into the blocked tile WITHOUT prewalk
+      -- (preWalked stays false), falling through to g_game.walk below. The server validates
+      -- the GM access; the confirmed move comes back as a server walk, so no desync. This
+      -- branch must precede the isServerWalking rejection, otherwise the second consecutive
+      -- forced step (arriving while the previous one plays back as a server walk) would stop.
     elseif player:isServerWalking() then
       g_game.stop()
       return
@@ -625,6 +685,20 @@ end
 
 function turn(dir, repeated)
   local player = g_game.getLocalPlayer()
+
+  -- GM/GOD Ctrl wall-walk entry point: corelib keyboard.lua dispatches key presses by the FULL
+  -- combo description (onWidgetKeyPress looks up boundKeyPressCombos['Ctrl+Up'], never the bare
+  -- 'Up' walk binding), and every keyDown/smartwalk walk path gates on KeyboardNoModifier — so
+  -- walk() can never observe Ctrl from the intended input. The turn bindings are what actually
+  -- receive Ctrl+arrow; divert to walk() here under the SAME gate walk() uses for ctrlWallWalk
+  -- (the explicit staff opt-in toggle — getGroupType() is always 0 client-side, see walk()).
+  -- With the toggle off (default) or any other modifier combo (Alt/Shift/Ctrl+Alt turn
+  -- bindings), fall through to the regular turn below, exactly as before.
+  if player and g_settings.getBoolean('staffCtrlWallWalk', false)
+      and g_keyboard.getModifiers() == KeyboardCtrlModifier then
+    return walk(dir, repeated and 10 or 0)
+  end
+
   if player:isAutoWalking() then
     if lastStop + 100 < g_clock.millis() then
       lastStop = g_clock.millis()

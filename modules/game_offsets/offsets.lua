@@ -22,8 +22,20 @@ local effectDummy = nil
 local offsetsTable = {}
 
 function init()
-    -- Load and apply offsets
-    scheduleEvent(loadOffsetsData, 200)
+    -- Apply creature draw offsets once the thing types are loaded. Previously
+    -- this used a fixed scheduleEvent(loadOffsetsData, 200) which fired before
+    -- the appearances finished loading on the modern (15.x) boot path, so
+    -- g_things.getThingType(2594..2598, ThingCategoryCreature) hit empty tables
+    -- and logged "invalid thing type client id ... in category 1". Driving it
+    -- off onLoadDat (emitted by both loadDat and loadAppearances) guarantees
+    -- the thing types exist; loadOffsetsData also guards on g_things.isLoaded().
+    connect(g_things, { onLoadDat = loadOffsetsData })
+    -- If the assets were already loaded before this module initialised, the
+    -- onLoadDat event has passed; run once now. modules.game_things.isLoaded()
+    -- reflects the Lua loader state (g_things has no isLoaded binding).
+    if modules.game_things and modules.game_things.isLoaded and modules.game_things.isLoaded() then
+        loadOffsetsData()
+    end
 
     if not DEVELOPERMODE then
         return
@@ -421,6 +433,12 @@ function saveEffectsOffsets()
 end
 
 function loadOffsetsData()
+    -- Defensive: never touch thing types before the assets are loaded, or
+    -- getThingType() below logs "invalid thing type client id ...".
+    if not (modules.game_things and modules.game_things.isLoaded and modules.game_things.isLoaded()) then
+        return
+    end
+
     offsetsTable = loadJsonStruct("/data/json/offsets.json", false)
     if not offsetsTable or not offsetsTable["OutfitOffset"] then
         return

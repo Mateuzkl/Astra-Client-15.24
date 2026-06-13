@@ -18,6 +18,7 @@ function updateFeatures(version)
     --g_game.enableFeature(GameMinimapLimitedToSingleFloor) -- it will generate minimap only for current floor
     --g_game.enableFeature(GameSpritesAlphaChannel)
     --g_game.enableFeature(GameOutfitShaders)
+    g_game.enableFeature(GameDontMergeAnimatedText) -- do not stack damage/heal numbers in a short time window
 
     if(version >= 770) then
         g_game.enableFeature(GameLooktypeU16)
@@ -70,7 +71,12 @@ function updateFeatures(version)
             g_game.enableFeature(GameAdditionalSkills)
             g_game.enableFeature(GameIdleAnimations)
             g_game.enableFeature(GameEnhancedAnimations)
-			g_game.enableFeature(GameExtendedClientPing)
+			-- GameExtendedClientPing (NewPing, opcode 0x40) is NOT supported by
+			-- crystalserver — it only understands the standard 0x1D/0x1E ping. With
+			-- it on, the client spammed ~4 useless 0x40 packets/second that the
+			-- server silently ignored; the real keepalive is the 0x1E pong sent in
+			-- reply to the server's 0x1D ping. Leave it disabled for this server.
+			-- g_game.enableFeature(GameExtendedClientPing)
             g_game.enableFeature(GameSpritesU32) -- Extended sprites
             --g_game.enableFeature(GameSpritesAlphaChannel) -- Transparency
 			g_game.enableFeature(GameDoublePlayerGoodsMoney)
@@ -227,6 +233,26 @@ function updateFeatures(version)
       --g_game.enableFeature(GameSendWorldName)
       g_game.enableFeature(GamePlayerStateU32)
       g_game.enableFeature(GameTibia12Protocol)
+      -- Modern protocol (Tibia 12+/15.x, Canary/crystalserver) framing:
+      --   * The initial login CHALLENGE (server-sends-first, 0x1F) still
+      --     arrives with an adler32 checksum, so GameProtocolChecksum MUST stay
+      --     enabled (set at >= 840) to decode that first packet. Do NOT disable
+      --     it here.
+      --   * After the client sends the login packet it calls
+      --     enabledSequencedPackets(); from then on every packet is framed with
+      --     a 32-bit SEQUENCE number + zlib compression. internalRecvData tests
+      --     m_sequencedPackets before m_checksumEnabled, so sequencing takes
+      --     over automatically once enabled — no need to clear the checksum.
+      --   * The server only switches to SEQUENCE framing when the client
+      --     announces an OTCLIENT_* OS (<= 12); see Game::getOs(). Compression
+      --     is enabled server-side only in the SEQUENCE path, so enable it here.
+      g_game.enableFeature(GamePacketCompression)
+      -- GameMessageSizeCheck (enabled at >= 841) makes ProtocolGame::onRecv read
+      -- a leading U16 "message size" from the first packet body. The modern
+      -- crystalserver framing has no such inner size field (outer scaled size
+      -- header + checksum + opcode), so it would consume two real content bytes
+      -- and fail with "invalid message size". Disable it for the modern protocol.
+      g_game.disableFeature(GameMessageSizeCheck)
     end
 
     if(version >= 1300) then

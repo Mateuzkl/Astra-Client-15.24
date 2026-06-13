@@ -229,6 +229,7 @@ BattleWindow < MiniWindow
       padding-right: 5
       layout:
         type: verticalBox
+        fit-children: true
 
   UIWidget
     id: miniborder

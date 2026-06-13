@@ -1,6 +1,11 @@
 filename = nil
 loaded = false
 loading = false
+-- Version whose assets are currently loaded. Used to skip redundant reloads:
+-- setClientVersion fires onClientVersionChange -> updateFeatures -> load() on
+-- every boot/login step, and several of those carry the same version. We only
+-- want to reparse the catalog/appearances when the version actually changes.
+loadedVersion = nil
 
 function setFileName(name)
   filename = name
@@ -49,6 +54,16 @@ function load()
   if version == 0 then
     -- Boot path: features/setClientVersion only fires after entergame picks a
     -- server. things.load() during background prefetch has nothing to load yet.
+    loading = false
+    return
+  end
+
+  -- Skip redundant reloads of the same version. updateFeatures() calls load()
+  -- on every onClientVersionChange, and the boot/login sequence sets the same
+  -- version more than once; without this guard the catalog/appearances were
+  -- parsed 2-3x. A genuine version switch (logging into a server of another
+  -- version) changes `version`, so loadedVersion differs and we reload.
+  if loaded and loadedVersion == version then
     loading = false
     return
   end
@@ -113,6 +128,16 @@ function load()
     if errorMessage:len() == 0 and not g_things.loadAppearances(appearancesFile) then
       errorMessage = errorMessage .. tr("Unable to load appearances.dat at '%s'", appearancesFile) .. '\n'
     end
+    -- staticdata.dat (monsters/bosses with bestiary race ids) feeds
+    -- g_things.getMonsterList for the cyclopedia/bestiary/charms mods.
+    -- Non-fatal: without it those windows degrade (no names/outfits) but
+    -- the game itself is unaffected.
+    if errorMessage:len() == 0 and g_things.getStaticDataPath ~= nil and g_creatures.loadStaticData ~= nil then
+      local staticDataFile = g_things.getStaticDataPath(assetsDir)
+      if staticDataFile == nil or staticDataFile == '' or not g_creatures.loadStaticData(staticDataFile) then
+        g_logger.warning(tr("Unable to load staticdata.dat from '%s'; bestiary/cyclopedia data will be incomplete", assetsDir))
+      end
+    end
   else
     -- Legacy .dat / .spr path. Byte-identical to pre-P0.9 behaviour for the
     -- 8.60 default boot: forceLegacy=false, no catalog file at
@@ -138,6 +163,7 @@ function load()
   end
 
   loaded = (errorMessage:len() == 0)
+  loadedVersion = loaded and version or nil
   loading = false
 
   if errorMessage:len() > 0 then

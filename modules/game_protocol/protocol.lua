@@ -1,3 +1,8 @@
+-- LEGACY 12.x protocol module (autoload:false) — must stay UNLOADED on 15.24.
+-- protocolgameparse.cpp dispatches Lua onOpcode handlers BEFORE the C++ switch,
+-- so the read-and-discard parsers below (0xCC, 0xCE, 0xD1, 0xDA, 0xDF, ...)
+-- would shadow the live C++ 15.24 cases with 12.x byte layouts and silently
+-- break those features / desync the message stream.
 local registredOpcodes = nil
 
 local ServerPackets = {
@@ -14,7 +19,6 @@ local ServerPackets = {
 	BestiaryTracker = 0xd9,
 	BestiaryTrackerTab = 0xB9,
 	OpenStashSupply = 0x29,
-	UpdateLootTracker = 0xCF,
 	UpdateTrackerAnalyzer = 0xCC,
 	UpdateSupplyTracker = 0xCE,
 	KillTracker = 0xD1,
@@ -103,10 +107,10 @@ function registerProtocol()
 
   registerOpcode(ServerPackets.TeamFinderList, function(protocol, msg)
 	msg:getU8()
-	local size = msg:getU32() -- List size
+	local size = msg:getU16() -- List size
 	for i = 1, size do
 		msg:getU32() -- Leader Id
-		msg:addString() -- Leader name
+		msg:getString() -- Leader name
 		msg:getU16() -- Min level
 		msg:getU16() -- Max level
 		msg:getU8() -- Vocations flag
@@ -578,11 +582,6 @@ function registerProtocol()
 	end
   end)
 
-  registerOpcode(ServerPackets.UpdateLootTracker, function(protocol, msg)
-	readAddItem(msg)
-	msg:getString() -- Item name
-  end)
-
   registerOpcode(ServerPackets.OpenStashSupply, function(protocol, msg)
     local count = msg:getU16() -- List size
     for i = 1, count do
@@ -677,7 +676,9 @@ function unregisterProtocol()
   if registredOpcodes == nil then
     return
   end
-  for _, opcode in ipairs(registredOpcodes) do
+  -- registredOpcodes is keyed by opcode number (see registerOpcode), so
+  -- iterate keys with pairs; ipairs would yield zero iterations here.
+  for opcode in pairs(registredOpcodes) do
     ProtocolGame.unregisterOpcode(opcode)
   end
   registredOpcodes = nil

@@ -117,11 +117,15 @@ function Message:updateLabel(label, tab)
         if mt then
             label:setColor(mt.color)
         end
-        if self.groupId > 1 then
-            label:setText(self:format())
-        else
-            label:setColorText(self:format())
-        end
+        -- self:format() is plain text (no [color=...] markup), so the whole line must
+        -- take the single label color set above via setColor(mt.color). The Lua
+        -- setColorText shim (corelib/globals.lua) has no native C++ binding and, for
+        -- markup-less text, wraps everything as white [#ffffff] colored fragments,
+        -- which override m_color at draw time (uiwidgettext drawText prefers
+        -- m_drawTextColors). That turned player say/channel speech white -> looked like
+        -- a server message. setText clears m_drawTextColors so mt.color applies, exactly
+        -- like the reference client's addTabText (setText + setColor) path.
+        label:setText(self:format())
     end
 
     if label:getChildCount() > 0 then
