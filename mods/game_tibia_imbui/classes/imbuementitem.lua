@@ -21,8 +21,12 @@ function ImbuementItem.setup(itemId, tier, slots, activeSlots, availableImbuemen
     self.tier = tier
     self.slots = slots
 
+    -- activeSlots is a SPARSE map from C++ (only imbued slots have an entry,
+    -- keyed by 0-based slot index), so `#activeSlots` is unreliable (often 0)
+    -- and the allocated imbuements never get copied. Iterate by the real slot
+    -- count instead, filling empty slots with {}.
     self.activeSlots = {}
-    for i = 0, #activeSlots do
+    for i = 0, slots - 1 do
         self.activeSlots["slot"..i] = activeSlots[i] or {}
     end
     self.availableImbuements = availableImbuements or {}

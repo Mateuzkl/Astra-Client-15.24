@@ -861,7 +861,9 @@ NewMainWindow
     
     ClearImbue
       id: clearImbue
-      main-window-size: 740 502
+      // match selectImbue (740 528) so clicking between an imbued slot
+      // (clearImbue) and an empty slot (selectImbue) doesn't resize the window
+      main-window-size: 740 528
       visible: false
 
     HorizontalSeparator
