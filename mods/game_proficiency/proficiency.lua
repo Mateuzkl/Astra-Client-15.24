@@ -74,6 +74,16 @@ function init()
 		onProficiencyNotification = onProficiencyNotification
 	})
 	connect(g_things, { onLoadDat = loadProficiencyJson })
+
+	-- onLoadDat is emitted while the appearances load at boot, BEFORE this
+	-- sandboxed mod's @onLoad init() runs, so the event has already passed and
+	-- loadProficiencyJson -> createItemCache would never fire, leaving the item
+	-- grid permanently empty. If the dat is already loaded, prime the cache once
+	-- now (mirrors modules/game_offsets/offsets.lua). The window exists by this
+	-- point, so createItemCache's recursiveGetChildById('itemList') is valid.
+	if modules.game_things and modules.game_things.isLoaded and modules.game_things.isLoaded() then
+		loadProficiencyJson()
+	end
 end
 
 function terminate()
@@ -96,6 +106,17 @@ function onGameStart()
 	WeaponProficiency.allProficiencyRequested = false
 	WeaponProficiency.saveWeaponMissing = false
 	WeaponProficiency.firstItemRequested = nil
+
+	-- Rebuild the client-side item grid on login if the boot-time prime was
+	-- skipped (dat not yet loaded when init() ran). Matches the reference
+	-- koliseu-otc proficiency.lua which calls createItemCache() on game start.
+	-- NOTE: check the actual weapon list, not the outer itemList table â€”
+	-- createItemCache always seeds itemList[WeaponsAll]={} + the category keys,
+	-- so the outer table is never empty after a (possibly premature) first run;
+	-- guarding on it would pin an empty grid forever.
+	if isAvailable() and table.empty(WeaponProficiency.itemList[MarketCategory.WeaponsAll]) then
+		loadProficiencyJson()
+	end
 end
 
 function onGameEnd()
@@ -166,28 +187,47 @@ function requestOpenWindow(redirectItem)
 		return
 	end
 
+	-- Self-heal: if the weapon list was never built (boot/login prime skipped
+	-- because the dat wasn't loaded yet, OR built prematurely while empty),
+	-- build it now so the panel is never blank. Check the actual WeaponsAll
+	-- list, not the outer itemList table (which always has the category keys).
+	if table.empty(WeaponProficiency.itemList[MarketCategory.WeaponsAll]) then
+		loadProficiencyJson()
+	end
+
 	local category = "Weapons: All"
 	local targetItemId = nil
 	local leftSlotItem = modules.game_inventory.getLeftSlotItem()
 
+	-- Default open: stay on "Weapons: All" (full 705-weapon list, no vocation
+	-- filter) and merely FOCUS the equipped weapon inside it. Switching the
+	-- category to the equipped weapon's class (e.g. "Fist") would both narrow
+	-- the grid to a near-empty class AND turn on the vocation filter, leaving
+	-- the panel blank. Explicit redirects below still open the clicked class.
 	if leftSlotItem then
-		category = WeaponCategoryToString[getUnknownMarketCategory(leftSlotItem)]
 		targetItemId = leftSlotItem:getId()
 	end
 
 	if redirectItem then
-		category = WeaponCategoryToString[getUnknownMarketCategory(redirectItem)]
-		targetItemId = redirectItem:getId()
+		local resolved = WeaponCategoryToString[getUnknownMarketCategory(redirectItem)]
+		if resolved then
+			category = resolved
+			targetItemId = redirectItem:getId()
+		end
 	end
 
 	if WeaponProficiency.firstItemRequested then
-		category =  WeaponCategoryToString[getUnknownMarketCategory(WeaponProficiency.firstItemRequested)]
-		targetItemId = WeaponProficiency.firstItemRequested:getId()
+		local resolved = WeaponCategoryToString[getUnknownMarketCategory(WeaponProficiency.firstItemRequested)]
+		if resolved then
+			category = resolved
+			targetItemId = WeaponProficiency.firstItemRequested:getId()
+		end
 		WeaponProficiency.firstItemRequested = nil
 	end
 
 	if not WeaponProficiency.allProficiencyRequested then
 		g_game.sendWeaponProficiencyAction(1) -- request all weapons
+		WeaponProficiency.allProficiencyRequested = true
 		WeaponProficiency.firstItemRequested = redirectItem
 	end
 
@@ -204,10 +244,8 @@ function requestOpenWindow(redirectItem)
 	WeaponProficiency:onClearSearch(true)
 	WeaponProficiency:onWeaponCategoryChange(category, nil, targetItemId, focusFirstChild)
 
-	if WeaponProficiency.allProficiencyRequested then
-		g_client.setInputLockWidget(WeaponProficiency.window)
-		show()
-	end
+	g_client.setInputLockWidget(WeaponProficiency.window)
+	show()
 end
 
 function onInspection(inspectType, itemName, item, descriptions)
@@ -229,14 +267,18 @@ function onInspection(inspectType, itemName, item, descriptions)
 	infoWidget:setTooltip(text)
 end
 
-function onWeaponProficiency(itemId, experience, perks, marketCategory)
+function onWeaponProficiency(itemId, experience, perks)
 	WeaponProficiency.cacheList[itemId] = { exp = experience, perks = perks}
-	sortWeaponProficiency(marketCategory)
+	-- The server 0xC4 carries no market category; derive it locally from the thing type.
+	local thingType = g_things.getThingType(itemId, ThingCategoryItem)
+	if thingType then
+		sortWeaponProficiency(thingType:getMarketData().category)
+	end
 	WeaponProficiency:onUpdateSelectedProficiency(itemId)
 end
 
 function onWeaponProficiencyExperience(itemId, experience, hasUnnusedPerk)
-	local thingType = g_things.getThingType(itemId)
+	local thingType = g_things.getThingType(itemId, ThingCategoryItem)
 	if not thingType then
 		return
 	end
@@ -370,6 +412,20 @@ local function updatePercentWidgets(child, currentExperience, _index, itemType)
 	end
 end
 
+-- Weapon categories a vocation can use, keyed by translateWheelVocation()
+-- (1 knight, 2 paladin, 3 sorcerer, 4 druid, 5 monk). The market field
+-- restrict_to_profession is set on only ~45/708 weapons, so the Voc filter must
+-- derive usability from the weapon TYPE (category) like the CIP client does.
+-- Category ids: Axes=17, Clubs=18, DistanceWeapons=19, Swords=20, WandsRods=21,
+-- FistWeapons=27 (see WeaponProficiency.ItemCategory).
+local VocationWeaponCategories = {
+	[1] = { [20] = true, [17] = true, [18] = true, [27] = true }, -- knight
+	[2] = { [19] = true },                                        -- paladin
+	[3] = { [21] = true },                                        -- sorcerer (wands)
+	[4] = { [21] = true },                                        -- druid (rods)
+	[5] = { [27] = true },                                        -- monk
+}
+
 local function checkSortOptions(itemData)
 	local player = g_game.getLocalPlayer()
 	if not player then
@@ -380,14 +436,31 @@ local function checkSortOptions(itemData)
 	local playerVocation = translateWheelVocation(player:getVocation())
 
 	if WeaponProficiency.filters["levelButton"] then
-		if itemData.marketData.requiredLevel > playerLevel then
+		if (itemData.marketData.requiredLevel or 0) > playerLevel then
 			return false
 		end
 	end
 
 	if WeaponProficiency.filters["vocButton"] then
+		-- Primary: weapon type must be usable by the player's vocation.
+		local allowed = VocationWeaponCategories[playerVocation]
+		if allowed and not allowed[itemData.marketData.category] then
+			return false
+		end
+		-- WandsRods (cat 21) share both category AND weapon_type (WAND_ROD) for
+		-- sorcerers and druids, so neither distinguishes them. Tibia item names
+		-- do: sorcerer wands contain "wand", druid rods contain "rod".
+		if itemData.marketData.category == 21 then
+			local name = (itemData.marketData.name or ""):lower()
+			if playerVocation == 3 and name:find("rod") then  -- sorcerer: hide rods
+				return false
+			elseif playerVocation == 4 and name:find("wand") then  -- druid: hide wands
+				return false
+			end
+		end
+		-- Secondary: honour an explicit profession restriction when the item has one.
 		local itemVocation = itemData.marketData.restrictVocation
-		if #itemVocation > 0 and not table.contains(itemVocation, playerVocation) then
+		if type(itemVocation) == 'table' and #itemVocation > 0 and not table.contains(itemVocation, playerVocation) then
 			return false
 		end
 	end
@@ -486,11 +559,17 @@ function WeaponProficiency:createItemCache()
 
 	local types = g_things.getProficiencyThings()
 	local itemList = self.window:recursiveGetChildById("itemList")
+	-- DIAG: how many proficiency things the client knows + how many survive the
+	-- market-category mapping (so we can tell an empty appearances list apart
+	-- from a category-mapping drop). Remove once the grid is confirmed.
+	local diagTotal, diagWithMarket, diagAdded = 0, 0, 0
 	for index, itemType in pairs(types) do
+		diagTotal = diagTotal + 1
 		local item = Item.create(itemType:getId())
 		local marketData = itemType:getMarketData()
 
 		if not table.empty(marketData) then
+			diagWithMarket = diagWithMarket + 1
 			if self.itemList[marketData.category] == nil then
 				marketData.category = getUnknownMarketCategory(itemType)
 				marketData.showAs = itemType:getId()
@@ -502,10 +581,18 @@ function WeaponProficiency:createItemCache()
 			end
 
 			local marketItem = { displayItem = item, thingType = itemType, marketData = marketData }
-			table.insert(self.itemList[marketData.category], marketItem)
-			table.insert(self.itemList[MarketCategory.WeaponsAll], marketItem)
+			-- Guard: an item whose resolved category is not one of the proficiency weapon
+			-- categories (e.g. unmapped weapon type) must be skipped, not crash the load.
+			local categoryList = self.itemList[marketData.category]
+			if categoryList then
+				diagAdded = diagAdded + 1
+				table.insert(categoryList, marketItem)
+				table.insert(self.itemList[MarketCategory.WeaponsAll], marketItem)
+			end
 		end
 	end
+	g_logger.info(string.format("[proficiency.createItemCache] getProficiencyThings=%d withMarket=%d added=%d WeaponsAll=%d",
+		diagTotal, diagWithMarket, diagAdded, #self.itemList[MarketCategory.WeaponsAll]))
 
 	local function sortByName(a, b)
 		local nameA = a.marketData.name:lower()
@@ -606,7 +693,9 @@ end
 function WeaponProficiency:onWeaponCategoryChange(selected, searchText, targetItemId, focusFirstChild, fromOptionChange)
 	local weaponCategory = WeaponStringToCategory[selected]
 	if not weaponCategory then
-		return
+		-- never leave the grid blank for an unknown/nil category: fall back to All
+		selected = "Weapons: All"
+		weaponCategory = WeaponStringToCategory[selected]
 	end
 
 	sortWeaponProficiency(weaponCategory)
@@ -689,6 +778,17 @@ function WeaponProficiency:onWeaponCategoryChange(selected, searchText, targetIt
 		:: continue ::
 	end
 
+	-- DIAG: pinpoint a still-empty grid + filter effect. itemList[cat]=source rows;
+	-- listData=after filters; rendered=cells populated. lvl/filters show whether the
+	-- level filter actually narrows the list (a high-level char passes most weapons).
+	local _p = g_game.getLocalPlayer()
+	g_logger.info(string.format("[proficiency.render] selected=%s cat=%s itemList=%d listData=%d rendered=%d lvl=%s F[lvl=%s voc=%s 1h=%s 2h=%s]",
+		tostring(selected), tostring(weaponCategory),
+		#(self.itemList[weaponCategory] or {}), #self.listData, currentIndex,
+		tostring(_p and _p:getLevel()),
+		tostring(self.filters["levelButton"]), tostring(self.filters["vocButton"]),
+		tostring(self.filters["oneButton"]), tostring(self.filters["twoButton"])))
+
 	for i = currentIndex, self.listCapacity do
         local widget = itemListWidget:recursiveGetChildById("widget_" .. i)
         if widget then
@@ -714,7 +814,9 @@ function WeaponProficiency:onWeaponCategoryChange(selected, searchText, targetIt
 	itemListWidget:setVirtualOffset({x = 0, y = 0})
 
 	itemListWidget.onChildFocusChange = function(_, a)
-		WeaponProficiency:onItemListFocusChange(a.cache)
+		-- focusChild(nil, ...) below clears focus and fires this with a == nil;
+		-- onItemListFocusChange already nil-guards selectedCache
+		WeaponProficiency:onItemListFocusChange(a and a.cache)
 	end
 
 	if targetWidget or focusFirstChild then
@@ -870,7 +972,10 @@ function WeaponProficiency:onUpdateSelectedProficiency(itemId)
 				local bonusDetail = self.bonusDetailPanel:getChildById("bonusDetail_" .. i)
 				local _, bonusTooltip = ProficiencyData:getBonusNameAndTooltip(widget.perkData)
 
-				enableBonusIcon(widget, iconGrey, hightLightWidget, borderWidget, bonusDetail:recursiveGetChildById("bonusName"), bonusTooltip, augmentIconDarker, widget.perkData)
+				-- guard: bonusDetail_<i> may not exist for every perk lane index
+				if bonusDetail then
+					enableBonusIcon(widget, iconGrey, hightLightWidget, borderWidget, bonusDetail:recursiveGetChildById("bonusName"), bonusTooltip, augmentIconDarker, widget.perkData)
+				end
 			end
 		end
 		::continue::
@@ -915,23 +1020,22 @@ end
 
 function WeaponProficiency:toggleFilterOption(filter)
 	local filterId = filter:getId()
-	local oneHandButton = self.window:recursiveGetChildById("oneButton")
-	local twoHandButton = self.window:recursiveGetChildById("twoButton")
+	-- self.filters is the source of truth (these are plain Buttons whose own
+	-- checked state is unreliable; the old `not filter:isChecked()` evaluated
+	-- the state twice and toggled inconsistently, so the filters never applied).
+	local newState = not self.filters[filterId]
 
-	if filterId == "oneButton" then
-		if twoHandButton:isChecked() then
-			twoHandButton:setChecked(false, true) -- (true) ignore lua call
-			self.filters["twoButton"] = false
-		end
-	elseif filterId == "twoButton" then
-		if oneHandButton:isChecked() then
-			oneHandButton:setChecked(false, true)  -- (true) ignore lua call
-			self.filters["oneButton"] = false
-		end
+	-- 1H and 2H are mutually exclusive
+	if newState and filterId == "oneButton" then
+		self.filters["twoButton"] = false
+		self.window:recursiveGetChildById("twoButton"):setChecked(false)
+	elseif newState and filterId == "twoButton" then
+		self.filters["oneButton"] = false
+		self.window:recursiveGetChildById("oneButton"):setChecked(false)
 	end
 
-	self.filters[filterId] = not filter:isChecked()
-	filter:setChecked(not filter:isChecked())
+	self.filters[filterId] = newState
+	filter:setChecked(newState)
 
 	self:onWeaponCategoryChange(self.optionFilter:getCurrentOption().text)
 end
@@ -1023,7 +1127,7 @@ function WeaponProficiency:onResetWeapon(button)
 		closeButton:setText("Close")
 	end
 
-	-- Limpar as informaçoes
+	-- Limpar as informaï¿½oes
 	for i, child in ipairs(self.perkPanel:getChildren()) do
 		local bonusDetail = self.bonusDetailPanel:getChildById("bonusDetail_" .. i)
 
@@ -1113,7 +1217,7 @@ function WeaponProficiency:checkPerksMatch(itemId)
     local cachePerks = self.cacheList[itemId].perks
     local allPerksMatch = true
 
-    -- Se o cache estiver vazio, não bate
+    -- Se o cache estiver vazio, nï¿½o bate
     if table.empty(cachePerks) then
         allPerksMatch = false
     else
@@ -1129,7 +1233,7 @@ function WeaponProficiency:checkPerksMatch(itemId)
                 end
             end
 
-            -- Se o cache possui perk esperado mas não há ativo, ou há ativo a mais que o cache
+            -- Se o cache possui perk esperado mas nï¿½o hï¿½ ativo, ou hï¿½ ativo a mais que o cache
             if expectedPerk and foundActive ~= expectedPerk then
                 allPerksMatch = false
                 break
@@ -1141,7 +1245,7 @@ function WeaponProficiency:checkPerksMatch(itemId)
         end
     end
 
-    -- Habilita ou desabilita os botões
+    -- Habilita ou desabilita os botï¿½es
     local applyButton = self.window:getChildById("apply")
     local okButton = self.window:getChildById("ok")
 	local closeButton = self.window:getChildById("close")

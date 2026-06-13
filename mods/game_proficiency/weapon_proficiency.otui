@@ -428,7 +428,11 @@ NewMainWindow
 
         @onSetup: |
           for i = 0, 44 do
-            g_ui.createWidget("ItemBox", self, "widget_" .. i)
+            -- g_ui.createWidget only takes (style, parent); the id MUST be set
+            -- separately or the render loop's recursiveGetChildById("widget_N")
+            -- finds nothing and the grid stays empty (listData full, rendered=0).
+            local cell = g_ui.createWidget("ItemBox", self)
+            cell:setId("widget_" .. i)
           end
 
       VerticalScrollBar
