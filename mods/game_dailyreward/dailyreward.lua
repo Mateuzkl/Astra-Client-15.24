@@ -16,6 +16,10 @@ function init()
 
   g_ui.importStyle('selectreward')
 
+  if initDailyRewardProtocol then
+    initDailyRewardProtocol()
+  end
+
   connect(g_game, {
     onGameEnd = offline,
     onDailyReward = onDailyReward,
@@ -41,6 +45,10 @@ function terminate()
   disconnect(LocalPlayer, {
     onFreeCapacityChange = onFreeCapacityChange,
   })
+
+  if terminateDailyRewardProtocol then
+    terminateDailyRewardProtocol()
+  end
 
   dailyRewardWindow:destroy()
 
@@ -500,10 +508,14 @@ function onTextChange(widget)
 end
 
 function onResourceBalance(type, value)
-  g_game.getLocalPlayer():setResourceInfo(type, value)
+  -- only setResourceValue is bound (luafunctions_client.cpp); the previous
+  -- setResourceInfo call errored out and the labels below never updated
+  g_game.getLocalPlayer():setResourceValue(type, value)
   if type == 20 then
     instantTokens = value
     dailyRewardWindow.instantAcess.instantLabel:setText(value)
+  elseif type == 21 then
+    jokerTokens = value
   end
 end
 

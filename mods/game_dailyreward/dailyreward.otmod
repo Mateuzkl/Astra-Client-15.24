@@ -3,6 +3,6 @@ Module
   description: Game Daily Reward
   author: ZLukSrT#8740
   sandboxed: false
-  scripts: [ dailyreward, classes/DailyReward ]
+  scripts: [ dailyrewardprotocol, dailyreward, classes/DailyReward ]
   @onLoad: init()
   @onUnload: terminate()
