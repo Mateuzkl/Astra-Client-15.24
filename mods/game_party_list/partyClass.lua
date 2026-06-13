@@ -54,16 +54,43 @@ function PartyClass:setup(windowId, window)
 
   local partyPanel = PartyClass.window:recursiveGetChildById('partyPanel')
   partyPanel:setId("partyPanel_" .. windowId)
+  PartyClass.buttons = {}
   partyPanel.createButton = function()
     local battleButton = g_ui.createWidget('BattleButton', partyPanel)
+    if battleButton.setup then
+      battleButton:setup()
+    end
     battleButton:toggleManaBar(true)
     battleButton:setHeight(26)
     battleButton:hide()
     battleButton.onMouseRelease = modules.game_battle.onBattleButtonMouseRelease
+    table.insert(PartyClass.buttons, battleButton)
+    return battleButton
+  end
+
+  -- The donor client's party panel was a C++ creature panel that populated
+  -- itself and exposed getPartyCreatures(); here it is a plain Lua Panel, so
+  -- partyList.lua's update loop fills the buttons and this shim reads them
+  -- back (helper.lua's friend healing calls it via getUpcomingPartyMembers).
+  -- Intentionally based on the assigned creature, not isVisible(): the loop
+  -- keeps running with the window closed and clears leftovers to nil.
+  partyPanel.getPartyCreatures = function(self)
+    local creatures = {}
+    for _, button in ipairs(PartyClass.buttons) do
+      local creature = button.getCreature and button:getCreature()
+      if creature then
+        table.insert(creatures, creature)
+      end
+    end
+    return creatures
   end
 
   PartyClass.panel = partyPanel
   PartyClass.panel:setIsParty(true)
+
+  for _ = 1, 10 do
+    partyPanel.createButton()
+  end
 
   local _filterPanel = PartyClass.window:recursiveGetChildById('filterPanel')
   local _toggleFilterButton = PartyClass.window:recursiveGetChildById('toggleFilterButton')

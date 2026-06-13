@@ -1,5 +1,8 @@
 partyList = nil
 
+local partyUpdateInterval = 200
+local partyUpdateEvent = nil
+
 function init()
   g_ui.importStyle('partyList')
   partyList = g_ui.createWidget('PartyListWindow', m_interface.getContainerPanel())
@@ -15,9 +18,18 @@ function init()
     onGameEnd = offline,
     onUpdateMana = onUpdateMana,
   })
+
+  if g_game.isOnline() then
+    online()
+  end
 end
 
 function terminate()
+  if partyUpdateEvent then
+    removeEvent(partyUpdateEvent)
+    partyUpdateEvent = nil
+  end
+
   if partyList then
     partyList:destroy()
     partyList = nil
@@ -226,6 +238,183 @@ function move(panel, height, minimized)
   partyList:setHeight(height)
 
   return partyList
+end
+
+-- The donor client's party panel was a C++ creature panel that populated its
+-- own rows; this panel is plain Lua, so we poll like battle.lua's
+-- checkCreatures loop. Runs while online even with the window closed:
+-- helper.lua's friend healing reads panel:getPartyCreatures() regardless of
+-- visibility. Documented limitation: party members the client knows only via
+-- 0x8B full-creature updates but that are not on a known map tile (off-screen)
+-- are not listed.
+local function isFilterChecked(id)
+  local filterPanel = PartyClass.filterPanel
+  if not filterPanel or not filterPanel.buttons then
+    return true
+  end
+
+  local button = filterPanel.buttons:getChildById(id)
+  return not button or button:isChecked()
+end
+
+local function doCreatureFitPartyFilters(creature)
+  -- Players only: a party member's summon arrives as CreatureTypeSummonOwn with
+  -- the master id discarded at parse, so summons can't be attributed to the
+  -- party client-side and the showSummons checkbox stays inert.
+  if not creature:isPlayer() or creature:getHealthPercent() <= 0 then
+    return false
+  end
+
+  -- Includes the local player, matching the real Tibia party list.
+  if not creature.isPartyMember or not creature:isPartyMember() then
+    return false
+  end
+
+  if not isFilterChecked('showPlayers') then
+    return false
+  end
+
+  if creature.getVocation then
+    if not isFilterChecked('showKnights') and creature:isKnight() then
+      return false
+    end
+    if not isFilterChecked('showPaladins') and creature:isPaladin() then
+      return false
+    end
+    if not isFilterChecked('showDruids') and creature:isDruid() then
+      return false
+    end
+    if not isFilterChecked('showSorcerers') and creature:isSorcerer() then
+      return false
+    end
+    if not isFilterChecked('showMonks') and creature:isMonk() then
+      return false
+    end
+  end
+
+  return true
+end
+
+local function sortPartyCreatures(creatures, player)
+  local sortType = PartyClass.sortType[1] or 'byAgeAscending'
+  local descending = sortType:find('Descending') ~= nil
+
+  local kind = 0 -- 0 = age (default)
+  local playerPos
+  if sortType:find('Distance') then
+    kind = 1
+    playerPos = player:getPosition()
+  elseif sortType:find('Hitpoints') then
+    kind = 2
+  elseif sortType:find('Name') then
+    kind = 3
+  end
+
+  local function valueOf(c)
+    if kind == 1 then
+      local pos = c:getPosition()
+      if not pos or not playerPos then
+        return 9999
+      end
+      return math.max(math.abs(playerPos.x - pos.x), math.abs(playerPos.y - pos.y))
+    elseif kind == 2 then
+      return c:getHealthPercent()
+    elseif kind == 3 then
+      return c:getName():lower()
+    end
+    return PartyClass.ages[c:getId()] or 0
+  end
+
+  table.sort(creatures, function(a, b)
+    local valueA, valueB = valueOf(a), valueOf(b)
+    if valueA == valueB then
+      valueA = PartyClass.ages[a:getId()] or 0
+      valueB = PartyClass.ages[b:getId()] or 0
+    end
+
+    if descending then
+      return valueA > valueB
+    end
+    return valueA < valueB
+  end)
+end
+
+local function clearPartyButtons(fromIndex)
+  for i = fromIndex or 1, #(PartyClass.buttons or {}) do
+    local button = PartyClass.buttons[i]
+    if button.setCreature then
+      button:setCreature(nil)
+    else
+      button.creature = nil
+    end
+    button:hide()
+    button:setOn(false)
+  end
+end
+
+function checkPartyMembers()
+  if not PartyClass.panel or not PartyClass.buttons then
+    return
+  end
+
+  local localPlayer = g_game.getLocalPlayer()
+  if not g_game.isOnline() or not localPlayer or not localPlayer:isPartyMember() then
+    clearPartyButtons()
+    return
+  end
+
+  local creatures = {}
+  for _, creature in ipairs(g_map.getSpectators(localPlayer:getPosition(), true)) do
+    if doCreatureFitPartyFilters(creature) then
+      if not PartyClass.ages[creature:getId()] then
+        if PartyClass.ageNumber > 1000 then
+          PartyClass.ageNumber = 1
+          PartyClass.ages = {}
+        end
+        PartyClass.ages[creature:getId()] = PartyClass.ageNumber
+        PartyClass.ageNumber = PartyClass.ageNumber + 1
+      end
+      table.insert(creatures, creature)
+    end
+  end
+
+  sortPartyCreatures(creatures, localPlayer)
+
+  while #PartyClass.buttons < #creatures do
+    PartyClass.panel.createButton()
+  end
+
+  for i = 1, #creatures do
+    local button = PartyClass.buttons[i]
+    -- creatureSetup refreshes HP/mana/skull/emblem every tick, which also
+    -- covers 0x8C health updates and 0x91 leader shield changes.
+    button:creatureSetup(creatures[i])
+    button:show()
+    button:setOn(true)
+  end
+
+  clearPartyButtons(#creatures + 1)
+end
+
+function updatePartyList()
+  if partyUpdateEvent then
+    removeEvent(partyUpdateEvent)
+  end
+
+  partyUpdateEvent = scheduleEvent(updatePartyList, partyUpdateInterval)
+  checkPartyMembers()
+end
+
+function online()
+  updatePartyList()
+end
+
+function offline()
+  if partyUpdateEvent then
+    removeEvent(partyUpdateEvent)
+    partyUpdateEvent = nil
+  end
+  clearPartyButtons()
 end
 
 function getUpcomingPartyMembers()

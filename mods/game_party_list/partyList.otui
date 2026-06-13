@@ -68,13 +68,15 @@ PartyListWindow < MiniWindow
       anchors.top: parent.top
       anchors.horizontalCenter: parent.horizontalCenter
       height: 50
-      width: 150
+      // 4 columns => the 7 filter icons wrap to 4 on top + 3 on the bottom row;
+      // width = 4*20 (PartyIcon) + 3*6 (cell-spacing) = 98
+      width: 98
       margin-left: 2
       layout:
         type: grid
         flow: true
         cell-spacing: 6
-        num-columns: 8
+        num-columns: 4
 
       PartyPlayers
         id: showPlayers
@@ -178,6 +180,7 @@ PartyListWindow < MiniWindow
       padding-right: 5
       layout:
         type: verticalBox
+        fit-children: true
 
   UIWidget
     id: miniborder
