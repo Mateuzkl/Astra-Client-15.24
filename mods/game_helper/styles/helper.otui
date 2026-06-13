@@ -2,7 +2,7 @@ HelperTracker < MiniWindow
   id: helperMiniWindow
   !text: tr('Helper Stats')
   icon: /images/icons/icon-healing
-  height: 145
+  height: 168
   &type: 'helper'
   MiniWindowContents
     id: contentsPanel
@@ -128,6 +128,37 @@ HelperTracker < MiniWindow
       margin-left: 5
       font: $var-cip-font
       color: $var-text-cip-color-green
+      text-auto-resize: true
+      tooltip-delayed: true
+
+    Label
+      id: cavebotLabel
+      anchors.top: prev.bottom
+      anchors.left: parent.left
+      margin-top: 3
+      !text: tr('Cavebot')
+      font: $var-cip-font
+      color: $var-text-cip-color
+      text-auto-resize: true
+    UIWidget
+      id: hierarchy
+      size: 7 7
+      anchors.top: prev.bottom
+      anchors.left: parent.left
+      margin-top: 5
+      margin-left: 5
+      image-source: /images/ui/hierarchy-branch
+      phantom: true
+    UIWidget
+      id: cavebotTrackerStatus
+      size: 155 15
+      anchors.top: prev.top
+      anchors.left: prev.right
+      !text: tr('Inactive')
+      margin-top: -3
+      margin-left: 5
+      font: $var-cip-font
+      color: $var-text-cip-store-red
       text-auto-resize: true
       tooltip-delayed: true
 
@@ -1426,6 +1457,323 @@ ToolsPanel < Panel
         $hover !disabled:
           color: #c0c0c0
 
+  // Mage-only magic-shield suite (utamo vita / exana vita / shield potion).
+  // Hidden by default; setupMageShield() shows it for sorcerers & druids.
+  Panel
+    id: mageShieldPanel
+    height: 100
+    anchors.top: toolsPanel.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 6
+    image-source: /images/ui/t2pixel-up-frame-borderimage
+    image-border: 18
+    visible: false
+
+    Label
+      id: mageShieldTitle
+      anchors.top: parent.top
+      anchors.horizontalCenter: parent.horizontalCenter
+      margin-top: 1
+      !text: tr('Magic Shield (Mage)')
+      font: $var-cip-font
+      color: $var-text-cip-color-grey
+      text-auto-resize: true
+
+    CheckBox
+      id: msUtamoEnable
+      width: 92
+      anchors.top: mageShieldTitle.bottom
+      anchors.left: parent.left
+      margin-top: 6
+      margin-left: 6
+      !text: tr('Utamo Vita')
+      font: $var-cip-font
+      color: $var-text-cip-color
+      text-offset: 13 -3
+      change-cursor-image: false
+      @onCheckChange: mageShieldOnCheck('utamo', self:isChecked())
+    SpinBox
+      id: msUtamoLife
+      size: 50 20
+      anchors.verticalCenter: prev.verticalCenter
+      anchors.left: prev.right
+      margin-left: 4
+      minimum: 0
+      maximum: 99
+      !tooltip: tr('Cast utamo vita when your life is at or below this %%')
+      @onValueChange: mageShieldOnLife('utamo', self:getValue())
+    Button
+      id: msUtamoKey
+      size: 80 20
+      anchors.verticalCenter: prev.verticalCenter
+      anchors.left: prev.right
+      margin-left: 4
+      !text: tr('Set Key')
+      @onClick: mageSetKey('utamo')
+    Button
+      id: msUtamoSettings
+      size: 64 20
+      anchors.verticalCenter: prev.verticalCenter
+      anchors.left: prev.right
+      margin-left: 4
+      !text: tr('Settings')
+      @onClick: openUtamoSettings()
+
+    CheckBox
+      id: msExanaEnable
+      width: 92
+      anchors.top: msUtamoEnable.bottom
+      anchors.left: parent.left
+      margin-top: 8
+      margin-left: 6
+      !text: tr('Exana Vita')
+      font: $var-cip-font
+      color: $var-text-cip-color
+      text-offset: 13 -3
+      change-cursor-image: false
+      @onCheckChange: mageShieldOnCheck('exana', self:isChecked())
+    SpinBox
+      id: msExanaLife
+      size: 50 20
+      anchors.verticalCenter: prev.verticalCenter
+      anchors.left: prev.right
+      margin-left: 4
+      minimum: 0
+      maximum: 99
+      !tooltip: tr('Cast exana vita when your life is above this %% (and shield is up)')
+      @onValueChange: mageShieldOnLife('exana', self:getValue())
+    Button
+      id: msExanaKey
+      size: 80 20
+      anchors.verticalCenter: prev.verticalCenter
+      anchors.left: prev.right
+      margin-left: 4
+      !text: tr('Set Key')
+      @onClick: mageSetKey('exana')
+
+    CheckBox
+      id: msPotionEnable
+      width: 110
+      anchors.top: msExanaEnable.bottom
+      anchors.left: parent.left
+      margin-top: 8
+      margin-left: 6
+      !text: tr('Shield Potion')
+      font: $var-cip-font
+      color: $var-text-cip-color
+      text-offset: 13 -3
+      change-cursor-image: false
+      @onCheckChange: mageShieldOnCheck('potion', self:isChecked())
+    Button
+      id: msPotionSettings
+      size: 64 20
+      anchors.verticalCenter: prev.verticalCenter
+      anchors.left: prev.right
+      margin-left: 4
+      !text: tr('Settings')
+      @onClick: openPotionSettings()
+
+// Utamo Vita settings: renew-shield threshold.
+MageShieldSettings < MainWindow
+  id: mageShieldSettings
+  size: 320 150
+  !text: tr('Utamo Vita Settings')
+  font: $var-cip-font
+
+  CheckBox
+    id: renewCheck
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 6
+    height: 18
+    !text: tr('Renew the shield when its capacity is low')
+    font: $var-cip-font
+
+  SpinBox
+    id: renewBox
+    anchors.top: renewCheck.bottom
+    anchors.left: parent.left
+    margin-top: 10
+    width: 70
+    minimum: 1
+    maximum: 99
+  Label
+    anchors.left: renewBox.right
+    anchors.verticalCenter: renewBox.verticalCenter
+    margin-left: 6
+    !text: tr('%% of max shield capacity (recast below this)')
+    font: $var-cip-font
+
+  Button
+    id: cancelButton
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    size: 60 22
+    !text: tr('Cancel')
+  Button
+    id: saveButton
+    anchors.right: cancelButton.left
+    anchors.bottom: parent.bottom
+    margin-right: 6
+    size: 60 22
+    !text: tr('Save')
+
+// Magic Shield Potion settings: use conditions.
+MageShieldPotionSettings < MainWindow
+  id: mageShieldPotionSettings
+  size: 340 248
+  !text: tr('Magic Shield Potion Settings')
+  font: $var-cip-font
+
+  SpinBox
+    id: itemBox
+    anchors.top: parent.top
+    anchors.right: parent.right
+    margin-top: 4
+    width: 90
+    minimum: 0
+    maximum: 99999
+  Label
+    anchors.left: parent.left
+    anchors.verticalCenter: itemBox.verticalCenter
+    !text: tr('Potion item id')
+    font: $var-cip-font
+
+  SpinBox
+    id: lifeBox
+    anchors.top: itemBox.bottom
+    anchors.right: parent.right
+    margin-top: 6
+    width: 70
+    minimum: 0
+    maximum: 99
+  Label
+    anchors.left: parent.left
+    anchors.verticalCenter: lifeBox.verticalCenter
+    !text: tr('Use if life below (%%, 0 = off)')
+    font: $var-cip-font
+
+  SpinBox
+    id: shieldBox
+    anchors.top: lifeBox.bottom
+    anchors.right: parent.right
+    margin-top: 6
+    width: 70
+    minimum: 0
+    maximum: 99
+  Label
+    anchors.left: parent.left
+    anchors.verticalCenter: shieldBox.verticalCenter
+    !text: tr('Use if shield below (%%, 0 = off)')
+    font: $var-cip-font
+
+  CheckBox
+    id: vitaCdCheck
+    anchors.top: shieldBox.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 10
+    height: 18
+    !text: tr('Use only when Utamo Vita is on cooldown')
+    font: $var-cip-font
+
+  CheckBox
+    id: fearCheck
+    anchors.top: vitaCdCheck.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 6
+    height: 18
+    !text: tr('Force use when feared')
+    font: $var-cip-font
+
+  Button
+    id: cancelButton
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    size: 60 22
+    !text: tr('Cancel')
+  Button
+    id: saveButton
+    anchors.right: cancelButton.left
+    anchors.bottom: parent.bottom
+    margin-right: 6
+    size: 60 22
+    !text: tr('Save')
+
+// Key-capture window for the Utamo/Exana toggle hotkeys (mirrors CavebotHotkeyWindow).
+MageHotkeyWindow < MainWindow
+  id: mageHotkeyWindow
+  size: 360 188
+  !text: tr('Bind Magic Shield Hotkey')
+  font: $var-cip-font
+
+  FlatLabel
+    id: display
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+    height: 33
+    margin-top: 8
+    text-align: center
+    font: $var-cip-font
+    color: $var-text-cip-color
+
+  Label
+    id: desc
+    anchors.top: prev.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 10
+    text-align: center
+    text-wrap: true
+    !text: tr('Press a key or combo, then click Ok to bind it to toggle this function.\nClear removes the hotkey.')
+    font: $var-cip-font
+    color: $var-text-cip-color
+
+  Label
+    id: warning
+    anchors.top: prev.bottom
+    anchors.horizontalCenter: parent.horizontalCenter
+    margin-top: 8
+    text-auto-resize: true
+    text-align: center
+    !text: tr('This hotkey is already in use by another action.')
+    font: $var-cip-font
+    color: #f75f5f
+    visible: false
+
+  HorizontalSeparator
+    anchors.top: prev.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 10
+
+  Button
+    id: buttonClose
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    size: 50 21
+    !text: tr('Close')
+
+  Button
+    id: buttonClear
+    anchors.right: prev.left
+    anchors.bottom: parent.bottom
+    margin-right: 5
+    size: 50 21
+    !text: tr('Clear')
+
+  Button
+    id: buttonOk
+    anchors.right: prev.left
+    anchors.bottom: parent.bottom
+    margin-right: 5
+    size: 50 21
+    !text: tr('Ok')
+
 ShooterPanel < Panel
   anchors.fill: parent
   Panel
@@ -2469,7 +2817,7 @@ ShooterPanel < Panel
       margin-left: 10
       margin-top: 1
       image-source: /images/skin/show-gui-help-grey
-      !tooltip: tr('Choose a hotkey to toggle RTCaster on/off.')
+      !tooltip: tr('Choose a hotkey to toggle Caster on/off.')
     Button
       id: setKeyDisableButton
       height: 15
@@ -2490,7 +2838,7 @@ ShooterPanel < Panel
       margin-left: 10
       margin-top: 1
       image-source: /images/skin/show-gui-help-grey
-      !tooltip: tr('Choose a hotkey to toggle RTCaster and Target on/off.')
+      !tooltip: tr('Choose a hotkey to toggle Caster and Target on/off.')
       
 NewHeadlessWindow
   id: helperWindow
@@ -2526,13 +2874,13 @@ NewHeadlessWindow
         margin-left: 1
         margin-top: 1
         image-source: /images/ui/helper
-        image-clip: 0 102 34 34
+        image-clip: 0 170 34 34
         $hover !checked:
           size: 34 34
-          image-clip: 0 102 34 34
+          image-clip: 0 170 34 34
         $pressed:
           size: 34 34
-          image-clip: 0 136 34 34
+          image-clip: 0 204 34 34
         $checked:
           size: 134 34
           image-clip: 0 0 134 34
@@ -2545,13 +2893,13 @@ NewHeadlessWindow
         margin-left: 1
         margin-top: 1
         image-source: /images/ui/helper
-        image-clip: 34 102 34 34
+        image-clip: 34 170 34 34
         $hover !checked:
           size: 34 34
-          image-clip: 34 102 34 34
+          image-clip: 34 170 34 34
         $pressed:
           size: 34 34
-          image-clip: 34 136 34 34
+          image-clip: 34 204 34 34
         $checked:
           size: 134 34
           image-clip: 0 34 134 34
@@ -2564,19 +2912,57 @@ NewHeadlessWindow
         margin-left: 1
         margin-top: 1
         image-source: /images/ui/helper
-        image-clip: 68 102 34 34
+        image-clip: 68 170 34 34
         visible: true
         enabled: true
         $hover !checked:
           size: 34 34
-          image-clip: 68 102 34 34
+          image-clip: 68 170 34 34
         $pressed:
           size: 34 34
-          image-clip: 68 136 34 34
+          image-clip: 68 204 34 34
         $checked:
           size: 134 34
           image-clip: 0 68 134 34
         @onClick: loadMenu('shooterMenu')
+      Button
+        id: cavebotMenu
+        anchors.top: parent.top
+        anchors.left: prev.right
+        size: 34 34
+        margin-left: 1
+        margin-top: 1
+        image-source: /images/ui/helper
+        image-clip: 102 170 34 34
+        $hover !checked:
+          size: 34 34
+          image-clip: 102 170 34 34
+        $pressed:
+          size: 34 34
+          image-clip: 102 204 34 34
+        $checked:
+          size: 134 34
+          image-clip: 0 102 134 34
+        @onClick: loadMenu('cavebotMenu')
+      Button
+        id: scriptingMenu
+        anchors.top: parent.top
+        anchors.left: prev.right
+        size: 34 34
+        margin-left: 1
+        margin-top: 1
+        image-source: /images/ui/helper
+        image-clip: 136 170 34 34
+        $hover !checked:
+          size: 34 34
+          image-clip: 136 170 34 34
+        $pressed:
+          size: 34 34
+          image-clip: 136 204 34 34
+        $checked:
+          size: 134 34
+          image-clip: 0 136 134 34
+        @onClick: loadMenu('scriptingMenu')
 
     HealingPanel
       id: healingPanel

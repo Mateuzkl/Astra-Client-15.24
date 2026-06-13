@@ -19,7 +19,8 @@ local autoTargetModes = {
   ["E"] = 5,
   ["F"] = 6,
   ["G"] = 7,
-  ["H"] = 8
+  ["H"] = 8,
+  ["I"] = 9
 }
 
 local function deepCopy(original)
@@ -36,21 +37,21 @@ end
 
 local defaultShooterProfile = {
   spells = {
-    {id = 0, percent = 0, creatures = 1, priority = 1, forceCast = false, selfCast = false},
-    {id = 0, percent = 0, creatures = 1, priority = 2, forceCast = false, selfCast = false},
-    {id = 0, percent = 0, creatures = 1, priority = 3, forceCast = false, selfCast = false},
-    {id = 0, percent = 0, creatures = 1, priority = 4, forceCast = false, selfCast = false},
-    {id = 0, percent = 0, creatures = 1, priority = 5, forceCast = false, selfCast = false},
+    { id = 0, percent = 0, creatures = 1, priority = 1, forceCast = false, selfCast = false },
+    { id = 0, percent = 0, creatures = 1, priority = 2, forceCast = false, selfCast = false },
+    { id = 0, percent = 0, creatures = 1, priority = 3, forceCast = false, selfCast = false },
+    { id = 0, percent = 0, creatures = 1, priority = 4, forceCast = false, selfCast = false },
+    { id = 0, percent = 0, creatures = 1, priority = 5, forceCast = false, selfCast = false },
   },
   runes = {
-    {id = 0, creatures = 1, priority = 6, forceCast = false},
-    {id = 0, creatures = 1, priority = 7, forceCast = false},
+    { id = 0, creatures = 1, priority = 6, forceCast = false },
+    { id = 0, creatures = 1, priority = 7, forceCast = false },
   },
   autoTargetMode = autoTargetModes['F']
 }
 
-local foodConfig = {id = "food", exhaustion = 1000}
-local potionConfig = {id = "potion", exhaustion = 1000}
+local foodConfig = { id = "food", exhaustion = 1000 }
+local potionConfig = { id = "potion", exhaustion = 1000 }
 
 local helperEvents = {
   helperCycleEvent = nil,
@@ -65,7 +66,8 @@ local timers = {
   checkAutoHaste = 0,
   checkMagicShooter = 0,
   checkAutoTarget = 0,
-  checkExerciseEvent = 0
+  checkExerciseEvent = 0,
+  checkMageShield = 0
 }
 
 local eventTable = {
@@ -76,7 +78,8 @@ local eventTable = {
   checkAutoHaste = { interval = 500, action = nil },
   checkMagicShooter = { interval = 100, action = nil },
   checkAutoTarget = { interval = 250, action = nil },
-  checkExerciseEvent = { interval = 10000, action = nil }
+  checkExerciseEvent = { interval = 10000, action = nil },
+  checkMageShield = { interval = 200, action = nil }
 }
 
 local spellsCooldown = {}
@@ -98,8 +101,14 @@ local function positionCompare(position1, position2)
 end
 
 local function playerHasSpell(player, spellId)
+  -- LocalPlayer:getSpells is NOT bound to Lua on this 15.24 build. Check the method
+  -- EXISTS (cheap field read) instead of pcall-ing an erroring call every cycle:
+  -- the shooter calls this per spell, ~20x/s, and generating a Lua error object each
+  -- time was a real per-frame cost in a busy hunt. If unavailable, assume known (the
+  -- server rejects unknown casts anyway). Proper fix = bind getSpells in C++.
+  if not player or not player.getSpells then return true end
   local spells = player:getSpells()
-  return table.contains(spells, spellId)
+  return type(spells) == 'table' and table.contains(spells, spellId)
 end
 
 local function numberToOrdinal(n)
@@ -145,23 +154,23 @@ helperConfig = {
     { id = 0, percent = 50, priority = 0 }
   },
   training = {
-    {id = 0, percent = 0, enabled = false }
+    { id = 0, percent = 0, enabled = false }
   },
   haste = {
-    {id = 0, enabled = false, safecast = false }
+    { id = 0, enabled = false, safecast = false }
   },
   friendhealing = {
-    {name = "", percent = 0, enabled = false },
-    {name = "", percent = 0, enabled = false }
+    { name = "", percent = 0, enabled = false },
+    { name = "", percent = 0, enabled = false }
   },
   gransiohealing = {
-    {name = "", percent = 0, enabled = false },
-    {name = "", percent = 0, enabled = false }
+    { name = "", percent = 0, enabled = false },
+    { name = "", percent = 0, enabled = false }
   },
 
   shooterProfiles = {
     ["Default"] = defaultShooterProfile
-  }, 
+  },
   selectedShooterProfile = "Default",
 
   terms = false,
@@ -210,21 +219,21 @@ local bothCastTypeSpells = {
 
 
 local ignoredSpellsIds = {
-  [144] = true,  -- Cure Bleeding
-  [146] = true,  -- Cure Electrification
-  [29]  = true,  -- Cure Poison
-  [145] = true,  -- Cure Burning
-  [147] = true,   -- Cure Curse
-  [160] = true,   -- Utura Gran
-  [159] = true,   -- Utura
-  [128] = true,   -- Utura Mas Sio
-  [141] = true,   -- utori alguma coisa
-  [138] = true,   -- utori alguma coisa
-  [139] = true,   -- utori alguma coisa
-  [140] = true,   -- utori alguma coisa
-  [143] = true,   -- utori alguma coisa
-  [142] = true,   -- utori alguma coisa
-  [84]  =  true,
+  [144] = true, -- Cure Bleeding
+  [146] = true, -- Cure Electrification
+  [29]  = true, -- Cure Poison
+  [145] = true, -- Cure Burning
+  [147] = true, -- Cure Curse
+  [160] = true, -- Utura Gran
+  [159] = true, -- Utura
+  [128] = true, -- Utura Mas Sio
+  [141] = true, -- utori alguma coisa
+  [138] = true, -- utori alguma coisa
+  [139] = true, -- utori alguma coisa
+  [140] = true, -- utori alguma coisa
+  [143] = true, -- utori alguma coisa
+  [142] = true, -- utori alguma coisa
+  [84]  = true,
   [242] = true,
   [297] = true,
   [274] = true,
@@ -234,76 +243,76 @@ local ignoredSpellsIds = {
 }
 
 local ignoredTrainingSpells = {
-  [144] = true,  -- Cure Bleeding
-  [146] = true,  -- Cure Electrification
-  [29]  = true,  -- Cure Poison
-  [145] = true,  -- Cure Burning
-  [147] = true,   -- Cure Curse
-  [160] = true,   -- Utura Gran
-  [159] = true,   -- Utura
-  [128] = true,   -- Utura Mas Sio
-  [141] = true,   -- utori alguma coisa
-  [138] = true,   -- utori alguma coisa
-  [139] = true,   -- utori alguma coisa
-  [140] = true,   -- utori alguma coisa
-  [143] = true,   -- utori alguma coisa
-  [142] = true,   -- utori alguma coisa
+  [144] = true, -- Cure Bleeding
+  [146] = true, -- Cure Electrification
+  [29]  = true, -- Cure Poison
+  [145] = true, -- Cure Burning
+  [147] = true, -- Cure Curse
+  [160] = true, -- Utura Gran
+  [159] = true, -- Utura
+  [128] = true, -- Utura Mas Sio
+  [141] = true, -- utori alguma coisa
+  [138] = true, -- utori alguma coisa
+  [139] = true, -- utori alguma coisa
+  [140] = true, -- utori alguma coisa
+  [143] = true, -- utori alguma coisa
+  [142] = true, -- utori alguma coisa
   [170] = true,
   [123] = true,
   [239] = true,
   [241] = true,
   [242] = true,
   [125] = true,
-  [82] = true,
-  [84] = true,
-  [1] = true,
-  [2] = true,
+  [82]  = true,
+  [84]  = true,
+  [1]   = true,
+  [2]   = true,
   [158] = true,
   [172] = true,
-  [36] = true,
+  [36]  = true,
   [277] = true,
 }
 
 local potionWhitelist = {
-  {id = 268, name = "Mana Potion", type = "mana"},
-  {id = 237, name = "Strong Mana Potion", type = "mana"},
-  {id = 238, name = "Great Mana Potion", type = "mana"},
-  {id = 23373, name = "Ultimate Mana Potion", type = "mana"},
-  {id = 266, name = "Health Potion", type = "health"},
-  {id = 236, name = "Strong Health Potion", type = "health"},
-  {id = 239, name = "Great Health Potion", type = "health"},
-  {id = 7643, name = "Ultimate Health Potion", type = "health"},
-  {id = 23375, name = "Supreme Health Potion", type = "health"},
-  {id = 7642, name = "Great Spirit Potion", type = "health"},
-  {id = 23374, name = "Ultimate Spirit Potion", type = "health"},
-  {id = 7876, name = "Small Health Potion", type = "health"}
+  { id = 268,   name = "Mana Potion",            type = "mana" },
+  { id = 237,   name = "Strong Mana Potion",     type = "mana" },
+  { id = 238,   name = "Great Mana Potion",      type = "mana" },
+  { id = 23373, name = "Ultimate Mana Potion",   type = "mana" },
+  { id = 266,   name = "Health Potion",          type = "health" },
+  { id = 236,   name = "Strong Health Potion",   type = "health" },
+  { id = 239,   name = "Great Health Potion",    type = "health" },
+  { id = 7643,  name = "Ultimate Health Potion", type = "health" },
+  { id = 23375, name = "Supreme Health Potion",  type = "health" },
+  { id = 7642,  name = "Great Spirit Potion",    type = "health" },
+  { id = 23374, name = "Ultimate Spirit Potion", type = "health" },
+  { id = 7876,  name = "Small Health Potion",    type = "health" }
 }
 
 local hasteWhiteList = {
-  [9] = {6, 39}, -- em
-  [8] = {6, 131}, -- ek
-  [7] = {6, 134}, -- rp
-  [6] = {6, 39}, -- ed
-  [5] = {6, 39}, -- ms
-  [0] = {}, -- rook
+  [9] = { 6, 39 }, -- em
+  [8] = { 6, 131 }, -- ek
+  [7] = { 6, 134 }, -- rp
+  [6] = { 6, 39 }, -- ed
+  [5] = { 6, 39 }, -- ms
+  [0] = {},       -- rook
 }
 
 
 function init()
   connect(LocalPlayer, {
     onPartyMembersChange = onPartyMembersChange,
-	})
+  })
 
   connect(g_game, {
-		onGameStart = online,
-		onGameEnd = offline,
+    onGameStart = online,
+    onGameEnd = offline,
     onSpellCooldown = onSpellCooldown,
     onSpellGroupCooldown = onSpellGroupCooldown,
     onUpdateSpellArea = onUpdateSpellArea,
     onPartyDataUpdate = onPartyDataUpdate,
     onPartyDataClear = onPartyDataClear,
     onMultiUseCooldown = onMultiUseCooldown,
-	})
+  })
 
   connect(Creature, {
     onAppear = onCreatureAppear,
@@ -312,7 +321,7 @@ function init()
 
   helper = g_ui.displayUI('styles/helper')
   helperTracker = g_ui.createWidget('HelperTracker')
-  helperRules =  g_ui.createWidget('HelperRules', rootWidget)
+  helperRules = g_ui.createWidget('HelperRules', rootWidget)
   helperRules:hide()
   helperTracker:setup()
   helperTracker:close()
@@ -351,35 +360,48 @@ function init()
 
   botStatus()
 
+  if Cavebot then
+    local ok, err = pcall(Cavebot.init, helper)
+    if not ok then consoleln('[Cavebot] init error: ' .. tostring(err)) end
+  end
+
+  if Scripting then
+    local ok, err = pcall(Scripting.init, helper)
+    if not ok then consoleln('[Scripting] init error: ' .. tostring(err)) end
+  end
+
   mouseGrabberWidget = g_ui.createWidget('UIWidget')
   mouseGrabberWidget:setVisible(false)
   mouseGrabberWidget:setFocusable(false)
 
   if g_game.isOnline() then
-		online()
-	end
+    online()
+  end
 end
 
 function terminate()
   disconnect(LocalPlayer, {
     onPartyMembersChange = onPartyMembersChange,
-	})
+  })
 
   disconnect(g_game, {
-		onGameStart = online,
-		onGameEnd = offline,
+    onGameStart = online,
+    onGameEnd = offline,
     onSpellCooldown = onSpellCooldown,
     onSpellGroupCooldown = onSpellGroupCooldown,
     onUpdateSpellArea = onUpdateSpellArea,
     onPartyDataUpdate = onPartyDataUpdate,
     onPartyDataClear = onPartyDataClear,
     onMultiUseCooldown = onMultiUseCooldown,
-	})
+  })
 
   disconnect(Creature, {
     onAppear = onCreatureAppear,
     onDisappear = onCreatureDisappear,
   })
+
+  if Cavebot then Cavebot.terminate() end
+  if Scripting then Scripting.terminate() end
 
   if helper then
     g_keyboard.unbindKeyPress('Tab', toggleNextWindow, helper)
@@ -431,14 +453,232 @@ function helperCycleEvent()
   end
 end
 
+-- ===========================================================================
+-- Magic Shield suite (MAGE ONLY): utamo vita / exana vita / magic shield potion.
+-- Gated by the master helper toggle (hotkeyHelperStatus) + each function's own
+-- enabled flag. Only mounted/shown for sorcerers & druids. The on-map combat is
+-- unaffected; this just casts the support spells / uses the potion on conditions.
+-- ===========================================================================
+local MAGIC_SHIELD_SPELL_ID = 44   -- "Magic Shield" (utamo vita)
+local MAGIC_SHIELD_GROUP    = 3    -- support-spell cooldown group (utamo/exana vita)
+local mageShieldIsMage   = false   -- cached vocation gate
+local mageShieldPanel    = nil     -- the tools sub-panel (nil until mounted)
+local mageShieldBound    = {}      -- which -> bound key combo (to unbind on rebind)
+local mageShieldNextAction = 0     -- throttle so we never spam casts/potions
+
+local function msChild(id) return mageShieldPanel and mageShieldPanel:recursiveGetChildById(id) or nil end
+
+-- The loop (eventTable.checkMageShield, ~200ms).
+local function checkMageShield()
+  if not hotkeyHelperStatus or not mageShieldIsMage then return end
+  local p = g_game.getLocalPlayer()
+  if not p or not g_game.isOnline() then return end
+  local ms = helperConfig and helperConfig.mageShield
+  if not ms then return end
+
+  local now = g_clock.millis()
+  if now < mageShieldNextAction then return end
+
+  local maxhp = p:getMaxHealth()
+  if maxhp <= 0 then return end
+  local lifePct  = p:getHealth() / maxhp * 100
+  local shieldRem = (p.getManaShield and p:getManaShield()) or 0
+  local shieldMax = (p.getMaxManaShield and p:getMaxManaShield()) or 0
+  local shieldActive = shieldRem > 0
+  local shieldPct = (shieldMax > 0) and (shieldRem / shieldMax * 100) or 0
+  local vitaOnCd  = getSpellCooldown(MAGIC_SHIELD_SPELL_ID) > now or getGroupSpellCooldown(MAGIC_SHIELD_GROUP) > now
+
+  -- 1) Utamo Vita: keep the shield up (cast on low life, or renew when shield low).
+  local u = ms.utamo
+  if u and u.enabled and not vitaOnCd and p:getMana() >= 50 then
+    local cast = lifePct <= (u.life or 0)
+    if not cast and u.renew and shieldActive and shieldPct < (u.renewShield or 0) then cast = true end
+    if cast then
+      g_game.talk('utamo vita')
+      mageShieldNextAction = now + 1000
+      return
+    end
+  end
+
+  -- 2) Exana Vita: drop the shield when safe (life above threshold AND shield up).
+  local e = ms.exana
+  if e and e.enabled and shieldActive and lifePct > (e.life or 100) and not vitaOnCd then
+    g_game.talk('exana vita')
+    mageShieldNextAction = now + 1000
+    return
+  end
+
+  -- 3) Magic Shield Potion: gated by life / shield% / fear, optionally only on vita CD.
+  local po = ms.potion
+  if po and po.enabled and po.itemId and po.itemId > 0 then
+    local feared = (PlayerStates and PlayerStates.Feared and p.hasState and p:hasState(PlayerStates.Feared)) or false
+    local trigger = false
+    if po.forceOnFear and feared then trigger = true end
+    if po.life > 0 and lifePct <= po.life then trigger = true end
+    if po.shield > 0 and shieldActive and shieldPct < po.shield then trigger = true end
+    if trigger and not (po.onlyVitaCd and not vitaOnCd) then
+      g_game.useInventoryItem(po.itemId)
+      mageShieldNextAction = now + 1000
+      return
+    end
+  end
+end
+eventTable.checkMageShield.action = checkMageShield
+
+-- Enable/disable toggles (also driven by the hotkeys). Update the checkbox + save.
+function toggleUtamoEnabled()
+  local u = helperConfig.mageShield.utamo; u.enabled = not u.enabled
+  local cb = msChild('msUtamoEnable'); if cb then cb:setChecked(u.enabled) end
+  saveSettings()
+end
+function toggleExanaEnabled()
+  local e = helperConfig.mageShield.exana; e.enabled = not e.enabled
+  local cb = msChild('msExanaEnable'); if cb then cb:setChecked(e.enabled) end
+  saveSettings()
+end
+
+-- @onCheckChange / @onValueChange handlers (from the tools panel widgets).
+function mageShieldOnCheck(which, checked)
+  local ms = helperConfig.mageShield
+  if which == 'utamo' then ms.utamo.enabled = checked
+  elseif which == 'exana' then ms.exana.enabled = checked
+  elseif which == 'potion' then ms.potion.enabled = checked end
+  saveSettings()
+end
+function mageShieldOnLife(which, value)
+  value = math.max(0, math.min(99, tonumber(value) or 0))
+  if which == 'utamo' then helperConfig.mageShield.utamo.life = value
+  elseif which == 'exana' then helperConfig.mageShield.exana.life = value end
+  saveSettings()
+end
+
+-- Hotkey binding (cavebot-style: own combo, simple g_keyboard bind).
+local function bindMageHotkeys()
+  local root = g_ui.getRootWidget()
+  for which, combo in pairs(mageShieldBound) do
+    if combo and #combo > 0 then
+      g_keyboard.unbindKeyDown(combo, which == 'utamo' and toggleUtamoEnabled or toggleExanaEnabled, root)
+    end
+  end
+  mageShieldBound = {}
+  local cu = helperConfig.mageShield.utamo.hotkey or ''
+  local ce = helperConfig.mageShield.exana.hotkey or ''
+  if #cu > 0 then g_keyboard.bindKeyDown(cu, toggleUtamoEnabled, root); mageShieldBound.utamo = cu end
+  if #ce > 0 then g_keyboard.bindKeyDown(ce, toggleExanaEnabled, root); mageShieldBound.exana = ce end
+end
+
+local function syncMageHotkeyButtons()
+  local cu = helperConfig.mageShield.utamo.hotkey or ''
+  local ce = helperConfig.mageShield.exana.hotkey or ''
+  local bu = msChild('msUtamoKey'); if bu then bu:setText((#cu > 0) and tr('Key: %s', cu) or tr('Set Key')) end
+  local be = msChild('msExanaKey'); if be then be:setText((#ce > 0) and tr('Key: %s', ce) or tr('Set Key')) end
+end
+
+-- Key-capture window (MageHotkeyWindow). `which` = 'utamo' | 'exana'.
+function mageSetKey(which)
+  local cfgKey = (which == 'utamo') and helperConfig.mageShield.utamo or helperConfig.mageShield.exana
+  local window = g_ui.createWidget('MageHotkeyWindow', g_ui.getRootWidget())
+  window:show(); window:raise(); window:focus(); window:grabKeyboard()
+  g_client.setInputLockWidget(window)
+  window.display:setText(cfgKey.hotkey or '')
+  local picked = cfgKey.hotkey or ''
+  window.onKeyDown = function(_, keyCode, mods, keyText)
+    local combo = determineKeyComboDesc(keyCode, mods, keyText)
+    if combo == 'Shift' or combo == 'Ctrl' or combo == 'Alt' then return true end
+    picked = combo
+    window.display:setText(combo)
+    local used = false
+    pcall(function() used = (KeyBinds and KeyBinds:isUsedHotkey(combo)) and true or false end)
+    window.warning:setVisible(used)
+    return true
+  end
+  local function finish()
+    g_client.setInputLockWidget(nil)
+    window:destroy()
+  end
+  window.buttonOk.onClick = function()
+    cfgKey.hotkey = picked or ''
+    bindMageHotkeys(); syncMageHotkeyButtons(); saveSettings(); finish()
+  end
+  window.buttonClear.onClick = function()
+    cfgKey.hotkey = ''
+    bindMageHotkeys(); syncMageHotkeyButtons(); saveSettings(); finish()
+  end
+  window.buttonClose.onClick = finish
+end
+
+-- Settings modals.
+function openUtamoSettings()
+  local u = helperConfig.mageShield.utamo
+  local w = g_ui.createWidget('MageShieldSettings', g_ui.getRootWidget())
+  w.renewCheck:setChecked(u.renew and true or false)
+  w.renewBox:setMinimum(1); w.renewBox:setMaximum(99); w.renewBox:setValue(u.renewShield or 50)
+  w.cancelButton.onClick = function() w:destroy() end
+  w.saveButton.onClick = function()
+    u.renew = w.renewCheck:isChecked()
+    u.renewShield = math.max(1, math.min(99, w.renewBox:getValue()))
+    saveSettings(); w:destroy()
+  end
+end
+
+function openPotionSettings()
+  local po = helperConfig.mageShield.potion
+  local w = g_ui.createWidget('MageShieldPotionSettings', g_ui.getRootWidget())
+  w.itemBox:setMinimum(0); w.itemBox:setMaximum(99999); w.itemBox:setValue(po.itemId or 0)
+  w.lifeBox:setMinimum(0); w.lifeBox:setMaximum(99); w.lifeBox:setValue(po.life or 0)
+  w.shieldBox:setMinimum(0); w.shieldBox:setMaximum(99); w.shieldBox:setValue(po.shield or 0)
+  w.vitaCdCheck:setChecked(po.onlyVitaCd and true or false)
+  w.fearCheck:setChecked(po.forceOnFear and true or false)
+  w.cancelButton.onClick = function() w:destroy() end
+  w.saveButton.onClick = function()
+    po.itemId = math.max(0, w.itemBox:getValue())
+    po.life   = math.max(0, math.min(99, w.lifeBox:getValue()))
+    po.shield = math.max(0, math.min(99, w.shieldBox:getValue()))
+    po.onlyVitaCd  = w.vitaCdCheck:isChecked()
+    po.forceOnFear = w.fearCheck:isChecked()
+    saveSettings(); w:destroy()
+  end
+end
+
+-- Mount: show only for mages, sync widgets from config, (re)bind hotkeys.
+function setupMageShield()
+  -- mageShieldPanel is a SIBLING of the inner 'toolsPanel' (both under the ToolsPanel
+  -- tab root), so look it up from the content panel, not from toolsPanel.
+  mageShieldPanel = helper and helper.contentPanel and helper.contentPanel:recursiveGetChildById('mageShieldPanel') or nil
+  local p = g_game.getLocalPlayer()
+  local voc = p and p:getVocation() or 0
+  -- Vocation may not be synced yet right at onGameStart; retry until it is.
+  if voc == 0 then
+    if g_game.isOnline() then scheduleEvent(setupMageShield, 1000) end
+    return
+  end
+  local tv = translateVocation(voc)
+  mageShieldIsMage = (tv == 5 or tv == 6) -- Sorcerer (ms) or Druid (ed)
+  if mageShieldPanel then mageShieldPanel:setVisible(mageShieldIsMage) end
+  if not mageShieldIsMage then return end
+  local ms = helperConfig.mageShield
+  local function setup(id, fn) local w = msChild(id); if w then fn(w) end end
+  setup('msUtamoEnable', function(w) w:setChecked(ms.utamo.enabled and true or false) end)
+  setup('msUtamoLife', function(w) w:setMinimum(0); w:setMaximum(99); w:setValue(ms.utamo.life or 30) end)
+  setup('msExanaEnable', function(w) w:setChecked(ms.exana.enabled and true or false) end)
+  setup('msExanaLife', function(w) w:setMinimum(0); w:setMaximum(99); w:setValue(ms.exana.life or 80) end)
+  setup('msPotionEnable', function(w) w:setChecked(ms.potion.enabled and true or false) end)
+  syncMageHotkeyButtons()
+  bindMageHotkeys()
+end
+
 function online()
   local benchmark = g_clock.millis()
-	player = g_game.getLocalPlayer()
+  player = g_game.getLocalPlayer()
 
   reset()
   loadSettings()
   loadProfileOptions()
   onLoadHelperData()
+  setupMageShield() -- mage-only magic-shield tools: show + sync + bind hotkeys
+
+  if Cavebot then Cavebot.online() end
+  if Scripting then Scripting.online() end
 
   helperConfig.currentLockedTargetId = 0
   helperEvents.helperCycleEvent = cycleEvent(helperCycleEvent, helperEvents.helperCycleTimer)
@@ -448,6 +688,18 @@ function online()
 end
 
 function offline()
+  if Cavebot then Cavebot.offline() end
+  if Scripting then Scripting.offline() end
+
+  -- unbind mage-shield hotkeys for this session
+  local root = g_ui.getRootWidget()
+  for which, combo in pairs(mageShieldBound) do
+    if combo and #combo > 0 then
+      g_keyboard.unbindKeyDown(combo, which == 'utamo' and toggleUtamoEnabled or toggleExanaEnabled, root)
+    end
+  end
+  mageShieldBound = {}
+
   local presets = presetsPanel:recursiveGetChildById('presets')
   if presets then
     presets:clear()
@@ -498,7 +750,9 @@ function loadMenu(menuId)
   local buttons = {
     healMenuButton = 'healingMenu',
     toolsMenuButton = 'toolsMenu',
-    shooterMenuButton = 'shooterMenu'
+    shooterMenuButton = 'shooterMenu',
+    cavebotMenuButton = 'cavebotMenu',
+    scriptingMenuButton = 'scriptingMenu'
   }
 
   for buttonName, buttonId in pairs(buttons) do
@@ -512,6 +766,9 @@ function loadMenu(menuId)
   if selectedButton then
     selectedButton:setChecked(true)
   end
+
+  if Cavebot and Cavebot.hidePanel then Cavebot.hidePanel() end
+  if Scripting and Scripting.hidePanel then Scripting.hidePanel() end
 
   local currentPlayer = g_game.getLocalPlayer()
   if not currentPlayer then
@@ -543,9 +800,12 @@ function loadMenu(menuId)
       potionPercentBg2:setVisible(true)
       addPotionPercentButton2:setVisible(true)
       priority2:setVisible(true)
-      priorityButton1:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
-      priorityButton2:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
-      priorityButton3:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
+      priorityButton1:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
+      priorityButton2:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
+      priorityButton3:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
     elseif vocationId == 7 then -- Paladin
       helper:setSize(tosize("295 278"))
       friendHealingPanel:setVisible(false)
@@ -559,9 +819,12 @@ function loadMenu(menuId)
       potionPercentBg2:setVisible(true)
       addPotionPercentButton2:setVisible(true)
       priority2:setVisible(true)
-      priorityButton1:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
-      priorityButton2:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
-      priorityButton3:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
+      priorityButton1:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
+      priorityButton2:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
+      priorityButton3:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
     elseif vocationId == 5 then -- Sorcerer
       helper:setSize(tosize("295 363"))
       healPanel:setHeight(120)
@@ -577,8 +840,10 @@ function loadMenu(menuId)
       potionPercentBg2:setVisible(false)
       addPotionPercentButton2:setVisible(false)
       priority2:setVisible(false)
-      priorityButton1:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
-      priorityButton2:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
+      priorityButton1:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
+      priorityButton2:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
     elseif vocationId == 6 then -- Druid
       helper:setSize(tosize("295 490"))
       healPanel:setHeight(120)
@@ -594,8 +859,10 @@ function loadMenu(menuId)
       potionPercentBg2:setVisible(false)
       addPotionPercentButton2:setVisible(false)
       priority2:setVisible(false)
-      priorityButton1:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
-      priorityButton2:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
+      priorityButton1:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
+      priorityButton2:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
     elseif vocationId == 9 then -- Monk
       helper:setSize(tosize("295 405"))
       healPanel:setHeight(160)
@@ -611,9 +878,12 @@ function loadMenu(menuId)
       potionPercentBg2:setVisible(true)
       addPotionPercentButton2:setVisible(true)
       priority2:setVisible(true)
-      priorityButton1:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
-      priorityButton2:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
-      priorityButton3:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
+      priorityButton1:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
+      priorityButton2:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
+      priorityButton3:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nClick on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
     else
       helper:setSize(tosize("295 240"))
       healPanel:setHeight(120)
@@ -627,8 +897,10 @@ function loadMenu(menuId)
       potionPercentBg2:setVisible(false)
       addPotionPercentButton2:setVisible(false)
       priority2:setVisible(false)
-      priorityButton1:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
-      priorityButton2:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
+      priorityButton1:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
+      priorityButton2:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
     end
   elseif menuId == 'toolsMenu' then
     helper:setSize(tosize("295 275"))
@@ -656,6 +928,18 @@ function loadMenu(menuId)
       enableButtons:addAnchor(AnchorTop, 'prev', AnchorBottom)
       enableButtons:setMarginTop(5)
     end
+  elseif menuId == 'cavebotMenu' then
+    healingPanel:hide()
+    toolsPanel:hide()
+    shooterPanel:hide()
+    helper:setSize(tosize("295 486"))
+    if Cavebot then Cavebot.showPanel() end
+  elseif menuId == 'scriptingMenu' then
+    healingPanel:hide()
+    toolsPanel:hide()
+    shooterPanel:hide()
+    helper:setSize(tosize("295 486"))
+    if Scripting then Scripting.showPanel() end
   end
 end
 
@@ -674,7 +958,7 @@ function onCreatureDisappear(creature)
   end
 end
 
---[[ Events ]]--
+--[[ Events ]] --
 function assignTrainingSpell(button, isHaste)
   local radio = UIRadioGroup.create()
   window = g_ui.loadUI('styles/spell', g_ui.getRootWidget())
@@ -718,7 +1002,7 @@ function assignTrainingSpell(button, isHaste)
 
       radio:addWidget(widget)
       widget:setId(spellData.id)
-      widget:setText(spellName.."\n"..spellData.words)
+      widget:setText(spellName .. "\n" .. spellData.words)
       widget.voc = spellData.vocations
       widget.source = SpelllistSettings['Default'].iconsFolder
       widget.clip = Spells.getImageClipNormal(spellId, 'Default')
@@ -838,7 +1122,7 @@ end
 
 function sendRenameOrAddWindow(isRename)
   local radio = UIRadioGroup.create()
-	window = g_ui.loadUI('styles/shooterPreset', g_ui.getRootWidget())
+  window = g_ui.loadUI('styles/shooterPreset', g_ui.getRootWidget())
   if not window then
     return true
   end
@@ -926,11 +1210,11 @@ function sendRenameOrAddWindow(isRename)
   local cancel = function()
     helper:show()
     g_client.setInputLockWidget(nil)
-		window:destroy()
-	end
+    window:destroy()
+  end
 
-	window.contentPanel.cancelButton.onClick = cancel
-	window.onEscape = cancel
+  window.contentPanel.cancelButton.onClick = cancel
+  window.onEscape = cancel
   window.contentPanel.target.onTextChange = function() onWrite() end
   if isRename then
     window.contentPanel.okButton.onClick = function() renameConfirm() end
@@ -942,95 +1226,95 @@ function sendRenameOrAddWindow(isRename)
 end
 
 function assignSpell(button, groupName, groups, tableToAssign)
-	local radio = UIRadioGroup.create()
-	window = g_ui.loadUI('styles/spell', g_ui.getRootWidget())
+  local radio = UIRadioGroup.create()
+  window = g_ui.loadUI('styles/spell', g_ui.getRootWidget())
   if not window then
     return true
   end
 
-	window:show(true)
-	window:raise()
-	window:focus()
+  window:show(true)
+  window:raise()
+  window:focus()
   g_client.setInputLockWidget(window)
   helper:hide()
 
-	window:setText("Assign " .. groupName .. " Spell")
+  window:setText("Assign " .. groupName .. " Spell")
 
   local profile = getShooterProfile()
-	local playerVocation = translateVocation(player:getVocation())
+  local playerVocation = translateVocation(player:getVocation())
   local spells = modules.gamelib.SpellInfo['Default']
 
   for spellName, spellData in pairs(spells) do
-      local groupIds = Spells.getGroupIds(spellData)
-      local function containsAnyGroup(groups, targetGroups)
-          for _, group in ipairs(targetGroups) do
-              if table.contains(groups, group) then
-                  return true
-              end
-          end
-          return false
+    local groupIds = Spells.getGroupIds(spellData)
+    local function containsAnyGroup(groups, targetGroups)
+      for _, group in ipairs(targetGroups) do
+        if table.contains(groups, group) then
+          return true
+        end
       end
-      if containsAnyGroup(groupIds, groups) and table.contains(spellData.vocations, playerVocation) and not ignoredSpellsIds[spellData.id] then
-          if player:getLevel() < spellData.level or not playerHasSpell(player, spellData.id) then
-              goto continue
-          end
-          local widget = g_ui.createWidget('SpellPreview', window.contentPanel.spellList)
-          local spellId = SpellIcons[spellData.icon][1]
-          radio:addWidget(widget)
-          widget:setId(spellData.id)
-          widget:setText(spellName.."\n"..spellData.words)
-          widget.voc = spellData.vocations
-          widget.source = SpelllistSettings['Default'].iconsFolder
-          widget.clip = Spells.getImageClipNormal(spellId, 'Default')
-          widget.image:setImageSource(widget.source)
-          widget.image:setImageClip(widget.clip)
-
-          if spellData.level then
-            widget.levelLabel:setVisible(true)
-            widget.levelLabel:setText(string.format("Level: %d", spellData.level))
-            if player:getLevel() < spellData.level then
-              widget.image.gray:setVisible(true)
-            end
-          end
-
-          local primaryGroup = Spells.getPrimaryGroup(spellData)
-          if primaryGroup ~= -1 then
-            local offSet = 1
-            if primaryGroup == 2 then
-              offSet = (23 * (primaryGroup - 1))
-            elseif primaryGroup == 3 then
-              offSet = (23 * (primaryGroup - 1)) - 1
-            end
-            widget.imageGroup:setImageClip(offSet .. " 25 20 20")
-            widget.imageGroup:setVisible(true)
-          end
+      return false
+    end
+    if containsAnyGroup(groupIds, groups) and table.contains(spellData.vocations, playerVocation) and not ignoredSpellsIds[spellData.id] then
+      if player:getLevel() < spellData.level or not playerHasSpell(player, spellData.id) then
+        goto continue
       end
-      ::continue::
+      local widget = g_ui.createWidget('SpellPreview', window.contentPanel.spellList)
+      local spellId = SpellIcons[spellData.icon][1]
+      radio:addWidget(widget)
+      widget:setId(spellData.id)
+      widget:setText(spellName .. "\n" .. spellData.words)
+      widget.voc = spellData.vocations
+      widget.source = SpelllistSettings['Default'].iconsFolder
+      widget.clip = Spells.getImageClipNormal(spellId, 'Default')
+      widget.image:setImageSource(widget.source)
+      widget.image:setImageClip(widget.clip)
+
+      if spellData.level then
+        widget.levelLabel:setVisible(true)
+        widget.levelLabel:setText(string.format("Level: %d", spellData.level))
+        if player:getLevel() < spellData.level then
+          widget.image.gray:setVisible(true)
+        end
+      end
+
+      local primaryGroup = Spells.getPrimaryGroup(spellData)
+      if primaryGroup ~= -1 then
+        local offSet = 1
+        if primaryGroup == 2 then
+          offSet = (23 * (primaryGroup - 1))
+        elseif primaryGroup == 3 then
+          offSet = (23 * (primaryGroup - 1)) - 1
+        end
+        widget.imageGroup:setImageClip(offSet .. " 25 20 20")
+        widget.imageGroup:setVisible(true)
+      end
+    end
+    ::continue::
   end
 
-	-- sort alphabetically
-	local widgets = window.contentPanel.spellList:getChildren()
-	table.sort(widgets, function(a, b) return a:getText() < b:getText() end)
-	for i, widget in ipairs(widgets) do
-		window.contentPanel.spellList:moveChildToIndex(widget, i)
-	end
+  -- sort alphabetically
+  local widgets = window.contentPanel.spellList:getChildren()
+  table.sort(widgets, function(a, b) return a:getText() < b:getText() end)
+  for i, widget in ipairs(widgets) do
+    window.contentPanel.spellList:moveChildToIndex(widget, i)
+  end
 
-	-- callback
-	radio.onSelectionChange = function(widget, selected)
-		if selected then
-			window.contentPanel.preview:setText(selected:getText())
-			window.contentPanel.preview.image:setImageSource(selected.source)
-			window.contentPanel.preview.image:setImageClip(selected.clip)
-			window.contentPanel.paramLabel:setOn(selected.param)
-			window.contentPanel.paramText:setEnabled(selected.param)
-			window.contentPanel.paramText:clearText()
-			window.contentPanel.spellList:ensureChildVisible(widget)
-		end
-	end
+  -- callback
+  radio.onSelectionChange = function(widget, selected)
+    if selected then
+      window.contentPanel.preview:setText(selected:getText())
+      window.contentPanel.preview.image:setImageSource(selected.source)
+      window.contentPanel.preview.image:setImageClip(selected.clip)
+      window.contentPanel.paramLabel:setOn(selected.param)
+      window.contentPanel.paramText:setEnabled(selected.param)
+      window.contentPanel.paramText:clearText()
+      window.contentPanel.spellList:ensureChildVisible(widget)
+    end
+  end
 
-	if window.contentPanel.spellList:getChildren() then
-		radio:selectWidget(window.contentPanel.spellList:getChildren()[1])
-	end
+  if window.contentPanel.spellList:getChildren() then
+    radio:selectWidget(window.contentPanel.spellList:getChildren()[1])
+  end
 
   window:recursiveGetChildById('tick'):setChecked(true)
   window:recursiveGetChildById('tick'):setEnabled(false)
@@ -1069,62 +1353,62 @@ function assignSpell(button, groupName, groups, tableToAssign)
       local selfCast = shooterPanel:recursiveGetChildById("selfCast" .. slotID)
       local spell = Spells.getSpellByClientId(tonumber(spellId))
       if spell then
-          if table.contains(bothCastTypeSpells, spell.id) then -- divine grenade self cast
-            if not selfCast then
-              selfCast = g_ui.createWidget('CheckBox', creaturesMin:getParent())
-              local style = {
-                ["width"] = 12,
-                ["anchors.top"] = "countMinCreature" .. slotID .. ".top",
-                ["anchors.left"] = "countMinCreature" .. slotID .. ".right",
-                ["margin-top"] = 6,
-                ["margin-left"] = 5
-              }
-              selfCast:mergeStyle(style)
-              selfCast:setId('selfCast' .. slotID)
-              selfCast:setTooltip('Cast on yourself')
-              selfCast:setVisible(true)
-              selfCast.onCheckChange = function() toggleSelfCast(selfCast:getId():match("%d+"), selfCast:isChecked()) end
-            end
+        if table.contains(bothCastTypeSpells, spell.id) then   -- divine grenade self cast
+          if not selfCast then
+            selfCast = g_ui.createWidget('CheckBox', creaturesMin:getParent())
+            local style = {
+              ["width"] = 12,
+              ["anchors.top"] = "countMinCreature" .. slotID .. ".top",
+              ["anchors.left"] = "countMinCreature" .. slotID .. ".right",
+              ["margin-top"] = 6,
+              ["margin-left"] = 5
+            }
+            selfCast:mergeStyle(style)
+            selfCast:setId('selfCast' .. slotID)
+            selfCast:setTooltip('Cast on yourself')
+            selfCast:setVisible(true)
+            selfCast.onCheckChange = function() toggleSelfCast(selfCast:getId():match("%d+"), selfCast:isChecked()) end
           end
-          if selfCast and not table.contains(bothCastTypeSpells, spell.id) then
-            profile.spells[slotID + 1].selfCast = false
-            selfCast:destroy()
+        end
+        if selfCast and not table.contains(bothCastTypeSpells, spell.id) then
+          profile.spells[slotID + 1].selfCast = false
+          selfCast:destroy()
+        end
+        if (spell.range > 0 or not spell.area) and not table.contains(bothCastTypeSpells, spell.id) then
+          profile.spells[slotID + 1].creatures = 1
+          creaturesMin:setCurrentOption("1+")
+          creaturesMin:disable()
+          if forceCast then
+            forceCast:setChecked(profile.spells[slotID + 1].forceCast)
+            forceCast:setVisible(true)
           end
-          if (spell.range > 0 or not spell.area) and not table.contains(bothCastTypeSpells, spell.id) then
-            profile.spells[slotID + 1].creatures = 1
-            creaturesMin:setCurrentOption("1+")
-            creaturesMin:disable()
-            if forceCast then
-              forceCast:setChecked(profile.spells[slotID + 1].forceCast)
-              forceCast:setVisible(true)
-            end
-          else
-            creaturesMin:enable()
-            if forceCast then
-              forceCast:setChecked(false)
-              forceCast:setVisible(false)
-              profile.spells[slotID + 1].forceCast = false
-            end
+        else
+          creaturesMin:enable()
+          if forceCast then
+            forceCast:setChecked(false)
+            forceCast:setVisible(false)
+            profile.spells[slotID + 1].forceCast = false
           end
         end
       end
+    end
     if destroy then
       helper:show()
       window:destroy()
     end
   end
 
-	local cancelFunc = function()
+  local cancelFunc = function()
     helper:show()
     g_client.setInputLockWidget(nil)
-		window:destroy()
-	end
+    window:destroy()
+  end
 
-	window.contentPanel.buttonOk.onClick = function() okFunc(true) end
-	window.contentPanel.buttonApply.onClick = function() okFunc(false) end
-	window.contentPanel.buttonClose.onClick = cancelFunc
-	window.contentPanel.onEnter = function() okFunc(true) end
-	window.onEscape = cancelFunc
+  window.contentPanel.buttonOk.onClick = function() okFunc(true) end
+  window.contentPanel.buttonApply.onClick = function() okFunc(false) end
+  window.contentPanel.buttonClose.onClick = cancelFunc
+  window.contentPanel.onEnter = function() okFunc(true) end
+  window.onEscape = cancelFunc
 end
 
 function assignRune(button, groupName, groups, tableToAssign)
@@ -1133,7 +1417,7 @@ function assignRune(button, groupName, groups, tableToAssign)
   helper:hide()
   g_mouse.pushCursor('target')
   mouseGrabberWidget.onMouseRelease = function(self, mousePosition, mouseButton)
-      onAssignRune(self, mousePosition, mouseButton, button)
+    onAssignRune(self, mousePosition, mouseButton, button)
   end
 end
 
@@ -1221,9 +1505,9 @@ end
 
 function getPotionInfoById(itemId)
   for _, potion in pairs(potionWhitelist) do
-      if itemId == potion.id then
-          return true, potion.name
-      end
+    if itemId == potion.id then
+      return true, potion.name
+    end
   end
   return false, "Unknown Potion"
 end
@@ -1280,7 +1564,7 @@ function assignPotionEvent(button)
   helper:hide()
   g_mouse.pushCursor('target')
   mouseGrabberWidget.onMouseRelease = function(self, mousePosition, mouseButton)
-      onAssignPotion(self, mousePosition, mouseButton, button)
+    onAssignPotion(self, mousePosition, mouseButton, button)
   end
 end
 
@@ -1368,17 +1652,17 @@ function updateButton(button)
         end
       elseif buttonId:find("attackSpellButton") then
         if profile.spells[index + 1].id > 0 then
-          menu:addOption(tr('Edit Spell'), function() assignSpell(button, "Aggressive", {1, 4, 8}, profile.spells) end)
+          menu:addOption(tr('Edit Spell'), function() assignSpell(button, "Aggressive", { 1, 4, 8 }, profile.spells) end)
           menu:addOption(tr('Remove'), function() removeAction("shooter", button) end)
         else
-          menu:addOption(tr('Assign Spell'), function() assignSpell(button, "Aggressive", {1, 4, 8}, profile.spells) end)
+          menu:addOption(tr('Assign Spell'), function() assignSpell(button, "Aggressive", { 1, 4, 8 }, profile.spells) end)
         end
       elseif buttonId:find("spellButton") then
         if helperConfig.spells[index + 1].id > 0 then
-          menu:addOption(tr('Edit Spell'), function() assignSpell(button, "Healing", {2}, helperConfig.spells) end)
+          menu:addOption(tr('Edit Spell'), function() assignSpell(button, "Healing", { 2 }, helperConfig.spells) end)
           menu:addOption(tr('Remove'), function() removeAction("spell", button) end)
         else
-          menu:addOption(tr('Assign Spell'), function() assignSpell(button, "Healing", {2}, helperConfig.spells) end)
+          menu:addOption(tr('Assign Spell'), function() assignSpell(button, "Healing", { 2 }, helperConfig.spells) end)
         end
       elseif buttonId:find("potionButton") then
         if helperConfig.potions[index + 1].id > 0 then
@@ -1395,14 +1679,12 @@ function updateButton(button)
           menu:addOption(tr('Assign Training Spell'), function() assignTrainingSpell(button) end)
         end
       elseif buttonId:find("hasteButton") then
-         if helperConfig.haste[index + 1].id > 0 then
+        if helperConfig.haste[index + 1].id > 0 then
           menu:addOption(tr('Edit Haste Spell'), function() assignTrainingSpell(button, true) end)
           menu:addOption(tr('Remove'), function() removeAction("haste", button) end)
         else
           menu:addOption(tr('Assign Haste Spell'), function() assignTrainingSpell(button, true) end)
         end
-
-
       elseif buttonId:find("autoTrainingItem") then
         if not button.potionItem or button.potionItem:getItemId() == 0 then
           menu:addOption(tr('Select exercise weapon'), function() assignExerciseEvent(button) end)
@@ -1510,7 +1792,8 @@ function onAddPartyMember(self)
   end
 
   local sioPanel = healingPanel:recursiveGetChildById('friendHealingPanel')
-  local enabled = sioPanel:recursiveGetChildById("enableSio" .. slotIndex) and sioPanel:recursiveGetChildById("enableSio" .. slotIndex):isChecked()
+  local enabled = sioPanel:recursiveGetChildById("enableSio" .. slotIndex) and
+  sioPanel:recursiveGetChildById("enableSio" .. slotIndex):isChecked()
   local percent = panel:recursiveGetChildById("healPercent" .. slotIndex):getCurrentOption().text
   if self:getImageSource() == "/images/store/clean-button" then
     helperConfig.friendhealing[slotIndex + 1].name = ""
@@ -1541,7 +1824,8 @@ function onAddPartyGranSioMember(self)
   end
 
   local sioPanel = healingPanel:recursiveGetChildById('granSioPanel')
-  local enabled = sioPanel:recursiveGetChildById("enableSio" .. slotIndex) and sioPanel:recursiveGetChildById("enableSio" .. slotIndex):isChecked()
+  local enabled = sioPanel:recursiveGetChildById("enableSio" .. slotIndex) and
+  sioPanel:recursiveGetChildById("enableSio" .. slotIndex):isChecked()
   local percent = panel:recursiveGetChildById("healPercent" .. slotIndex):getCurrentOption().text
   if self:getImageSource() == "/images/store/clean-button" then
     helperConfig.gransiohealing[slotIndex + 1].name = ""
@@ -1661,7 +1945,6 @@ function updateMagicShooterPercent(buttonId, newPercent)
     end
 
     shooterPanel:recursiveGetChildById("rmvPercentButton" .. buttonIndex):setEnabled(true)
-
   elseif string.find(buttonId, "rmv") then
     if config.percent <= 1 then
       shooterPanel:recursiveGetChildById("rmvPercentButton" .. buttonIndex):setEnabled(false)
@@ -1678,7 +1961,6 @@ function updateMagicShooterPercent(buttonId, newPercent)
     shooterPanel:recursiveGetChildById("addPercentButton" .. buttonIndex):setEnabled(true)
   end
 end
-
 
 function updateRuneShooterCreatures(name, index, creatures)
   local profile = getShooterProfile()
@@ -1800,7 +2082,7 @@ function checkHealthHealing()
     end
 
     if healthPercent <= spell.percent then
-        castHealingSpell(spell.id)
+      castHealingSpell(spell.id)
     end
 
     ::skipSpell::
@@ -2083,7 +2365,8 @@ function toggleMagicShooter(widget, message)
   end
 
   helperConfig.magicShooterEnabled = widget:isChecked()
-  modules.game_textmessage.displayGameMessage(message and message or string.format("RTCaster is %s.", (helperConfig.magicShooterEnabled and "enabled" or "disabled")))
+  modules.game_textmessage.displayGameMessage(message and message or
+  string.format("Caster is %s.", (helperConfig.magicShooterEnabled and "enabled" or "disabled")))
   shooterTracker:setText(helperConfig.magicShooterEnabled and "Active" or "Inactive")
   shooterTracker:setColor(helperConfig.magicShooterEnabled and "$var-text-cip-color-green" or "$var-text-cip-store-red")
 end
@@ -2103,7 +2386,8 @@ function toggleAutoTarget(widget)
     helperConfig.currentLockedTargetId = 0
     g_game.cancelAttack()
   end
-  modules.game_textmessage.displayGameMessage(string.format("Auto Target is %s.", (helperConfig.autoTargetEnabled and "enabled" or "disabled")))
+  modules.game_textmessage.displayGameMessage(string.format("Auto Target is %s.",
+    (helperConfig.autoTargetEnabled and "enabled" or "disabled")))
   targetTracker:setText(helperConfig.autoTargetEnabled and "Active" or "Inactive")
   targetTracker:setColor(helperConfig.autoTargetEnabled and "$var-text-cip-color-green" or "$var-text-cip-store-red")
 end
@@ -2142,7 +2426,7 @@ function toggleShooterPreset(widget, hideMessage)
     loadShooterProfileByName(option)
   end
   if not hideMessage then
-    modules.game_textmessage.displayGameMessage(string.format("RTCaster profile switched to %s.", option))
+    modules.game_textmessage.displayGameMessage(string.format("Caster profile switched to %s.", option))
   end
 end
 
@@ -2171,9 +2455,10 @@ function removeProfile()
     modules.game_textmessage.displayGameMessage(string.format("Preset %s deleted.", currentProfileName))
   end
 
-  confirmWindow = displayGeneralBox('Delete Preset', string.format("Are you sure you want to delete preset %s?", helperConfig.selectedShooterProfile),
-		{ { text=tr('Yes'), callback = confirm }, { text=tr('No'), callback = cancel }
-	}, yesFunction, noFunction)
+  confirmWindow = displayGeneralBox('Delete Preset',
+    string.format("Are you sure you want to delete preset %s?", helperConfig.selectedShooterProfile),
+    { { text = tr('Yes'), callback = confirm }, { text = tr('No'), callback = cancel }
+    }, yesFunction, noFunction)
 end
 
 function updateAutoTargetMode(mode)
@@ -2206,28 +2491,28 @@ local function rotateArea(area, direction)
   local cols = #area[1]
 
   if direction == Directions.North then
-      rotatedArea = area
+    rotatedArea = area
   elseif direction == Directions.South then
-      for y = 1, rows do
-          rotatedArea[y] = {}
-          for x = 1, cols do
-              rotatedArea[y][x] = area[rows - y + 1][cols - x + 1]
-          end
+    for y = 1, rows do
+      rotatedArea[y] = {}
+      for x = 1, cols do
+        rotatedArea[y][x] = area[rows - y + 1][cols - x + 1]
       end
+    end
   elseif direction == Directions.East then
-      for x = 1, cols do
-          rotatedArea[x] = {}
-          for y = 1, rows do
-              rotatedArea[x][y] = area[rows - y + 1][x]
-          end
+    for x = 1, cols do
+      rotatedArea[x] = {}
+      for y = 1, rows do
+        rotatedArea[x][y] = area[rows - y + 1][x]
       end
+    end
   elseif direction == Directions.West then
-      for x = 1, cols do
-          rotatedArea[x] = {}
-          for y = 1, rows do
-              rotatedArea[x][y] = area[y][cols - x + 1]
-          end
+    for x = 1, cols do
+      rotatedArea[x] = {}
+      for y = 1, rows do
+        rotatedArea[x][y] = area[y][cols - x + 1]
       end
+    end
   end
 
   return rotatedArea
@@ -2235,11 +2520,11 @@ end
 
 local function findPlayerPosition(area)
   for y, row in ipairs(area) do
-      for x, value in ipairs(row) do
-          if value == 3 or value == 2 then
-              return x, y
-          end
+    for x, value in ipairs(row) do
+      if value == 3 or value == 2 then
+        return x, y
       end
+    end
   end
   return nil, nil
 end
@@ -2249,13 +2534,13 @@ function getRelativePosition(targetPos)
   if not player then return targetPos end
   local playerPos = player:getPosition()
 
-  local relativePos = {x = targetPos.x, y = targetPos.y, z = targetPos.z}
-	if playerPos.x < targetPos.x and playerPos.y < targetPos.y then
+  local relativePos = { x = targetPos.x, y = targetPos.y, z = targetPos.z }
+  if playerPos.x < targetPos.x and playerPos.y < targetPos.y then
     relativePos.x = relativePos.x - 1;
     relativePos.y = relativePos.y - 1;
-	elseif (playerPos.x < targetPos.x and playerPos.y > targetPos.y) or playerPos.x < targetPos.x then
+  elseif (playerPos.x < targetPos.x and playerPos.y > targetPos.y) or playerPos.x < targetPos.x then
     relativePos.x = relativePos.x - 1;
-	elseif (playerPos.x > targetPos.x and playerPos.y < targetPos.y) or playerPos.y < targetPos.y then
+  elseif (playerPos.x > targetPos.x and playerPos.y < targetPos.y) or playerPos.y < targetPos.y then
     relativePos.y = relativePos.y - 1;
   end
   return relativePos
@@ -2271,24 +2556,24 @@ local function countAttackableCreatures(casterPos, direction, area, creatureList
   local creatures = 0
   local playerX, playerY = findPlayerPosition(area)
   if not playerX or not playerY then
-      return 0
+    return 0
   end
   for yOffset, row in ipairs(area) do
-      for xOffset, value in ipairs(row) do
-          if value == 1 or (ranged and (value == 3 or value == 2)) then
-              local position = {
-                  x = casterPos.x + (xOffset - playerX),
-                  y = casterPos.y + (yOffset - playerY),
-                  z = casterPos.z
-              }
-              for _, creature in ipairs(creatureList) do
-                  if positionCompare(creature.position, position) and (g_map.isSightClear(casterPos, creature.position)) then
-                      creatures = creatures + 1
-                      break
-                  end
-              end
+    for xOffset, value in ipairs(row) do
+      if value == 1 or (ranged and (value == 3 or value == 2)) then
+        local position = {
+          x = casterPos.x + (xOffset - playerX),
+          y = casterPos.y + (yOffset - playerY),
+          z = casterPos.z
+        }
+        for _, creature in ipairs(creatureList) do
+          if positionCompare(creature.position, position) and (g_map.isSightClear(casterPos, creature.position)) then
+            creatures = creatures + 1
+            break
           end
+        end
       end
+    end
   end
   return creatures
 end
@@ -2324,7 +2609,6 @@ local function sortMagicShooterByPriority(list)
 end
 
 local function findBestTarget(position, direction, area, creatureList, minCreatures)
-
   local bestTarget = nil
   local maxCreaturesHit = 0
 
@@ -2375,7 +2659,7 @@ function checkMagicShooter()
     local caster = enableButtons:recursiveGetChildById("enableMagicShooter")
     if caster then
       caster:setChecked(false)
-      toggleMagicShooter(caster, "Entering in a Protection Zone!\nRTCaster disabled.")
+      toggleMagicShooter(caster, "Entering in a Protection Zone!\nCaster disabled.")
       return
     end
   end
@@ -2385,7 +2669,7 @@ function checkMagicShooter()
     local widget = enableButtons:recursiveGetChildById("enableMagicShooter")
     if widget then
       widget:setChecked(false)
-      toggleMagicShooter(widget, "RTCaster disabled! \nDue to no changes in your actions so far.")
+      toggleMagicShooter(widget, "Caster disabled! \nDue to no changes in your actions so far.")
       return
     end
     return
@@ -2396,7 +2680,7 @@ function checkMagicShooter()
     local widget = enableButtons:recursiveGetChildById("enableMagicShooter")
     if widget then
       widget:setChecked(false)
-      toggleMagicShooter(widget, "Follow detected!\nRTCaster disabled.")
+      toggleMagicShooter(widget, "Follow detected!\nCaster disabled.")
       return
     end
   end
@@ -2408,7 +2692,7 @@ function checkMagicShooter()
     if creature:getPosition().z == position.z and getDistanceBetween(position, creature:getPosition()) <= 6 then
       creaturesAround = creaturesAround + 1
     end
-    table.insert(creatureList, {position = creature:getPosition(), creature = creature})
+    table.insert(creatureList, { position = creature:getPosition(), creature = creature })
   end
 
   local unifiedList = {}
@@ -2416,14 +2700,14 @@ function checkMagicShooter()
   for i, shooter in ipairs(profile.spells) do
     local spell = shooter.id ~= 0 and Spells.getSpellByClientId(shooter.id) or nil
     if spell then
-      table.insert(unifiedList, {type = "spell", spell = spell, config = shooter})
+      table.insert(unifiedList, { type = "spell", spell = spell, config = shooter })
     end
   end
 
   for i, runeConfig in ipairs(profile.runes) do
     local runeSpell = Spells.getRuneSpellByItem(runeConfig.id)
     if runeSpell then
-      table.insert(unifiedList, {type = "rune", rune = runeSpell, config = runeConfig})
+      table.insert(unifiedList, { type = "rune", rune = runeSpell, config = runeConfig })
     end
   end
 
@@ -2438,7 +2722,7 @@ function checkMagicShooter()
     end
 
     local target = g_game.getAttackingCreature()
-    local positionTarget = target and target:getPosition() or {x = 0xFFFF, y = 0xFFFF, z = 0xFF}
+    local positionTarget = target and target:getPosition() or { x = 0xFFFF, y = 0xFFFF, z = 0xFF }
 
     if entry.type == "spell" then
       local castOnFoot = false
@@ -2464,7 +2748,10 @@ function checkMagicShooter()
           end
           local range = spell.range or 3
 
-          if target and target:getCollisionSquare() > 1 then
+          -- getCollisionSquare doesn't exist on this build (it hard-errored the
+          -- shooter on every targeted spell). Guard it: it only offset the area
+          -- origin for 2x2 creatures, so skipping it when absent is harmless.
+          if target and target.getCollisionSquare and target:getCollisionSquare() > 1 then
             positionTarget = getRelativePosition(positionTarget)
           end
 
@@ -2483,7 +2770,6 @@ function checkMagicShooter()
         end
 
         if reachableCreatures >= config.creatures then
-
           if not table.contains(bothCastTypeSpells, spell.id) and not config.forceCast and (targetable and creaturesAround > 1) then
             goto continue
           end
@@ -2492,18 +2778,17 @@ function checkMagicShooter()
             goto continue
           end
 
-          g_game.doThing(false) 
+          g_game.doThing(false)
           g_game.talk(spell.words, true, castOnFoot)
           g_game.doThing(true)
 
           -- --- precooldown
           onSpellCooldown(spell.id, 500)
-          for group,_ in pairs(spell.group) do
+          for group, _ in pairs(spell.group) do
             onSpellGroupCooldown(group, 500)
           end
         end
       end
-
     elseif entry.type == "rune" then
       if helperConfig.magicShooterOnHold then
         goto continue
@@ -2516,9 +2801,11 @@ function checkMagicShooter()
         local bestTarget = nil
         local maxCreaturesHit = 0
         if runeSpell.area then
-          bestTarget, maxCreaturesHit = findBestTarget(position, direction, runeSpell.area, creatureList, config.creatures)
+          bestTarget, maxCreaturesHit = findBestTarget(position, direction, runeSpell.area, creatureList,
+            config.creatures)
         elseif not runeSpell.area then
-          bestTarget = target and (isWithinReach(position, positionTarget) and g_map.isSightClear(position, positionTarget)) and target or nil
+          bestTarget = target and
+          (isWithinReach(position, positionTarget) and g_map.isSightClear(position, positionTarget)) and target or nil
         end
         if bestTarget then
           if not config.forceCast and (not runeSpell.area and creaturesAround > 1) then
@@ -2573,20 +2860,21 @@ function checkAutoTarget()
 
   local position = myCharacter:getPosition()
 
-  local currentLockedTarget = helperConfig.currentLockedTargetId ~= 0 and g_map.getCreatureById(helperConfig.currentLockedTargetId) or nil
+  local currentLockedTarget = helperConfig.currentLockedTargetId ~= 0 and
+  g_map.getCreatureById(helperConfig.currentLockedTargetId) or nil
   if currentLockedTarget and not currentLockedTarget:isDead() and isWithinReach(position, currentLockedTarget:getPosition()) then
     return
   end
 
-  local closestTarget = {id = nil, distance = 99}
-  local farthestTarget = {id = nil, distance = -1}
-  local lowestHealthTarget = {id = nil, health = 100}
-  local highestHealthTarget = {id = nil, health = -1}
-  local bestTarget = {id = nil, creatures = 0}
-  local closestLowestHealthTarget = {id = nil, distance = 99, health = 100}
-  local closestHighestHealthTarget = {id = nil, distance = 99, health = -1}
-  local farthestLowestHealthTarget = {id = nil, distance = -1, health = 100}
-  local farthestHighestHealthTarget = {id = nil, distance = -1, health = -1}
+  local closestTarget = { id = nil, distance = 99 }
+  local farthestTarget = { id = nil, distance = -1 }
+  local lowestHealthTarget = { id = nil, health = 100 }
+  local highestHealthTarget = { id = nil, health = -1 }
+  local bestTarget = { id = nil, creatures = 0 }
+  local closestLowestHealthTarget = { id = nil, distance = 99, health = 100 }
+  local closestHighestHealthTarget = { id = nil, distance = 99, health = -1 }
+  local farthestLowestHealthTarget = { id = nil, distance = -1, health = 100 }
+  local farthestHighestHealthTarget = { id = nil, distance = -1, health = -1 }
 
   local area = SpellAreas.AREA_CIRCLE3X3
   if translateVocation(myCharacter:getVocation()) == 7 then
@@ -2595,7 +2883,7 @@ function checkAutoTarget()
 
   local creatureList = {}
   for i, creature in pairs(spectators) do
-    table.insert(creatureList, {position = creature:getPosition(), creature = creature})
+    table.insert(creatureList, { position = creature:getPosition(), creature = creature })
   end
 
   local monsters = {}
@@ -2607,42 +2895,42 @@ function checkAutoTarget()
     end
     local health = creatureData.creature:getHealthPercent()
     if lowestHealthTarget.id == nil then -- just to make sure it will target someone at 100% health
-      lowestHealthTarget = {id = creatureData.creature:getId(), health = health}
+      lowestHealthTarget = { id = creatureData.creature:getId(), health = health }
     end
     if health < lowestHealthTarget.health then
-      lowestHealthTarget = {id = creatureData.creature:getId(), health = health}
+      lowestHealthTarget = { id = creatureData.creature:getId(), health = health }
     end
     if health > highestHealthTarget.health then
-      highestHealthTarget = {id = creatureData.creature:getId(), health = health}
+      highestHealthTarget = { id = creatureData.creature:getId(), health = health }
     end
     local creatureDistance = getDistanceBetween(position, creatureData.position)
     if creatureDistance < closestTarget.distance then
-      closestTarget = {id = creatureData.creature:getId(), distance = creatureDistance}
+      closestTarget = { id = creatureData.creature:getId(), distance = creatureDistance }
     end
     if creatureDistance > farthestTarget.distance then
-      farthestTarget = {id = creatureData.creature:getId(), distance = creatureDistance}
+      farthestTarget = { id = creatureData.creature:getId(), distance = creatureDistance }
     end
     if (creatureDistance < closestLowestHealthTarget.distance) or
-       (creatureDistance == closestLowestHealthTarget.distance and health < closestLowestHealthTarget.health) then
-      closestLowestHealthTarget = {id = creatureData.creature:getId(), distance = creatureDistance, health = health}
+        (creatureDistance == closestLowestHealthTarget.distance and health < closestLowestHealthTarget.health) then
+      closestLowestHealthTarget = { id = creatureData.creature:getId(), distance = creatureDistance, health = health }
     end
     if (creatureDistance < closestHighestHealthTarget.distance) or
-       (creatureDistance == closestHighestHealthTarget.distance and health > closestHighestHealthTarget.health) then
-      closestHighestHealthTarget = {id = creatureData.creature:getId(), distance = creatureDistance, health = health}
+        (creatureDistance == closestHighestHealthTarget.distance and health > closestHighestHealthTarget.health) then
+      closestHighestHealthTarget = { id = creatureData.creature:getId(), distance = creatureDistance, health = health }
     end
     if (creatureDistance > farthestLowestHealthTarget.distance) or
-       (creatureDistance == farthestLowestHealthTarget.distance and health < farthestLowestHealthTarget.health) then
-      farthestLowestHealthTarget = {id = creatureData.creature:getId(), distance = creatureDistance, health = health}
+        (creatureDistance == farthestLowestHealthTarget.distance and health < farthestLowestHealthTarget.health) then
+      farthestLowestHealthTarget = { id = creatureData.creature:getId(), distance = creatureDistance, health = health }
     end
     if (creatureDistance > farthestHighestHealthTarget.distance) or
-       (creatureDistance == farthestHighestHealthTarget.distance and health > farthestHighestHealthTarget.health) then
-      farthestHighestHealthTarget = {id = creatureData.creature:getId(), distance = creatureDistance, health = health}
+        (creatureDistance == farthestHighestHealthTarget.distance and health > farthestHighestHealthTarget.health) then
+      farthestHighestHealthTarget = { id = creatureData.creature:getId(), distance = creatureDistance, health = health }
     end
     local creaturesHit = countAttackableCreatures(creatureData.position, 1, area, creatureList, true)
     if creaturesHit > maxCreaturesHit then
-        maxCreaturesHit = creaturesHit
-        bestTarget.id = creatureData.creature:getId()
-        bestTarget.creatures = creaturesHit
+      maxCreaturesHit = creaturesHit
+      bestTarget.id = creatureData.creature:getId()
+      bestTarget.creatures = creaturesHit
     end
     table.insert(monsters, creatureData.creature)
     ::continue::
@@ -2677,7 +2965,6 @@ function checkAutoTarget()
     g_game.doThing(true)
   end
 end
-
 
 eventTable.checkAutoTarget.action = checkAutoTarget
 
@@ -2779,7 +3066,8 @@ function onFriendHealing(localPlayer)
     end
 
     local memberHealth = member:getHealthPercent()
-    local isInSight = g_map.isSightClear(position, member:getPosition()) and isWithinReach(position, member:getPosition())
+    local isInSight = g_map.isSightClear(position, member:getPosition()) and
+    isWithinReach(position, member:getPosition())
 
     if not isInSight then
       goto continue
@@ -2820,7 +3108,6 @@ function onFriendHealing(localPlayer)
     :: continue ::
   end
 end
-
 
 function reset()
   for i = 0, 2 do
@@ -2885,7 +3172,8 @@ function removeAction(type, button, keepInfo)
       helperConfig.potions[slotIndex + 1].priority = 0
       local priorityButton = healingPanel:recursiveGetChildById("priority" .. slotIndex)
       priorityButton:setImageSource("/images/skin/show-gui-help-grey")
-      priorityButton:setTooltip("Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nPaladins can click on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
+      priorityButton:setTooltip(
+      "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.\nPaladins can click on this button to change the potion priority:\n  - Icon: Blue (Mana Priority)\n  - Icon: Red  (Health Priority)")
     end
 
     helperConfig.potions[slotIndex + 1].id = 0
@@ -2919,7 +3207,6 @@ function removeAction(type, button, keepInfo)
     if button.runeItem then
       button.runeItem:destroy()
     end
-
   elseif type == "training" then
     helperConfig.training[slotIndex + 1].id = 0
     helperConfig.training[slotIndex + 1].percent = 0
@@ -2976,7 +3263,6 @@ function loadProfileOptions()
     presets:updateCurrentOption(profile)
   end
 end
-
 
 function loadShooterProfileByName(profileName)
   helperConfig.selectedShooterProfile = profileName
@@ -3221,22 +3507,22 @@ function saveSettings()
 
   if not LoadedPlayer:isLoaded() then return end
 
-  local folder = "/characterdata/".. LoadedPlayer:getId() .."/helper.json"
-	local status, result = pcall(function() return json.encode(helperConfig, 2) end)
-	if not status then
-		return onError("Error while saving helper profile settings. Data won't be saved. Details: " .. result)
-	end
+  local folder = "/characterdata/" .. LoadedPlayer:getId() .. "/helper.json"
+  local status, result = pcall(function() return json.encode(helperConfig, 2) end)
+  if not status then
+    return onError("Error while saving helper profile settings. Data won't be saved. Details: " .. result)
+  end
 
-	if result:len() > 100 * 1024 * 1024 then
-	  return onError("Something went wrong, file is above 100MB, won't be saved")
-	end
+  if result:len() > 100 * 1024 * 1024 then
+    return onError("Something went wrong, file is above 100MB, won't be saved")
+  end
 
-	g_resources.writeFileContents(folder, result)
+  g_resources.writeFileContents(folder, result)
 end
 
 function loadSettings()
   local player = LoadedPlayer:getId()
-  local folder = "/characterdata/".. player .."/helper.json"
+  local folder = "/characterdata/" .. player .. "/helper.json"
 
   helperConfig = {
     spells = {
@@ -3246,27 +3532,28 @@ function loadSettings()
     },
     potions = {
       { id = 0, percent = 50, priority = 0 },
-      { id = 0, percent = 50, priority = 0},
+      { id = 0, percent = 50, priority = 0 },
       { id = 0, percent = 50, priority = 0 }
     },
     training = {
-      {id = 0, percent = 0, enabled = false }
+      { id = 0, percent = 0, enabled = false }
     },
     haste = {
-      {id = 0, enabled = false, safecast = false }
+      { id = 0, enabled = false, safecast = false }
     },
     friendhealing = {
-      {name = "", percent = 0, enabled = false },
-      {name = "", percent = 0, enabled = false }
+      { name = "", percent = 0, enabled = false },
+      { name = "", percent = 0, enabled = false }
     },
     gransiohealing = {
-      {name = "", percent = 0, enabled = false },
-      {name = "", percent = 0, enabled = false }
+      { name = "", percent = 0, enabled = false },
+      { name = "", percent = 0, enabled = false }
     },
 
     shooterProfiles = {
       ["Default"] = deepCopy(defaultShooterProfile)
-    }, selectedShooterProfile = "Default",
+    },
+    selectedShooterProfile = "Default",
 
     autoEatFood = false,
     autoReconnect = false,
@@ -3275,19 +3562,32 @@ function loadSettings()
     magicShooterOnHold = false,
     autoTargetEnabled = false,
     autoTargetMode = autoTargetModes["F"],
-    currentLockedTargetId = 0
+    currentLockedTargetId = 0,
+
+    -- Mage-only magic-shield suite (utamo vita / exana vita / shield potion).
+    mageShield = {
+      utamo  = { enabled = false, life = 30, renew = false, renewShield = 50, hotkey = '' },
+      exana  = { enabled = false, life = 80, hotkey = '' },
+      potion = { enabled = false, life = 0, shield = 0, onlyVitaCd = false, forceOnFear = false, itemId = 0 }
+    }
   }
 
   if g_resources.fileExists(folder) then
-		local status, result = pcall(function()
-			return json.decode(g_resources.readFileContents(folder))
-		end)
+    local status, result = pcall(function()
+      return json.decode(g_resources.readFileContents(folder))
+    end)
 
-		if not status then
-			return false
-		end
+    if not status then
+      return false
+    end
 
-		helperConfig = result
+    helperConfig = result
+
+    -- Magic-shield suite migration (older saves predate it).
+    helperConfig.mageShield = helperConfig.mageShield or {}
+    helperConfig.mageShield.utamo  = helperConfig.mageShield.utamo  or { enabled = false, life = 30, renew = false, renewShield = 50, hotkey = '' }
+    helperConfig.mageShield.exana  = helperConfig.mageShield.exana  or { enabled = false, life = 80, hotkey = '' }
+    helperConfig.mageShield.potion = helperConfig.mageShield.potion or { enabled = false, life = 0, shield = 0, onlyVitaCd = false, forceOnFear = false, itemId = 0 }
 
     -- hot-fix para caso ja tenha carregado vazio
     if not result.spells then
@@ -3323,24 +3623,24 @@ function loadSettings()
     end
     if not result.training then
       helperConfig.training = {
-        {id = 0, percent = 0, enabled = false }
+        { id = 0, percent = 0, enabled = false }
       }
     end
     if not result.haste then
       helperConfig.haste = {
-        {id = 0, enabled = false, safecast = false }
+        { id = 0, enabled = false, safecast = false }
       }
     end
     if not result.friendhealing then
       helperConfig.friendhealing = {
-        {name = "", percent = 0, enabled = false },
-        {name = "", percent = 0, enabled = false }
+        { name = "", percent = 0, enabled = false },
+        { name = "", percent = 0, enabled = false }
       }
     end
     if not result.gransiohealing then
       helperConfig.gransiohealing = {
-        {name = "", percent = 0, enabled = false },
-        {name = "", percent = 0, enabled = false }
+        { name = "", percent = 0, enabled = false },
+        { name = "", percent = 0, enabled = false }
       }
     end
     if not result.shooterProfiles then
@@ -3380,8 +3680,8 @@ function loadSettings()
     if not result.currentLockedTargetId then
       helperConfig.currentLockedTargetId = 0
     end
-		return true
-	end
+    return true
+  end
 end
 
 function checkExerciseEvent()
@@ -3424,7 +3724,7 @@ function getExerciseDummy()
     if items then
       for pos, ptr in pairs(items) do
         if pos.z == playerPos.z then
-          itemList[#itemList + 1] = {position = pos, item = ptr}
+          itemList[#itemList + 1] = { position = pos, item = ptr }
         end
       end
     end
@@ -3450,7 +3750,7 @@ function assignExerciseEvent(button)
   helper:hide()
   g_mouse.pushCursor('target')
   mouseGrabberWidget.onMouseRelease = function(self, mousePosition, mouseButton)
-      onAssignExercise(self, mousePosition, mouseButton, button)
+    onAssignExercise(self, mousePosition, mouseButton, button)
   end
 end
 
@@ -3484,7 +3784,7 @@ function onAssignExercise(self, mousePosition, mouseButton, button)
     if not button:getChildById('potionItem') then
       local itemWidget = g_ui.createWidget('PotionItem', button)
       if itemWidget then
-          itemWidget:setId('potionItem')
+        itemWidget:setId('potionItem')
       end
     end
     local itemWidget = button:getChildById('potionItem')
@@ -3527,14 +3827,16 @@ function botStatus()
     helperStatusLabel:setText("Enabled")
     helperTrackerStatus:setText("Active")
     helperTrackerStatus:setColor("$var-text-cip-color-green")
-    helperStatus:setTooltip(" - Helper Status: Enabled\n\nYou can Enable or Disable the helper using\nthe default hotkey (Pause Break).\n\nAlso you can change the hotkey on settings.")
+    helperStatus:setTooltip(
+    " - Helper Status: Enabled\n\nYou can Enable or Disable the helper using\nthe default hotkey (Pause Break).\n\nAlso you can change the hotkey on settings.")
     modules.game_textmessage.displayFailureMessage(tr('Helper Status: Enabled'))
   else
     helperStatus:setImageSource("/images/store/icon-no")
     helperTrackerStatus:setText("Inactive")
     helperStatusLabel:setText("Disabled")
     helperTrackerStatus:setColor("$var-text-cip-store-red")
-    helperStatus:setTooltip(" - Helper Status: Disabled\n\nYou can Enable or Disable the helper using\nthe default hotkey (Pause Break).\n\nAlso you can change the hotkey on settings.")
+    helperStatus:setTooltip(
+    " - Helper Status: Disabled\n\nYou can Enable or Disable the helper using\nthe default hotkey (Pause Break).\n\nAlso you can change the hotkey on settings.")
     modules.game_textmessage.displayFailureMessage(tr('Helper Status: Disabled'))
   end
 
@@ -3555,7 +3857,7 @@ function botStatus()
           toggleMagicShooter(widget)
         end
       end
-      shooterStatusWidget:setTooltip("Click to toggle RTCaster")
+      shooterStatusWidget:setTooltip("Click to toggle Caster")
     end
 
     local targetStatusWidget = helperTracker:recursiveGetChildById("targetStatus")
@@ -3644,7 +3946,7 @@ function manageHotkeys(typo)
 
   assignWindow.onKeyDown = function(assignWindow, keyCode, keyboardModifiers, keyText)
     local keyCombo = determineKeyComboDesc(keyCode, keyboardModifiers, keyText)
-    local resetCombo = {"Shift", "Ctrl", "Alt"}
+    local resetCombo = { "Shift", "Ctrl", "Alt" }
     if table.contains(resetCombo, keyCombo) then
       assignWindow.display:setText('')
       assignWindow.warning:setVisible(false)
@@ -3737,23 +4039,23 @@ function onDropSpell(widget, spellWords)
   local profile = getShooterProfile()
 
   if isHealingPanel then
-    onSetupDropSpell(widget, spellData, {2}, helperConfig.spells)
+    onSetupDropSpell(widget, spellData, { 2 }, helperConfig.spells)
   elseif isTrainingPanel or isHastePanel then
     onSetupDropSupport(widget, spellData, isHastePanel)
   elseif isAttackPanel then
-    onSetupDropSpell(widget, spellData, {1, 4, 8}, profile.spells)
+    onSetupDropSpell(widget, spellData, { 1, 4, 8 }, profile.spells)
   end
 end
 
 function onSetupDropSpell(button, spellData, groups, tableToAssign)
   local groupIds = Spells.getGroupIds(spellData)
   local function containsAnyGroup(groups, targetGroups)
-      for _, group in ipairs(targetGroups) do
-          if table.contains(groups, group) then
-              return true
-          end
+    for _, group in ipairs(targetGroups) do
+      if table.contains(groups, group) then
+        return true
       end
-      return false
+    end
+    return false
   end
 
   local spellId = SpellIcons[spellData.icon][1]
@@ -3872,12 +4174,12 @@ end
 function onSearchTextChange(text)
   local spellList = window:recursiveGetChildById('spellList')
   for _, child in pairs(spellList:getChildren()) do
-      local name = child:getText():lower()
-      if name:find(text:lower()) or text == '' or #text < 3 then
-          child:setVisible(true)
-      else
-          child:setVisible(false)
-      end
+    local name = child:getText():lower()
+    if name:find(text:lower()) or text == '' or #text < 3 then
+      child:setVisible(true)
+    else
+      child:setVisible(false)
+    end
   end
 end
 
@@ -3887,15 +4189,15 @@ function onClearSearchText()
 end
 
 function toggleHelperTracker()
-	if helperTracker:isVisible() then
-		helperTracker:close()
-		helperTracker:setParent(nil)
-	else
-		helperTracker:open()
-		if m_interface.addToPanels(helperTracker) then
-			helperTracker:getParent():moveChildToIndex(helperTracker, #helperTracker:getParent():getChildren())
-		end
-	end
+  if helperTracker:isVisible() then
+    helperTracker:close()
+    helperTracker:setParent(nil)
+  else
+    helperTracker:open()
+    if m_interface.addToPanels(helperTracker) then
+      helperTracker:getParent():moveChildToIndex(helperTracker, #helperTracker:getParent():getChildren())
+    end
+  end
 end
 
 function showTerms()
@@ -3918,10 +4220,9 @@ function createHelperRules()
     rulesTextList:destroyChildren()
 
     local longText = "\n           Extended Terms of Conditions for Helper Services\n\n" ..
-                      " These Terms of Service establish the conditions under which D FATO GAMES LTDA provides 'Helper' and 'Additional Services' for the online RPG game 'Astra.' This document complements the 'Astra Service Agreement,' which all users must accept when creating an account.\n\n" ..
-
-                      "2 - Cheating\n\n" ..
-                      "2.H - Automations in RTC.\n If the player is using the RTC client and the RTCaster function to attack monsters and/or cast spells is active, they will undergo a standard check by our team. If the player absence is confirmed, a ban will be applied to the player and their account."
+        " These Terms of Service establish the conditions under which D FATO GAMES LTDA provides 'Helper' and 'Additional Services' for the online RPG game 'Astra.' This document complements the 'Astra Service Agreement,' which all users must accept when creating an account.\n\n" ..
+        "2 - Cheating\n\n" ..
+        "2.H - Automations in RTC.\n If the player is using the RTC client and the Caster function to attack monsters and/or cast spells is active, they will undergo a standard check by our team. If the player absence is confirmed, a ban will be applied to the player and their account."
 
     local label = g_ui.createWidget('UILabel', rulesTextList)
     label:setText(longText)

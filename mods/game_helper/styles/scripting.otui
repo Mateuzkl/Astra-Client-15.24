@@ -1,0 +1,280 @@
+// Scripting tab UI (imported by scripting.lua via g_ui.importStyle('styles/scripting')).
+// The tab itself is just two lists (available / running) + management buttons. The code
+// editor and the debug console live in their own windows (ScriptEditorWindow / ScriptDebugWindow).
+
+// One selectable row in the script lists.
+ScriptListRow < Label
+  height: 16
+  text-align: left
+  text-offset: 4 0
+  font: $var-cip-font
+  focusable: true
+  $on:
+    background-color: #585858
+  $hover !on:
+    background-color: #3d3d3d
+
+// One line in the debug console.
+ScriptDebugRow < Label
+  height: 15
+  text-align: left
+  text-offset: 3 0
+  text-wrap: true
+  font: $var-cip-font
+  color: #d8d8d8
+
+ScriptingPanel < Panel
+  anchors.fill: parent
+
+  Label
+    id: availHeader
+    anchors.top: parent.top
+    anchors.left: parent.left
+    margin-top: 2
+    !text: tr('Available')
+    color: #c8a05a
+    font: $var-cip-font
+
+  Label
+    id: runHeader
+    anchors.top: parent.top
+    anchors.left: parent.horizontalCenter
+    margin-top: 2
+    margin-left: 3
+    !text: tr('Running')
+    color: #44ad25
+    font: $var-cip-font
+
+  TextList
+    id: disabledList
+    anchors.top: availHeader.bottom
+    anchors.left: parent.left
+    anchors.right: parent.horizontalCenter
+    margin-top: 3
+    margin-right: 3
+    height: 150
+    padding: 1
+    vertical-scrollbar: disabledScroll
+    background-color: #1e1e1e
+  VerticalScrollBar
+    id: disabledScroll
+    anchors.top: disabledList.top
+    anchors.bottom: disabledList.bottom
+    anchors.right: disabledList.right
+    margin: 1 1 1 0
+    step: 14
+    pixels-scroll: true
+
+  TextList
+    id: enabledList
+    anchors.top: runHeader.bottom
+    anchors.left: parent.horizontalCenter
+    anchors.right: parent.right
+    margin-top: 3
+    margin-left: 3
+    height: 150
+    padding: 1
+    vertical-scrollbar: enabledScroll
+    background-color: #1e1e1e
+  VerticalScrollBar
+    id: enabledScroll
+    anchors.top: enabledList.top
+    anchors.bottom: enabledList.bottom
+    anchors.right: enabledList.right
+    margin: 1 1 1 0
+    step: 14
+    pixels-scroll: true
+
+  Button
+    id: loadBtn
+    anchors.top: disabledList.bottom
+    anchors.left: parent.left
+    margin-top: 5
+    size: 92 20
+    !text: tr('Load >')
+    !tooltip: tr('Enable the selected available script (it starts running)')
+    @onClick: Scripting.loadSelected()
+
+  Button
+    id: unloadBtn
+    anchors.top: prev.top
+    anchors.right: parent.right
+    size: 92 20
+    !text: tr('< Unload')
+    !tooltip: tr('Disable the selected running script (it stops)')
+    @onClick: Scripting.unloadSelected()
+
+  Button
+    id: newBtn
+    anchors.top: loadBtn.bottom
+    anchors.left: parent.left
+    margin-top: 6
+    size: 58 20
+    !text: tr('New')
+    !tooltip: tr('Create a new script and open the editor')
+    @onClick: Scripting.newScript()
+
+  Button
+    id: editBtn
+    anchors.top: prev.top
+    anchors.left: prev.right
+    margin-left: 3
+    size: 58 20
+    !text: tr('Edit')
+    !tooltip: tr('Open the selected script in the editor')
+    @onClick: Scripting.editSelected()
+
+  Button
+    id: delBtn
+    anchors.top: prev.top
+    anchors.left: prev.right
+    margin-left: 3
+    size: 58 20
+    !text: tr('Delete')
+    !tooltip: tr('Delete the selected script')
+    @onClick: Scripting.deleteSelected()
+
+  Button
+    id: debugBtn
+    anchors.top: prev.top
+    anchors.right: parent.right
+    size: 70 20
+    !text: tr('Debug')
+    !tooltip: tr('Open the debug console (script prints and errors)')
+    @onClick: Scripting.openDebug()
+
+  Label
+    id: scriptingStatus
+    height: 14
+    anchors.top: newBtn.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 6
+    text-align: left
+    !text: tr('Ready')
+    font: $var-cip-font
+    color: #c0c0c0
+
+// Code editor window (opened by New / Edit). Save recompiles a running script.
+ScriptEditorWindow < MainWindow
+  id: scriptEditor
+  size: 470 430
+  !text: tr('Script Editor')
+  font: $var-cip-font
+
+  TextEdit
+    id: codeEdit
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: editorButtons.top
+    margin-top: 2
+    margin-bottom: 6
+    multiline: true
+    text-wrap: false
+    text-align: left
+    font: $var-cip-font
+    color: #d8d8d8
+    padding: 3
+    background-color: #141414
+    selection-color: #111111
+    selection-background-color: #ffcc00
+    vertical-scrollbar: editorScroll
+  VerticalScrollBar
+    id: editorScroll
+    anchors.top: codeEdit.top
+    anchors.bottom: codeEdit.bottom
+    anchors.right: codeEdit.right
+    margin: 1 1 1 0
+    step: 14
+    pixels-scroll: true
+
+  Panel
+    id: editorButtons
+    height: 22
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+
+    Button
+      id: closeBtn
+      anchors.right: parent.right
+      anchors.top: parent.top
+      size: 60 22
+      !text: tr('Close')
+
+    Button
+      id: runBtn
+      anchors.right: prev.left
+      anchors.top: parent.top
+      margin-right: 6
+      size: 72 22
+      !text: tr('Run Once')
+
+    Button
+      id: saveBtn
+      anchors.right: prev.left
+      anchors.top: parent.top
+      margin-right: 6
+      size: 60 22
+      !text: tr('Save')
+
+    Label
+      id: editorStatus
+      anchors.left: parent.left
+      anchors.verticalCenter: saveBtn.verticalCenter
+      anchors.right: saveBtn.left
+      margin-right: 6
+      text-align: left
+      !text: ''
+      font: $var-cip-font
+      color: #c0c0c0
+
+// Debug console window: timestamped prints + errors from scripts.
+ScriptDebugWindow < MainWindow
+  id: scriptDebug
+  size: 500 360
+  !text: tr('Script Debug')
+  font: $var-cip-font
+
+  TextList
+    id: debugList
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: debugButtons.top
+    margin-top: 2
+    margin-bottom: 6
+    padding: 2
+    vertical-scrollbar: debugScroll
+    background-color: #141414
+  VerticalScrollBar
+    id: debugScroll
+    anchors.top: debugList.top
+    anchors.bottom: debugList.bottom
+    anchors.right: debugList.right
+    margin: 1 1 1 0
+    step: 14
+    pixels-scroll: true
+
+  Panel
+    id: debugButtons
+    height: 22
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+
+    Button
+      id: closeBtn
+      anchors.right: parent.right
+      anchors.top: parent.top
+      size: 60 22
+      !text: tr('Close')
+
+    Button
+      id: clearBtn
+      anchors.right: prev.left
+      anchors.top: parent.top
+      margin-right: 6
+      size: 60 22
+      !text: tr('Clear')
