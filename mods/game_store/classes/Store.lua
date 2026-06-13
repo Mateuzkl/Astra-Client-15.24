@@ -32,17 +32,11 @@ SERVICE_OFFER_TYPE = 3
 SERVICE_OFFER_ID = 4
 SERVICE_OFFER_NAME = 5
 
-if g_game and not g_game.requestStoreOffersLegacy then
-	local requestStoreOffers = g_game.requestStoreOffers
-	g_game.requestStoreOffersLegacy = requestStoreOffers
-	g_game.requestStoreOffers = function(actionOrCategory, valueOrServiceType, serviceType)
-		if type(actionOrCategory) == 'number' then
-			return requestStoreOffers(tostring(valueOrServiceType or ''), tonumber(serviceType) or 0)
-		end
-
-		return requestStoreOffers(tostring(actionOrCategory or ''), tonumber(valueOrServiceType) or 0)
-	end
-end
+-- NOTE: a legacy compatibility wrapper around g_game.requestStoreOffers used to
+-- live here. It is gone on purpose: storeprotocol.lua (initStoreProtocol)
+-- installs the real C_RequestStoreOffers sender, which understands the
+-- (action number, stringValue, numberValue) convention used by every caller.
+-- The wrapper would shadow it and collapse every action type to OPEN_HOME.
 
 CATEGORY_NONE = 0
 CATEGORY_MOUNT = 1

@@ -18,6 +18,28 @@ Offers.coinCheck = nil
 Offers.loadOffersEvent = nil
 Offers.clientOffers = {}
 
+-- "You don't have money" is always the LAST entry of Offers.reasons
+-- (appended in Offers:configure); server-sent reasonIds are strictly smaller,
+-- so reasonId == #Offers.reasons uniquely identifies Lua-added money entries.
+local function clearMoneyReason(subOffer)
+	local moneyReasonId = #Offers.reasons
+	for idx = #subOffer.disabledReasons, 1, -1 do
+		if subOffer.disabledReasons[idx].reasonId == moneyReasonId then
+			table.remove(subOffer.disabledReasons, idx)
+		end
+	end
+end
+
+local function hasMoneyReason(subOffer)
+	local moneyReasonId = #Offers.reasons
+	for _, entry in pairs(subOffer.disabledReasons) do
+		if entry.reasonId == moneyReasonId then
+			return true
+		end
+	end
+	return false
+end
+
 function Offers:stopAllEvents()
 	if HomeOffer.event then
 		HomeOffer.event:cancel()
@@ -210,6 +232,11 @@ function Offers:refreshOffers(displayOffer, redirect, filter)
 		local count = 0
 		for i = #offer.offers, 1, -1 do
 			local subOffer = offer.offers[i]
+			-- subOffer tables are cached and reused across re-renders; drop the
+			-- money entry we may have added before and rebuild the reason string
+			-- from scratch, otherwise both grow without bound every refresh
+			clearMoneyReason(subOffer)
+			subOffer.disabledReason = ""
 			if subOffer.id == redirect then
 				selected = true
 			end
@@ -849,7 +876,9 @@ function Offers:checkOfferValue()
 			local subOffer = offer.offers[i]
 			if subOffer.coinType == COIN_TYPE_DEFAULT then -- normal coin
 				if Store.coins < subOffer.price then
-					subOffer.disabledReasons[#subOffer.disabledReasons + 1] = {reasonId = #Offers.reasons}
+					if not hasMoneyReason(subOffer) then
+						subOffer.disabledReasons[#subOffer.disabledReasons + 1] = {reasonId = #Offers.reasons}
+					end
 
           local slot = i == 2 and 1 or 2
           if #offer.offers == 1 then
@@ -861,7 +890,9 @@ function Offers:checkOfferValue()
 				end
 			elseif subOffer.coinType == COIN_TYPE_TRANSFERABLE then -- transfeable coin
 				if Store.transferableCoins < subOffer.price then
-					subOffer.disabledReasons[#subOffer.disabledReasons + 1] = {reasonId = #Offers.reasons}
+					if not hasMoneyReason(subOffer) then
+						subOffer.disabledReasons[#subOffer.disabledReasons + 1] = {reasonId = #Offers.reasons}
+					end
           local slot = i == 2 and 1 or 2
           if #offer.offers == 1 then
           	slot = 1
@@ -872,7 +903,9 @@ function Offers:checkOfferValue()
 				end
 			elseif subOffer.coinType == COIN_TYPE_TOURNAMENT then -- tournament coin
 				if Store.tournamentCoins < subOffer.price then
-					subOffer.disabledReasons[#subOffer.disabledReasons + 1] = {reasonId = #Offers.reasons}
+					if not hasMoneyReason(subOffer) then
+						subOffer.disabledReasons[#subOffer.disabledReasons + 1] = {reasonId = #Offers.reasons}
+					end
           local slot = i == 2 and 1 or 2
           if #offer.offers == 1 then
           	slot = 1

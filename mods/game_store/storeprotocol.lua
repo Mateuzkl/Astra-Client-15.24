@@ -1,21 +1,31 @@
+-- Thin SENDER layer for the crystalserver (Canary-style) GameStore.
+--
+-- RECEIVE side: there is intentionally NO Lua receive machinery here (no
+-- ProtocolGame.registerOpcode, no parseCatalog/parseHistory/showOffers caches).
+-- Incoming store packets must reach the native C++ parsers, which were ported
+-- byte-for-byte from the crystalserver gamestore module
+-- (data/modules/scripts/gamestore/init.lua, read-only on WSL):
+--   0xFB S_OpenStore               -> parseStore (categories -> onStoreCategories)
+--   0xFC S_StoreOffers             -> parseStoreOffers (-> onStoreOffers)
+--   0xFD S_OpenTransactionHistory  -> parseStoreTransactionHistory
+--                                     (-> onStoreTransactionHistory(currentPage,
+--                                      pageCount numeric, offers) — store.lua:309
+--                                      already consumes exactly this signature)
+--   0xEA sendOfferDescription      -> parseStoreOfferDescription
+--   0xE0 S_StoreError              -> parseStoreError, 0xDF S_CoinBalance, etc.
+-- A Lua handler registered on any of these would run BEFORE the C++ switch and
+-- shadow/desync the native parse.
+--
+-- SEND side: the native C++ senders are used wherever their wire layout matches
+-- the server (see initStoreProtocol below). Only the senders whose native
+-- implementation diverges from the crystalserver parsers are overridden here.
+
 local StoreProtocol = {}
 
-local OPCODE_STORE_TRANSFER = 0xF8
-local OPCODE_STORE_HISTORY = 0xFA
-local OPCODE_STORE_OPEN = 0xFB
-local OPCODE_STORE_BUY = 0xFC
-local OPCODE_STORE_SEND = 0xFD
-
-local RESP_ERROR = 0
-local RESP_CATALOG = 1
-local RESP_SUCCESS = 2
-local RESP_HISTORY = 3
-
-local registered = false
-local categories = {}
-local offersByCategory = {}
-local offersById = {}
-local pendingStoreRequest = nil
+-- crystalserver gamestore RecivedPackets (data/modules/scripts/gamestore/init.lua:202)
+local OPCODE_REQUEST_STORE_OFFERS = 0xFB -- C_RequestStoreOffers (modules.xml recvbyte 251)
+local OPCODE_BUY_STORE_OFFER = 0xFC -- C_BuyStoreOffer       (modules.xml recvbyte 252)
+local OPCODE_TRANSFER_COINS = 0xEF -- C_TransferCoins      (modules.xml recvbyte 239)
 
 local function sendStoreMessage(msg)
   local protocolGame = g_game.getProtocolGame()
@@ -24,268 +34,128 @@ local function sendStoreMessage(msg)
   end
 end
 
-local function normalizeOfferType(oftype)
-  oftype = tostring(oftype or ""):lower()
-  if oftype:find("mount", 1, true) then
-    return CATEGORY_MOUNT
-  elseif oftype:find("outfit", 1, true) then
-    return CATEGORY_OUTFIT
-  elseif oftype:find("hireling", 1, true) then
-    return CATEGORY_HIRELING
-  end
-  return CATEGORY_ITEM
-end
-
-local function buildOffer(rawOffer, categoryName)
-  local offerType = normalizeOfferType(rawOffer.oftype)
-  local itemId = offerType == CATEGORY_ITEM and rawOffer.eid or 0
-  local offer = {
-    id = rawOffer.id,
-    name = rawOffer.name,
-    description = rawOffer.description,
-    filter = categoryName or "",
-    icon = rawOffer.icon or "",
-    itemId = itemId,
-    offerType = offerType,
-    state = OFFER_STATE_NONE,
-    TimesBought = 0,
-    mountId = rawOffer.eid,
-    type = rawOffer.eid,
-    head = 0,
-    body = 0,
-    legs = 0,
-    feet = 0,
-    maleOutfit = rawOffer.eid,
-    offers = {
-      {
-        id = rawOffer.id,
-        count = rawOffer.count,
-        price = rawOffer.price,
-        basePrice = rawOffer.price,
-        coinType = COIN_TYPE_DEFAULT,
-        disabledReasons = {},
-        disabledReason = "",
-        saleValidUntilTimestamp = 0
-      }
-    }
-  }
-  offersById[offer.id] = offer
-  return offer
-end
-
-local function showOffers(actionOrCategory, valueOrServiceType, serviceType)
-  if #categories == 0 then
-    pendingStoreRequest = { actionOrCategory, valueOrServiceType, serviceType }
-    StoreProtocol.openStore()
-    return
-  end
-
-  local categoryName = tostring(actionOrCategory or "")
-  if type(actionOrCategory) == "number" then
-    if actionOrCategory == OPEN_HOME then
-      categoryName = "Home"
-    elseif actionOrCategory == OPEN_SEARCH then
-      local query = tostring(valueOrServiceType or ""):lower()
-      local result = {}
-      for _, offer in pairs(offersById) do
-        if offer.name:lower():find(query, 1, true) then
-          result[#result + 1] = offer
-        end
-      end
-      signalcall(g_game.onStoreSearchOffers, "Search", result, 0, {})
-      return
-    elseif actionOrCategory == OPEN_OFFER or actionOrCategory == SERVICE_OFFER_ID then
-      local offerId = tonumber(serviceType or valueOrServiceType) or 0
-      local offer = offersById[offerId]
-      signalcall(g_game.onStoreOffers, offer and offer.filter or "Home", offer and { offer } or {}, offerId, 0, {}, "", {})
-      return
-    else
-      categoryName = tostring(valueOrServiceType or "Home")
-    end
-  end
-
-  local offers = {}
-  if categoryName == "" or categoryName == "Home" then
-    for _, categoryOffers in pairs(offersByCategory) do
-      for _, offer in ipairs(categoryOffers) do
-        offers[#offers + 1] = offer
-      end
-    end
-    categoryName = "Home"
-  else
-    offers = offersByCategory[categoryName] or {}
-  end
-
-  signalcall(g_game.onStoreOffers, categoryName, offers, 0, 0, {}, "", {})
-end
-
-local function parseCatalog(msg)
-  local coins = msg:getU32()
-  local categoryCount = msg:getU16()
-  categories = {}
-  offersByCategory = {}
-  offersById = {}
-
-  for i = 1, categoryCount do
-    local category = {
-      name = msg:getString(),
-      icon = msg:getString(),
-      parent = msg:getString(),
-      description = msg:getString()
-    }
-
-    categories[#categories + 1] = category
-    offersByCategory[category.name] = {}
-
-    local offerCount = msg:getU16()
-    for j = 1, offerCount do
-      local rawOffer = {
-        id = msg:getU32(),
-        name = msg:getString(),
-        icon = msg:getString(),
-        price = msg:getU32(),
-        eid = msg:getU16(),
-        count = msg:getU16(),
-        description = msg:getString(),
-        oftype = msg:getString()
-      }
-      offersByCategory[category.name][#offersByCategory[category.name] + 1] = buildOffer(rawOffer, category.name)
-    end
-  end
-
-  signalcall(g_game.onStoreInit, "", 25)
-  signalcall(g_game.onCoinBalance, coins, coins, 0)
-  signalcall(g_game.onStoreCategories, categories)
-
-  local pending = pendingStoreRequest
-  pendingStoreRequest = nil
-  if pending then
-    showOffers(pending[1], pending[2], pending[3])
-  else
-    showOffers(OPEN_HOME, "", 0)
-  end
-end
-
-local function parseHistory(msg)
-  local history = {}
-  local count = msg:getU16()
-  for i = 1, count do
-    local date = msg:getString()
-    local price = msg:getU32()
-    local positive = msg:getU8() ~= 0
-    msg:getU8() -- costSecond
-    local title = msg:getString()
-    local itemCount = msg:getU16()
-    history[#history + 1] = {
-      name = title,
-      description = date .. " - " .. title,
-      price = positive and price or -price,
-      count = itemCount
-    }
-  end
-  signalcall(g_game.onStoreTransactionHistory, 0, 1, history)
-end
-
-local function onStoreMessage(protocolGame, msg)
-  local response = msg:getU8()
-  if response == RESP_ERROR then
-    signalcall(g_game.onStoreError, 0, msg:getString())
-  elseif response == RESP_CATALOG then
-    parseCatalog(msg)
-  elseif response == RESP_SUCCESS then
-    msg:getU32() -- offer id
-    local message = msg:getString()
-    local coins = msg:getU32()
-    signalcall(g_game.onCoinBalance, coins, coins, 0)
-    signalcall(g_game.onStorePurchase, message)
-    StoreProtocol.openStore()
-  elseif response == RESP_HISTORY then
-    parseHistory(msg)
-  end
-  return true
-end
-
-function StoreProtocol.register()
-  if registered then
-    return
-  end
-  ProtocolGame.unregisterOpcode(OPCODE_STORE_SEND)
-  ProtocolGame.registerOpcode(OPCODE_STORE_SEND, onStoreMessage)
-  registered = true
-end
-
-function StoreProtocol.unregister()
-  if not registered then
-    return
-  end
-  ProtocolGame.unregisterOpcode(OPCODE_STORE_SEND)
-  registered = false
-end
-
-function StoreProtocol.openStore()
+-- C_RequestStoreOffers: [0xFB][action U8][payload]
+-- Server parseRequestStoreOffers (gamestore/init.lua:353) reads, per action
+-- (GameStore.ActionType, init.lua:77):
+--   OPEN_HOME          = 0 -> no payload
+--   OPEN_PREMIUM_BOOST = 1 -> U8 subAction   (client global OPEN_REDIRECT)
+--   OPEN_CATEGORY      = 2 -> string categoryName
+--   OPEN_USEFUL_THINGS = 3 -> U8 subAction
+--   OPEN_OFFER         = 4 -> U32 offerId
+--   OPEN_SEARCH        = 5 -> string searchText
+-- The native sendRequestStoreOffers always writes [U8][string] and therefore
+-- mis-encodes the numeric payloads (OPEN_OFFER needs a U32), hence this override.
+-- Caller convention across the codebase is (action number, stringValue, numberValue),
+-- e.g. Categories.lua (OPEN_CATEGORY, name, 0), store.lua (OPEN_SEARCH, text, 0),
+-- Home.lua (SERVICE_OFFER_ID=4, "", offer.id), hunting.lua (3, "", offerType).
+function StoreProtocol.requestStoreOffers(actionOrCategory, stringParam, numberParam)
   local msg = OutputMessage.create()
-  msg:addU8(OPCODE_STORE_OPEN)
+  msg:addU8(OPCODE_REQUEST_STORE_OFFERS)
+
+  if type(actionOrCategory) ~= 'number' then
+    -- legacy convention: first arg is the category name itself
+    msg:addU8(OPEN_CATEGORY)
+    msg:addString(tostring(actionOrCategory or ''))
+  elseif actionOrCategory == OPEN_CATEGORY then
+    msg:addU8(OPEN_CATEGORY)
+    msg:addString(tostring(stringParam or ''))
+  elseif actionOrCategory == OPEN_SEARCH then
+    msg:addU8(OPEN_SEARCH)
+    msg:addString(tostring(stringParam or ''))
+  elseif actionOrCategory == OPEN_OFFER then -- == SERVICE_OFFER_ID (4)
+    msg:addU8(OPEN_OFFER)
+    msg:addU32(tonumber(numberParam) or 0)
+  elseif actionOrCategory == OPEN_REDIRECT or actionOrCategory == OPEN_USEFUL_THINGS then
+    -- server OPEN_PREMIUM_BOOST (1) / OPEN_USEFUL_THINGS (3): one U8 subAction
+    msg:addU8(actionOrCategory)
+    msg:addU8(math.max(0, math.min(255, tonumber(numberParam) or 0)))
+  else
+    -- OPEN_HOME and anything unknown: request the home page (no payload)
+    msg:addU8(OPEN_HOME)
+  end
+
   sendStoreMessage(msg)
 end
 
-function StoreProtocol.requestStoreOffers(actionOrCategory, valueOrServiceType, serviceType)
-  showOffers(actionOrCategory, valueOrServiceType, serviceType)
-end
-
+-- Intentional NO-OP. The crystalserver has no "request offer description"
+-- opcode: descriptions are PUSHED by the server via 0xEA sendOfferDescription
+-- (gamestore/init.lua:736, emitted from sendShowStoreOffers init.lua:1121) and
+-- consumed by the native parseStoreOfferDescription. This stub must stay
+-- defined because Offers.lua calldescription() invokes
+-- g_game.requestOfferDescription on every offer selection and there is no
+-- native C++ binding for it (it is only a corelib gameNoop).
 function StoreProtocol.requestOfferDescription(offerId)
-  local offer = offersById[offerId]
-  signalcall(g_game.onStoreDescription, offerId, offer and offer.description or "")
+  -- no wire traffic on purpose
 end
 
-function StoreProtocol.buyStoreOffer(offerId, productType, name, unknown, offerName)
+-- C_BuyStoreOffer: [0xFC][offerId U32][productType U8][optional payload].
+-- Server parseBuyStoreOffer (gamestore/init.lua:451) reads U32 id + U8
+-- productType, then per offer.type:
+--   OFFER_TYPE_NAMECHANGE / HIRELING_NAMECHANGE -> string newName
+--   OFFER_TYPE_HIRELING                         -> string name + U8 sex
+--     (HIRELING_SEX: MALE = 1, FEMALE = 2 — data/libs/systems/hireling.lua)
+-- The NATIVE sendBuyStoreOffer cannot be used: it appends the name only for
+-- Otc::ProductTypeNameChange (1) and never writes the hireling sex byte, so the
+-- second phase of a hireling purchase (store.lua onClickNameChange, productType
+-- OFFER_BUY_TYPE_HIRELING = 3) would reach the server without name/sex.
+-- Note: the hireling purchase is two-phase. Phase 1 (plain buy click) sends no
+-- name; the server answers with 0xE1 S_RequestPurchaseData (offerId U32 +
+-- productType U8), which triggers g_game.onRequestPurchaseData (emitted by the
+-- native parseRequestPurchaseData, protocolgameparse.cpp) -> hireling window ->
+-- phase 2 with name+sex.
+function StoreProtocol.buyStoreOffer(offerId, productType, name, sex, offerName)
   local msg = OutputMessage.create()
-  msg:addU8(OPCODE_STORE_BUY)
-  msg:addU32(offerId)
-  if name and name ~= "" then
+  msg:addU8(OPCODE_BUY_STORE_OFFER)
+  msg:addU32(tonumber(offerId) or 0)
+  msg:addU8(productType or 0)
+  if name and name ~= '' then
     msg:addString(name)
-  elseif offerName and offerName ~= "" then
+    if productType == OFFER_BUY_TYPE_HIRELING then
+      msg:addU8(sex or 1)
+    end
+  elseif offerName and offerName ~= '' then
+    -- Home.lua "buy now" path (productType 10/11): trailing string is unread by
+    -- the server for non-name offer types (one opcode per message), harmless.
     msg:addString(offerName)
   end
   sendStoreMessage(msg)
 end
 
-function StoreProtocol.requestHistory()
-  local msg = OutputMessage.create()
-  msg:addU8(OPCODE_STORE_HISTORY)
-  sendStoreMessage(msg)
-end
-
+-- C_TransferCoins: [0xEF][recipient string][amount U32].
+-- Server parseTransferableCoins (gamestore/init.lua:305) reads getString() +
+-- getU32(). The NATIVE sendTransferCoins writes the amount as U16
+-- (protocolgamesend.cpp:1224) — wrong width, would desync the server read —
+-- hence this override.
 function StoreProtocol.transferCoins(recipient, amount)
+  amount = tonumber(amount)
+  if not recipient or recipient == '' or not amount or amount <= 0 then
+    return
+  end
   local msg = OutputMessage.create()
-  msg:addU8(OPCODE_STORE_TRANSFER)
+  msg:addU8(OPCODE_TRANSFER_COINS)
   msg:addString(recipient)
   msg:addU32(amount)
   sendStoreMessage(msg)
 end
 
 function initStoreProtocol()
-  connect(g_game, {
-    onGameStart = StoreProtocol.register,
-    onGameEnd = StoreProtocol.unregister
-  })
-
-  g_game.openStore = StoreProtocol.openStore
+  -- Native C++ senders verified byte-for-byte against the crystalserver
+  -- gamestore parsers and used as-is (NOT overridden):
+  --   g_game.openStore                -> [0xFA][U8 serviceType]; server
+  --     parseOpenStore reads no payload, the trailing byte is unread (one
+  --     opcode per message) — categories come back via 0xFB.
+  --   g_game.openTransactionHistory   -> [0xFD][U8 entriesPerPage] matches
+  --     parseOpenTransactionHistory (init.lua:642).
+  --   g_game.requestTransactionHistory-> [0xFE][U32 page][U8 entriesPerPage];
+  --     parseRequestTransactionHistory (init.lua:655) reads the U32 page
+  --     (0-based, server does page+1); the trailing U8 is unread, harmless.
   g_game.requestStoreOffers = StoreProtocol.requestStoreOffers
   g_game.requestOfferDescription = StoreProtocol.requestOfferDescription
   g_game.buyStoreOffer = StoreProtocol.buyStoreOffer
-  g_game.openTransactionHistory = StoreProtocol.requestHistory
-  g_game.requestTransactionHistory = StoreProtocol.requestHistory
   g_game.transferCoins = StoreProtocol.transferCoins
-
-  if g_game.isOnline() then
-    StoreProtocol.register()
-  end
 end
 
 function terminateStoreProtocol()
-  disconnect(g_game, {
-    onGameStart = StoreProtocol.register,
-    onGameEnd = StoreProtocol.unregister
-  })
-  StoreProtocol.unregister()
+  -- The g_game sender overrides are left installed (same lifetime behavior as
+  -- before): they are stateless wrappers and are re-assigned on module reload.
 end

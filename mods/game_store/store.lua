@@ -429,7 +429,8 @@ function onClickNameChange(widget)
       showStoreWindow()
     end
   elseif widget:getId() == 'okHirelingButton' then
-    g_game.buyStoreOffer(OFFERID, OFFER_BUY_TYPE_HIRELING, hirelingWindow.nameText:getText(), (hirelingWindow.sexOptions.currentIndex == 1 and 1 or 0))
+    -- server HIRELING_SEX: MALE = 1, FEMALE = 2 (any other value falls back to male)
+    g_game.buyStoreOffer(OFFERID, OFFER_BUY_TYPE_HIRELING, hirelingWindow.nameText:getText(), (hirelingWindow.sexOptions.currentIndex == 1 and 1 or 2))
     if hirelingWindow then
       hirelingWindow:hide()
     end
