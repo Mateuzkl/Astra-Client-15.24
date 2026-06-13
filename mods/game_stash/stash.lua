@@ -11,9 +11,6 @@ local otherOption = nil
 local supplyStashProtocolRegistered = false
 local OPCODE_SUPPLY_STASH_REQUEST = 0x28
 local OPCODE_SUPPLY_STASH_SEND = 0x29
-local SUPPLY_STASH_DETAILS_MARKER = 0x5353
-local ACTION_OPEN = 1
-local ACTION_STOW_ALL = 2
 local ACTION_WITHDRAW = 3
 
 local marketCategoryNames = {
@@ -64,6 +61,28 @@ local function sendSupplyStashRequest(action, itemId, count, tier)
   protocolGame:send(msg)
 end
 
+-- crystalserver parseStashWithdraw stow layout: [action u8][pos u16,u16,u8]
+-- [itemId u16][stackpos u8], plus a single count BYTE for STOW_ITEM only.
+local function sendStashStow(action, pos, itemId, stackpos, count)
+  local protocolGame = g_game.getProtocolGame()
+  if not protocolGame or not pos then
+    return
+  end
+
+  local msg = OutputMessage.create()
+  msg:addU8(OPCODE_SUPPLY_STASH_REQUEST)
+  msg:addU8(action)
+  msg:addU16(pos.x)
+  msg:addU16(pos.y)
+  msg:addU8(pos.z)
+  msg:addU16(itemId)
+  msg:addU8(stackpos or 0)
+  if action == SUPPLY_STASH_ACTION_STOW_ITEM then
+    msg:addU8(math.min(count or 1, 255))
+  end
+  protocolGame:send(msg)
+end
+
 local function buildStashItem(row, details)
   local itemId = row.itemId
   local item = Item.create(itemId, row.amount)
@@ -89,36 +108,26 @@ local function buildStashItem(row, details)
 end
 
 local function parseSupplyStash(protocolGame, msg)
+  -- crystalserver sendOpenStash (protocolgame.cpp:10349): U16 count, then
+  -- per item { U16 itemId, U32 amount }. No tier byte, no freeSlots U16,
+  -- no details block — the server's single 0x29 send site writes nothing else.
+  -- Do NOT add getUnreadSize()-guarded optional reads: 0x29 may be bundled
+  -- with other opcodes in the same message, so unread bytes belong to them.
   local rows = {}
   local count = msg:getU16()
   for i = 1, count do
     rows[#rows + 1] = {
       itemId = msg:getU16(),
       amount = msg:getU32(),
-      tier = msg:getU8()
+      tier = 0
     }
-  end
-
-  local freeSlots = msg:getU16()
-  local details = {}
-  if msg:getUnreadSize() >= 4 and msg:peekU16() == SUPPLY_STASH_DETAILS_MARKER then
-    msg:getU16()
-    local detailCount = msg:getU16()
-    for i = 1, detailCount do
-      local itemId = msg:getU16()
-      details[itemId] = {
-        name = msg:getString(),
-        category = msg:getU16(),
-        stackable = msg:getU8() ~= 0
-      }
-    end
   end
 
   local items = {}
   for _, row in ipairs(rows) do
-    items[#items + 1] = buildStashItem(row, details)
+    items[#items + 1] = buildStashItem(row, {})
   end
-  showStash(items, freeSlots)
+  showStash(items, 0)
   return true
 end
 
@@ -175,11 +184,12 @@ function init()
   g_game.stashWithdraw = function(itemId, tier, count)
     sendSupplyStashRequest(ACTION_WITHDRAW, itemId, count or 1, tier or 0)
   end
-  g_game.stowItem = function()
-    sendSupplyStashRequest(ACTION_STOW_ALL)
+  g_game.stowItem = function(pos, itemId, stackpos, count)
+    sendStashStow(SUPPLY_STASH_ACTION_STOW_ITEM, pos, itemId, stackpos, count)
   end
-  g_game.stowItemContainerStack = function()
-    sendSupplyStashRequest(ACTION_STOW_ALL)
+  -- action is SUPPLY_STASH_ACTION_STOW_CONTAINER (1) or _STOW_STACK (2) from callers
+  g_game.stowItemContainerStack = function(action, pos, itemId, stackpos)
+    sendStashStow(action, pos, itemId, stackpos)
   end
 
   if g_game.isOnline() then
