@@ -143,6 +143,25 @@ if UIWidget then
   UIWidget.getColoredText = UIWidget.getColoredText or function(self)
     return self.coloredText
   end
+  -- mehah-ported mods (game_store Offers/Bazaar) call setHTML, but this engine
+  -- has no HTML renderer: degrade to styled text. <font color> becomes
+  -- [color=...] markup for setColorText; images and other tags are stripped.
+  UIWidget.setHTML = UIWidget.setHTML or function(self, html)
+    local text = tostring(html or '')
+    text = text:gsub('<[bB][rR]%s*/?>', '\n')
+    text = text:gsub('<[iI][mM][gG][^>]*>', '')
+    text = text:gsub('<[fF][oO][nN][tT][^>]-color%s*=%s*["\']?(#?%w+)["\']?[^>]*>(.-)</[fF][oO][nN][tT]>', '[color=%1]%2[/color]')
+    -- block-level tags must leave whitespace behind, otherwise adjacent text
+    -- fuses ("account's<p>Astra Coins" -> "account'sAstra Coins")
+    text = text:gsub('</?[pP]%s*/?>', '\n')
+    text = text:gsub('</[tT][rR]>', '\n'):gsub('</[tT][dD]>', ' ')
+    text = text:gsub('<[^>]+>', '')
+    text = text:gsub('&nbsp;', ' '):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
+    -- collapse the blank lines left behind by stripped block tags
+    text = text:gsub('\n\n\n+', '\n\n'):gsub('^%s+', ''):gsub('%s+$', '')
+    self:setColorText(text)
+    return self
+  end
   UIWidget.getVisibleCreatures = UIWidget.getVisibleCreatures or function(self)
     local creatures = {}
     for _, child in ipairs(self:getChildren()) do
@@ -176,8 +195,14 @@ ThingCategoryEffect = ThingCategoryEffect or 3
 local function noop() end
 
 do
-  local defaultClientVersion = 1510
-  if g_game and g_game.getSupportedClients then
+  -- Single source of truth: when init.lua pins CLIENT_VERSION (the manual
+  -- per-install version the user sets), GameInfo.version follows it so the
+  -- boot path (background.onRun) and asset loader target the same version the
+  -- login flow uses. Otherwise fall back to the last supported client.
+  local defaultClientVersion = 1524
+  if FORCE_CLIENT_VERSION and CLIENT_VERSION then
+    defaultClientVersion = tonumber(CLIENT_VERSION) or defaultClientVersion
+  elseif g_game and g_game.getSupportedClients then
     local clients = g_game.getSupportedClients()
     if clients and #clients > 0 then
       defaultClientVersion = tonumber(clients[#clients]) or defaultClientVersion
@@ -268,6 +293,18 @@ if UIMinimap then
       if pos and self.centerInPosition then
         self:centerInPosition(widget, pos)
       end
+      -- a mark added while its icon type is filtered out (e.g. user creates a
+      -- flag with Show All off, or markers stream in after a filter toggle) must
+      -- start hidden, otherwise the filter desyncs from what is on screen.
+      if self._ignoredIcons and widget.setVisible then
+        for icon, ignored in pairs(self._ignoredIcons) do
+          if ignored and type(icon) == 'string' and icon ~= '' and
+            (imagePath == icon or imagePath:find(icon, 1, true)) then
+            widget:setVisible(false)
+            break
+          end
+        end
+      end
     end
     self._minimapWidgets[id] = widget
     return id
@@ -277,6 +314,48 @@ if UIMinimap then
       self._minimapWidgets[id]:destroy()
       self._minimapWidgets[id] = nil
     end
+  end
+  -- Show/hide all minimap markers drawn with a given icon (the cyclopedia map
+  -- filter buttons call ignoreWidget to hide a flag type and unignoreWidget to
+  -- show it). Without these the map-mark filter crashed ("attempt to call method
+  -- 'ignoreWidget'/'unignoreWidget' (a nil value)"). These SET the state (not
+  -- toggle) — the caller always ignores first, then unignores when re-enabling.
+  -- The widget's imagePath has a leading '/' (addWidget adds it) while the icon
+  -- arg does not, so match by substring; an empty icon ("" for separator slots)
+  -- must match nothing.
+  UIMinimap._setMarkerIconVisible = UIMinimap._setMarkerIconVisible or function(self, icon, visible)
+    self._ignoredIcons = self._ignoredIcons or {}
+    self._ignoredIcons[icon] = not visible
+    if self._minimapWidgets and type(icon) == 'string' and icon ~= '' then
+      for _, w in pairs(self._minimapWidgets) do
+        if w and w.imagePath and (w.imagePath == icon or w.imagePath:find(icon, 1, true)) then
+          if w.setVisible then w:setVisible(visible) end
+        end
+      end
+    end
+    return self
+  end
+  UIMinimap.ignoreWidget = UIMinimap.ignoreWidget or function(self, icon)
+    return self:_setMarkerIconVisible(icon, false)
+  end
+  UIMinimap.unignoreWidget = UIMinimap.unignoreWidget or function(self, icon)
+    return self:_setMarkerIconVisible(icon, true)
+  end
+  -- UIRealMinimap:onMouseMove queries this before showing a tooltip so filtered
+  -- marks stay silent. Without it, hovering a mark crashed once a widget was
+  -- resolvable ("attempt to call method 'isWidgetIgnored'"). Match the same
+  -- substring rule used by _setMarkerIconVisible.
+  UIMinimap.isWidgetIgnored = UIMinimap.isWidgetIgnored or function(self, imagePath)
+    if not self._ignoredIcons or type(imagePath) ~= 'string' then
+      return false
+    end
+    for icon, ignored in pairs(self._ignoredIcons) do
+      if ignored and type(icon) == 'string' and icon ~= '' and
+        (imagePath == icon or imagePath:find(icon, 1, true)) then
+        return true
+      end
+    end
+    return false
   end
   UIMinimap.moveWidget = UIMinimap.moveWidget or function(self, id, pos)
     local widget = self._minimapWidgets and self._minimapWidgets[id]
@@ -322,11 +401,11 @@ if UIProgressRect then
     end
 
     local remaining = math.max(0, (widget._durationEndsAt or 0) - g_clock.millis())
-    if widget.setPercent then
+    if widget.setPercent and widget._showProgress ~= false then
       widget:setPercent((widget._duration or 0) > 0 and remaining * 100 / widget._duration or 0)
     end
     if widget.setText then
-      widget:setText(remaining > 0 and tostring(math.ceil(remaining / 1000)) or '')
+      widget:setText((widget._showTime ~= false and remaining > 0) and tostring(math.ceil(remaining / 1000)) or '')
     end
 
     if remaining <= 0 then
@@ -358,6 +437,45 @@ if UIProgressRect then
       self._durationEvent = nil
     end
     self._durationRunning = false
+  end
+
+  -- Missing getters/toggles the action bar's cooldown code calls (getDuration was
+  -- nil -> "attempt to call method 'getDuration'" spamming the log ~170x and
+  -- breaking spell-group cooldowns). Same data model as setDuration/start above.
+  UIProgressRect.getDuration = UIProgressRect.getDuration or function(self)
+    return self._duration or 0
+  end
+
+  UIProgressRect.getTimeElapsed = UIProgressRect.getTimeElapsed or function(self)
+    if not self._durationStartedAt then return 0 end
+    return math.min(self._duration or 0, math.max(0, g_clock.millis() - self._durationStartedAt))
+  end
+
+  UIProgressRect.showTime = UIProgressRect.showTime or function(self, show)
+    self._showTime = (show ~= false)
+    if not self._showTime and self.setText then self:setText('') end
+  end
+
+  UIProgressRect.showProgress = UIProgressRect.showProgress or function(self, show)
+    self._showProgress = (show ~= false)
+  end
+end
+
+-- 15.24 changed UIGraph::addValue from addValue(value) to
+-- addValue(index, value, ignoreSmallValues). The game_analyser graphs still call
+-- addValue(value) (1 arg), so `value` was passed as the graph INDEX -> getGraph(
+-- index, true) then created `value` empty graphs in a loop. With a big gold/xp-
+-- per-hour value (tens of thousands) that is a multi-second FREEZE followed by an
+-- OOM / "C++ call failed" fatal crash (LootAnalyser.lua:174 etc). Shim it to stay
+-- back-compatible: a 1-arg call targets graph index 1; 2/3-arg calls pass through.
+if UIGraph and not UIGraph._addValuePatched then
+  local _addValue = UIGraph.addValue
+  UIGraph._addValuePatched = true
+  UIGraph.addValue = function(self, a, b, c)
+    if b == nil then
+      return _addValue(self, 1, tonumber(a) or 0, false)
+    end
+    return _addValue(self, a, b, c or false)
   end
 end
 
@@ -460,7 +578,7 @@ if g_game then
     'requestCharacterCheckInformations', 'requestCharacterInformation',
     'requestCharacterRequeriments', 'requestCharmData', 'requestCollectAll',
     'requestCyclopediaData', 'requestForgeHistory', 'requestHotkeyItems',
-    'requestImbuementTracker', 'requestLockerItem', 'requestOfferDescription',
+    'requestLockerItem', 'requestOfferDescription',
     'requestPixPrice', 'requestPixURL', 'requestPodiumData', 'requestResource',
     'requestSearchLocker', 'rerollBattlePassMission', 'resetAllCharm',
     'resetExperienceData', 'retrieveDisplayed', 'selectImbuementItem',
@@ -471,7 +589,7 @@ if g_game then
     'sendClosePrestigeBattle', 'sendEditAnnouncement', 'sendEquipmentPreset',
     'sendExivaOptions', 'sendForgeConverter', 'sendForgeFusion',
     'sendForgeTransfer', 'sendGemAtelierAction', 'sendHirelingNameChange',
-    'sendHouseAction', 'sendInspectionNormalObject', 'sendInspectionObject',
+    'sendHouseAction',
     'sendManagePrestigeArenaQueue', 'sendManagePrestigeEmblem',
     'sendMarketAcceptOffer', 'sendMarketAction', 'sendMarketCancelOffer',
     'sendMarketCreateOffer', 'sendMarketLeave', 'sendMonsterPodiumOutfit',
@@ -523,8 +641,8 @@ end
 g_client.clearHudConfigs = g_client.clearHudConfigs or noop
 g_client.addHudConfig = g_client.addHudConfig or noop
 g_client.updateHudPath = g_client.updateHudPath or noop
-g_client.setMissileAlpha = g_client.setMissileAlpha or noop
-g_client.setEffectAlpha = g_client.setEffectAlpha or noop
+g_client.setMissileAlpha = g_client.setMissileAlpha or function(value) g_map.setMissileAlpha(value) end
+g_client.setEffectAlpha = g_client.setEffectAlpha or function(value) g_map.setEffectAlpha(value) end
 g_client.setIgnoreSpecialEffects = g_client.setIgnoreSpecialEffects or noop
 
 local function moduleProxy(moduleName)

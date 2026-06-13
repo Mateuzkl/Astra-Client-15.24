@@ -41,6 +41,9 @@ function init()
   end
 
   files = g_resources.listDirectoryFiles('/data/fonts')
+  -- sort for a deterministic font-atlas packing order (filesystem enumeration
+  -- order is not stable across runs and made the atlas overflow nondeterministic)
+  table.sort(files)
   for _,file in pairs(files) do
     if g_resources.isFileType(file, 'otfont') and not loaded_files[file] then
       g_fonts.importFont('/data/fonts/' .. file)

@@ -103,6 +103,32 @@ function LoginEvent:tryLogin()
         end
     end
 
+    -- The game protocol session-key field carries either a real session key
+    -- (server authType="session") or "email\npassword" (authType="password").
+    -- crystalserver defaults to password auth and splits this field on '\n',
+    -- disconnecting ("You must enter your email") if there is none. The HTTP
+    -- login hands us an opaque session key with no '\n', so for password-auth
+    -- servers we must send account\npassword instead. Heuristic: if the session
+    -- key has no embedded '\n', build the password form.
+    local sessionKey = G.sessionKey
+    if not sessionKey or sessionKey == "" or not sessionKey:find("\n") then
+        sessionKey = G.account .. "\n" .. gamePassword
+    end
+
+    -- Show the "Connecting to the game world..." box so the user gets feedback while the
+    -- game protocol connects. It is torn down by destroyLoadBox() on success, error, or
+    -- cancel. Without this, selecting a character left the screen blank during connection.
+    if not self.loadBox then
+        self.loadBox = displayCancelBox(tr('Please wait'), tr('Connecting to the game world...'))
+        connect(self.loadBox, {
+            onCancel = function()
+                self.loadBox = nil
+                self:cancelLogin()
+                CharacterList.showAgain()
+            end
+        })
+    end
+
     local ok, err = pcall(function()
         g_game.loginWorld(
             G.account,
@@ -112,7 +138,7 @@ function LoginEvent:tryLogin()
             tonumber(self.charInfo.worldPort),
             self.charInfo.characterName,
             G.authenticatorToken,
-            G.sessionKey,
+            sessionKey,
             recordName
         )
     end)
@@ -132,7 +158,11 @@ function LoginEvent:tryLogin()
         g_logger.info('-----------------------------------LOG--------------------------------------\n')
     end
 
-  self:destroyLoadBox()
+  -- NOTE: do NOT destroy the loadBox here. g_game.loginWorld() only *starts* the async
+  -- game-protocol connection, so the "Connecting to the game world..." box must stay up
+  -- until onGameStart (CharacterList wires onGameStart -> destroyLoadBox), a connection
+  -- error, or the user cancels. Destroying it right after loginWorld() made the box flash
+  -- and vanish, leaving a blank screen during connection.
 
   -- save last used character
   g_settings.set('last-used-character', self.charInfo.characterName)

@@ -29,12 +29,21 @@ function init()
 end
 
 function onRun()
-  G.clientVersion = GameInfo.version
+  -- Single source of truth for the client version (init.lua CLIENT_VERSION).
+  -- Fall back to GameInfo.version when the global override is off.
+  if FORCE_CLIENT_VERSION and CLIENT_VERSION then
+    G.clientVersion = tonumber(CLIENT_VERSION)
+  else
+    G.clientVersion = GameInfo.version
+  end
   g_game.setClientVersion(G.clientVersion)
   g_game.setStringVersion(GameInfo.strVersion)
   g_game.setProtocolVersion(g_game.getClientProtocolVersion(G.clientVersion))
-  -- Carrega os arquivos things (dat e spr)
-  addEvent(function() modules.game_things.load() end)
+  -- NB: setClientVersion(...) above fires onClientVersionChange ->
+  -- game_features.updateFeatures -> game_things.load(), so the assets are
+  -- already loaded here. A second explicit load() would just reparse the same
+  -- catalog/appearances (the "Loaded ... appearances" line printed 2-3x in the
+  -- boot log), so it was removed.
   -- requestHintsJson()
   updateStatus()
   requestScheduleJson()

@@ -17,6 +17,19 @@ local rememberEmailBox
 local protos = { "740", "760", "772", "792", "800", "810", "854", "860", "870", "910", "961", "1000", "1077", "1090",
   "1096", "1098", "1099", "1100", "1200", "1220", "1312", "1300", "1400", "1500", "1524" }
 
+-- Resolve the effective client version, honouring the global CLIENT_VERSION
+-- config (init.lua). When FORCE_CLIENT_VERSION is set, the global value wins
+-- over whatever a server entry suffix, the version selector, or a persisted
+-- config.otml supplies — so the whole client targets one protocol/asset set.
+-- `requested` is the version a given login path would otherwise have used; it
+-- is returned unchanged when the global override is disabled.
+local function resolveClientVersion(requested)
+  if FORCE_CLIENT_VERSION and CLIENT_VERSION then
+    return tonumber(CLIENT_VERSION)
+  end
+  return tonumber(requested)
+end
+
 -- Google Configuration
 local googleSession = ""
 local awaitingGoogleAuth = false
@@ -182,7 +195,7 @@ local function downloadKoliseuCatalog(catalogUrl, clientVersion, files, index, d
 end
 
 local function onKoliseuHTTPResult(data)
-  local clientVersion = data["clientVersion"]
+  local clientVersion = resolveClientVersion(data["clientVersion"])
   local catalogUrl = data["catalogUrl"]
   local sessionKey = nil
   if type(data["session"]) == "table" then
@@ -312,7 +325,7 @@ local function onTibia12HTTPResult(session, playdata)
   else
     account.subStatus = SubscriptionStatus.Free
   end
-  G.clientVersion = session["version"]
+  G.clientVersion = resolveClientVersion(session["version"])
 
   onSessionKey(nil, session["sessionkey"])
 
@@ -431,7 +444,7 @@ local function onHTTPResult(data, err)
   local account = data["account"]
   local session = data["session"]
 
-  local version = data["version"]
+  local version = resolveClientVersion(data["version"])
   local things = data["things"]
   local customProtocol = data["customProtocol"]
 
@@ -564,6 +577,11 @@ function EnterGame.init()
   local server = g_settings.get('server')
   local host = g_settings.get('host')
   local clientVersion = g_settings.get('client-version')
+  -- Global override: pin the selector to CLIENT_VERSION so the UI matches the
+  -- version the login flow will actually use (see resolveClientVersion).
+  if FORCE_CLIENT_VERSION and CLIENT_VERSION then
+    clientVersion = tostring(CLIENT_VERSION)
+  end
 
   if serverSelector:isOption(server) then
     serverSelector:setCurrentOption(server, false)
@@ -602,6 +620,28 @@ function EnterGame.init()
     onGameStart = onGameStart,
     onGameEnd = onGameEnd
   })
+
+  -- Optional dev auto-login (set AUTO_LOGIN_DEBUG + AUTO_LOGIN_EMAIL/PASS in
+  -- config.lua). Fires the HTTP login and, unless AUTO_SELECT_CHAR == false,
+  -- auto-selects the first character. Off by default; handy for iterating on
+  -- the 15.24 connection without typing credentials each run.
+  if AUTO_LOGIN_DEBUG then
+    scheduleEvent(function()
+      EnterGame.doLogin(AUTO_LOGIN_EMAIL, AUTO_LOGIN_PASS, nil, AUTO_LOGIN_HOST or "http://127.0.0.1:3000/api/login", "")
+    end, 3000)
+    if AUTO_SELECT_CHAR ~= false then
+      -- Retry until the character list widget exists and has a focused row, so
+      -- we don't call doLogin() before CharacterList.create() ran.
+      local function autoSelect()
+        if CharacterList and CharacterList.isVisible and CharacterList.isVisible() then
+          CharacterList.doLogin()
+        else
+          scheduleEvent(autoSelect, 500)
+        end
+      end
+      scheduleEvent(autoSelect, 5000)
+    end
+  end
 end
 
 function onGameStart(...)
@@ -733,7 +773,7 @@ function EnterGame.doLogin(account, password, token, host, gtoken)
   G.server = serverSelector:getText():trim()
   local chosenServer = getServerInfoByName(G.server)
   G.host = chosenServer and chosenServer.loginLink or serverHostTextEdit:getText()
-  G.clientVersion = tonumber(clientVersionSelector:getText())
+  G.clientVersion = resolveClientVersion(clientVersionSelector:getText())
 
   if G.password == "" then
     return
@@ -758,11 +798,11 @@ function EnterGame.doLogin(account, password, token, host, gtoken)
   if G.host:lower():find("http") ~= nil then
     if #server_params >= 4 then
       G.host = server_params[1] .. ":" .. server_params[2] .. ":" .. server_params[3]
-      G.clientVersion = tonumber(server_params[4])
+      G.clientVersion = resolveClientVersion(server_params[4])
     elseif #server_params >= 3 then
       if tostring(tonumber(server_params[3])) == server_params[3] then
         G.host = server_params[1] .. ":" .. server_params[2]
-        G.clientVersion = tonumber(server_params[3])
+        G.clientVersion = resolveClientVersion(server_params[3])
       end
     end
     return EnterGame.doLoginHttp()
@@ -775,7 +815,7 @@ function EnterGame.doLogin(account, password, token, host, gtoken)
   end
 
   if #server_params >= 3 then
-    G.clientVersion = tonumber(server_params[3])
+    G.clientVersion = resolveClientVersion(server_params[3])
   end
   if type(server_ip) ~= 'string' or server_ip:len() <= 3 or not server_port or not G.clientVersion then
     return EnterGame.onError("Invalid server, it should be in format IP:PORT or it should be http url to login script")
@@ -1028,7 +1068,7 @@ function EnterGame.onGoogleClick()
     return EnterGame.onError("Google login is not configured for this server.")
   end
   G.host = chosenServer and chosenServer.loginLink or serverHostTextEdit:getText()
-  G.clientVersion = tonumber(clientVersionSelector:getText())
+  G.clientVersion = resolveClientVersion(clientVersionSelector:getText())
 
   -- Generate session ID for Google OAuth
   googleSession = "google_" .. randomString(32)

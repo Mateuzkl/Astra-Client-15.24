@@ -382,6 +382,26 @@ function comma_value(amount)
   return formatted
 end
 
+-- Short, abbreviated number format (e.g. 12345 -> "12.3k", 1500000 -> "1.5kk").
+-- Used by the inventory free-capacity label (and anywhere a compact value helps).
+function tokformat(value)
+  value = tonumber(value) or 0
+  local abs = math.abs(value)
+  local function trim(n)
+    -- one decimal place, dropping a trailing ".0"
+    local s = string.format('%.1f', n)
+    return (s:gsub('%.0$', ''))
+  end
+  if abs >= 1000000000 then
+    return trim(value / 1000000000) .. 'kkk'
+  elseif abs >= 1000000 then
+    return trim(value / 1000000) .. 'kk'
+  elseif abs >= 1000 then
+    return trim(value / 1000) .. 'k'
+  end
+  return tostring(math.floor(value))
+end
+
 function countTableElements(t)
   local count = 0
   for _ in pairs(t) do

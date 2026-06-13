@@ -24,7 +24,6 @@ UIWindow
   border-radius: 6
   image-source: terminal/pumpkinbg
   padding: 6
-  anchors.fill: parent
   clipping: true
   $on:
     border: 1 #ff8800cc

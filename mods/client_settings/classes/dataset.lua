@@ -797,7 +797,16 @@ return {
         tempApply = function(value)
             local graphics = GameOptions:getLoadedWindow('graphics')
             local wid = graphics:recursiveGetChildById('noFrameCheckBox')
-            if wid and wid:isChecked() then
+            -- Prefer the staged TempOptions value over the live widget so the
+            -- graphics preset-reset path (which stages noFrameCheckBox=false
+            -- before backgroundFrameRate=200 in the same pass) applies the fps
+            -- update instead of reading the still-checked live widget.
+            local staged = TempOptions:getOption('noFrameCheckBox')
+            local noFrame = staged
+            if noFrame == nil then
+              noFrame = wid and wid:isChecked()
+            end
+            if noFrame then
               return false
             end
 

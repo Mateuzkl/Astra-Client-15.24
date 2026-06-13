@@ -4,14 +4,19 @@ HTTP = {
   agent="Mozilla/5.0",
   imageId=1000,
   images={},
+  imageFailures={},
+  maxImageFailures=3,
   operations={},
 }
 
+-- NOTE: the C++ g_http functions take a trailing headers map (Boost 1.85+ port);
+-- the luabinder nil-fills missing args and nil does not cast to a map, so every
+-- call below must pass the headers table explicitly (see postJSON/download).
 function HTTP.get(url, callback)
   if not g_http or not g_http.get then
     return error("HTTP.get is not supported")
   end
-  local operation = g_http.get(url, HTTP.timeout)
+  local operation = g_http.get(url, HTTP.timeout, {})
   HTTP.operations[operation] = {type="get", url=url, callback=callback}
   return operation
 end
@@ -20,7 +25,7 @@ function HTTP.getJSON(url, callback)
   if not g_http or not g_http.get then
     return error("HTTP.getJSON is not supported")
   end
-  local operation = g_http.get(url, HTTP.timeout)
+  local operation = g_http.get(url, HTTP.timeout, {})
   HTTP.operations[operation] = {type="get", json=true, url=url, callback=callback}
   return operation
 end
@@ -32,7 +37,7 @@ function HTTP.post(url, data, callback)
   if type(data) == "table" then
     data = json.encode(data)
   end
-  local operation = g_http.post(url, data, HTTP.timeout)
+  local operation = g_http.post(url, data, HTTP.timeout, {})
   HTTP.operations[operation] = {type="post", url=url, callback=callback}
   return operation
 end
@@ -44,7 +49,11 @@ function HTTP.postJSON(url, data, callback)
   if type(data) == "table" then
     data = json.encode(data)
   end
-  local operation = g_http.post(url, data, HTTP.timeout, true)
+  -- g_http.post signature is (url, data, timeout, headers:map<string,string>).
+  -- The legacy 4th arg here was a boolean `isJson` flag, which the Boost 1.85+
+  -- framework port replaced with a headers map — passing `true` crashed with a
+  -- "boolean -> map" cast. Send the JSON content-type header instead.
+  local operation = g_http.post(url, data, HTTP.timeout, { ["Content-Type"] = "application/json" })
   HTTP.operations[operation] = {type="post", json=true, url=url, callback=callback}
   return operation
 end
@@ -53,7 +62,10 @@ function HTTP.download(url, file, callback, progressCallback)
   if not g_http or not g_http.download then
     return error("HTTP.download is not supported")
   end
-  local operation = g_http.download(url, file, "", HTTP.timeout)
+  -- g_http.download signature is (url, path, timeout, headers:map<string,string>);
+  -- the legacy extra "" arg shifted HTTP.timeout into the headers slot, crashing
+  -- with a "number -> map" cast (same Boost 1.85+ port issue as postJSON above)
+  local operation = g_http.download(url, file, HTTP.timeout, {})
   HTTP.operations[operation] = {type="download", url=url, file=file, callback=callback, progressCallback=progressCallback}
   return operation
 end
@@ -68,9 +80,17 @@ function HTTP.downloadImage(url, callback)
     end
     return
   end
+  -- the store re-requests its icons on every render; stop hammering (and log
+  -- flooding) a URL that already failed repeatedly this session
+  if (HTTP.imageFailures[url] or 0) >= HTTP.maxImageFailures then
+    if callback then
+      callback(nil, "image download given up after repeated failures")
+    end
+    return
+  end
   local file = "autoimage_" .. HTTP.imageId .. ".png"
   HTTP.imageId = HTTP.imageId + 1
-  local operation = g_http.download(url, file, "", HTTP.timeout)
+  local operation = g_http.download(url, file, HTTP.timeout, {})
   HTTP.operations[operation] = {type="image", url=url, file=file, callback=callback}
   return operation
 end
@@ -86,18 +106,23 @@ function HTTP.downloadConditionalImage(url, data, callback)
     end
     return
   end
+  if (HTTP.imageFailures[url] or 0) >= HTTP.maxImageFailures then
+    if callback then
+      callback(nil, "image download given up after repeated failures")
+    end
+    return
+  end
 
   local file = "autoimage_" .. HTTP.imageId .. ".png"
-  if data["id"] then
-    file = "autoimage_" .. data["id"] .. ".png"
+  local imageId = data["id"]
+  if imageId then
+    file = "autoimage_" .. imageId .. ".png"
   end
 
-  if type(data) == "table" then
-    data = json.encode(data)
-  end
+  -- the C++ download has no request-body support; fetch as a plain GET
   HTTP.imageId = HTTP.imageId + 1
-  local operation = g_http.download(url, file, data, HTTP.timeout)
-  HTTP.operations[operation] = {type="image", imageid=data.id, url=url, file=file, callback=callback}
+  local operation = g_http.download(url, file, HTTP.timeout, {})
+  HTTP.operations[operation] = {type="image", imageid=imageId, url=url, file=file, callback=callback}
   return operation
 end
 
@@ -214,15 +239,20 @@ function HTTP.onDownload(operationId, url, err, path, checksum)
   if err and err:len() == 0 then
     err = nil
   end
+  if operation["type"] == "image" then
+    if not err then
+      if not string.find(url, "8081") then
+        HTTP.images[url] = path
+      elseif operation["imageid"] then
+        HTTP.images[operation["imageid"]] = path
+      end
+      HTTP.imageFailures[url] = nil
+    else
+      HTTP.imageFailures[url] = (HTTP.imageFailures[url] or 0) + 1
+    end
+  end
   if operation.callback then
     if operation["type"] == "image" then
-      if not err then
-        if not string.find(url, "8081") then
-          HTTP.images[url] = path
-        elseif operation["imageid"] then
-          HTTP.images[operation["imageid"]] = path
-        end
-      end
       operation.callback('/downloads/' .. path, err)
     else
       operation.callback(path, checksum, err)
@@ -289,6 +319,12 @@ function HTTP.onWsClose(operationId, message)
   if operation.callbacks.onClose then
     operation.callbacks.onClose(message, operationId)
   end
+  -- the C++ WebsocketSession fires exactly one WEBSOCKET_CLOSE on every
+  -- termination path (explicit close, error, timeout) and no events after it;
+  -- operation ids are never reused, so the entry can be dropped here.
+  -- Do NOT delete in onWsError: errors are always followed by a CLOSE event,
+  -- and deleting early would skip the user's onClose callback.
+  HTTP.operations[operationId] = nil
 end
 
 function HTTP.onWsError(operationId, message)

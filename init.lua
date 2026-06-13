@@ -3,10 +3,28 @@ APP_NAME = "AstraClient"
 APP_VERSION = 1524
 DEFAULT_LAYOUT = ""
 
+-- Global client version. This is the single source of truth for which Tibia
+-- protocol/assets the whole client targets. Every login path (custom server,
+-- HTTP/Koliseu, saved config) resolves through this value rather than guessing
+-- from a host suffix (ip:port:version) or a stale persisted client-version.
+-- When FORCE_CLIENT_VERSION is true, any version coming from a server entry,
+-- the version selector, or config.otml is overridden with CLIENT_VERSION.
+CLIENT_VERSION = APP_VERSION
+FORCE_CLIENT_VERSION = true
+
+-- Optional dev auto-login. Off by default; to use it, set these in config.lua
+-- (NOT here — keep real credentials out of version control):
+--   AUTO_LOGIN_DEBUG = true
+--   AUTO_LOGIN_EMAIL = "you@example.com"
+--   AUTO_LOGIN_PASS  = "secret"
+--   AUTO_LOGIN_HOST  = "http://127.0.0.1:3000/api/login"  -- optional
+--   AUTO_SELECT_CHAR = false  -- optional: stop at the character list
+AUTO_LOGIN_DEBUG = false
+
 -- F8 P1: developer flag — modules opt into noisy diagnostics when true
--- (e.g. modules/game_protocol unhandled-opcode reporter). Override locally
--- in config.lua by setting `DEVELOPERMODE = true` before modules load.
-DEVELOPERMODE = false
+-- (e.g. modules/game_protocol unhandled-opcode reporter). Enables the
+-- client_stats profiling window (Ctrl+Alt+D / "Debug Info" top-menu button).
+DEVELOPERMODE = true
 
 -- ---------------------------------------------------------------------------
 -- Server endpoint configuration
@@ -46,16 +64,25 @@ local function loadConfig()
     }
   end
 
-  -- 3. open-source placeholder
+  -- 3. open-source placeholder.
+  -- Modern servers (Tibia 12+/15.x, e.g. crystalserver) authenticate over HTTP
+  -- and only then hand the client the game world host/port. The legacy TCP
+  -- ProtocolLogin (ip:port:version on 7171) is for <= 11.00 clients and will
+  -- fail a 15.24 handshake ("invalid checksum"). So the default points at the
+  -- local HTTP login endpoint; override via config.lua for your own server.
+  -- NOTE: client_topmenu.updateStatus iterates Services.status as a LIST
+  -- (`for i = 1, #Services.status`), so it must be a table of URLs (or empty),
+  -- never a bare string — a string makes #status its char count and feeds
+  -- characters to HTTP.postJSON, crashing with a boolean->map cast.
   return {
     website  = "",
     updater  = "",
     stats    = "",
     crash    = "",
     feedback = "",
-    status   = "",
+    status   = {},
   }, {
-    LocalTestServ = "127.0.0.1:7171:860",
+    Koliseu = "http://127.0.0.1:3000/api/login",
   }
 end
 

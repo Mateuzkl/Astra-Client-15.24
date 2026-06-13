@@ -166,6 +166,19 @@ function init()
 
   g_logger.setOnLog(onLog)
 
+  -- Default to a small floating window in the bottom-left corner instead of the
+  -- fullscreen ("docked") overlay. Honor a saved layout if the user moved/resized
+  -- it before; otherwise pop it out with the bottom-left defaults from popWindow().
+  local settings = g_settings.getNode('terminal-window')
+  if settings then
+    if settings.size then oldSize = settings.size end
+    if settings.pos then oldPos = settings.pos end
+  end
+  if not poped then
+    popWindow() -- poped == false -> runs the floating branch (bottom-left small window)
+  end
+  firstShown = true
+
   if not g_app.isRunning() then
     g_logger.fireOldMessages()
   elseif _G.terminalLines then
@@ -218,9 +231,19 @@ function popWindow()
   else
     terminalWindow:breakAnchors()
     terminalWindow:setOn(true)
-    local size = oldSize or { width = g_window.getWidth()/2.5, height = g_window.getHeight()/4 }
+    -- Default to a small window docked in the BOTTOM-LEFT corner. The old default
+    -- put y at g_window.getHeight() (the very bottom edge), pushing the window fully
+    -- off-screen below; we subtract the window height so it sits just inside the
+    -- bottom-left corner.
+    -- Default width tripled (was g_window.getWidth() / 3), capped to the screen width so
+    -- the window never spills off the right edge. We force this width even when a saved
+    -- layout exists (a previously persisted narrow width would otherwise win), but keep the
+    -- saved height/position so the user's vertical sizing and placement are preserved.
+    local defaultWidth = math.min(g_window.getWidth(), math.floor(g_window.getWidth() / 3) * 3)
+    local size = oldSize or { width = defaultWidth, height = math.floor(g_window.getHeight() / 4) }
+    size.width = defaultWidth
     terminalWindow:setSize(size)
-    local pos = oldPos or { x = 0, y = g_window.getHeight() }
+    local pos = oldPos or { x = 0, y = g_window.getHeight() - size.height }
     terminalWindow:setPosition(pos)
     terminalWindow:getChildById('bottomResizeBorder'):enable()
     terminalWindow:getChildById('rightResizeBorder'):enable()
