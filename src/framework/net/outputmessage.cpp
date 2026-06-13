@@ -110,6 +110,22 @@ void OutputMessage::addPaddingBytes(int bytes, uint8 byte)
     m_messageSize += bytes;
 }
 
+uint32 OutputMessage::writePaddingAmount()
+{
+    // Mirror crystalserver OutputMessage::writePaddingAmount():
+    //   paddingAmount = 8 - (length % 8) - 1;  append paddingAmount bytes; then
+    //   prepend the paddingAmount as a single header byte at the FRONT.
+    // After this the block [count][body][padding] is a multiple of 8, and the
+    // server's XTEA_decrypt reads the front byte as the padding count.
+    uint8 paddingAmount = static_cast<uint8>((8 - (m_messageSize % 8) - 1) & 0xFF);
+    addPaddingBytes(paddingAmount);          // trailing padding
+    VALIDATE(m_headerPos >= 1);
+    m_headerPos -= 1;                         // prepend the count byte
+    m_buffer[m_headerPos] = paddingAmount;
+    m_messageSize += 1;
+    return m_messageSize;                     // now a multiple of 8
+}
+
 void OutputMessage::encryptRsa()
 {
     uint32_t size = g_crypt.rsaGetSize();
@@ -138,14 +154,18 @@ void OutputMessage::writeSequence(uint32_t sequence)
 }
 
 
-void OutputMessage::writeMessageSize(bool bigSize)
+void OutputMessage::writeMessageSize(bool bigSize, bool scaled)
 {
     VALIDATE(m_headerPos >= (bigSize ? 4 : 2));
     m_headerPos -= (bigSize ? 4 : 2);
+    // Tibia 13.x+/crystalserver ProtocolGame size scaling: the wire size header
+    // is (realSize - 4) / 8 (XTEA 8-byte alignment). The server multiplies it
+    // back by 8 and adds 4 on read. Mirror that here for outgoing game packets.
+    uint32 sizeField = scaled ? ((m_messageSize - 4) / 8) : m_messageSize;
     if (bigSize) {
-        stdext::writeULE32(m_buffer + m_headerPos, m_messageSize);
+        stdext::writeULE32(m_buffer + m_headerPos, sizeField);
     } else {
-        stdext::writeULE16(m_buffer + m_headerPos, m_messageSize);
+        stdext::writeULE16(m_buffer + m_headerPos, sizeField);
     }
     m_messageSize += (bigSize ? 4 : 2);
 }

@@ -1,5 +1,6 @@
 #ifndef __EMSCRIPTEN__
 
+#include <framework/global.h>
 #include <framework/stdext/uri.h>
 #include <chrono>
 

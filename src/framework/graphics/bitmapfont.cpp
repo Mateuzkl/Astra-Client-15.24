@@ -104,11 +104,21 @@ void BitmapFont::drawColoredText(const std::string& text, const Rect& screenCoor
     g_drawQueue->addColoredText(shared_from_this(), text, screenCoords, align, colors, shadow);
 }
 
-void BitmapFont::calculateDrawTextCoords(CoordsBuffer& coordsBuffer, const std::string& text, const Rect& screenCoords, Fw::AlignmentFlag align)
+void BitmapFont::calculateDrawTextCoords(CoordsBuffer& coordsBuffer, const std::string& textIn, const Rect& screenCoords, Fw::AlignmentFlag align)
 {
     // prevent glitches from invalid rects
     if (!screenCoords.isValid() || !m_texture)
         return;
+
+    // Truncate pathologically long strings BEFORE any layout. A desynced packet
+    // can hand us a garbage label thousands of chars long; laying it out and
+    // building a vertex buffer that big has overrun ANGLE/D3D11 vertex storage
+    // and corrupted the heap. No real in-game label is anywhere near this.
+    static const size_t MAX_DRAW_GLYPHS = 1024;
+    std::string truncated;
+    if (textIn.size() > MAX_DRAW_GLYPHS)
+        truncated = textIn.substr(0, MAX_DRAW_GLYPHS);
+    const std::string& text = (textIn.size() > MAX_DRAW_GLYPHS) ? truncated : textIn;
 
     int textLenght = text.length();
 

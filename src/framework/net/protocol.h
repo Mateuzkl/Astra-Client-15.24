@@ -63,6 +63,11 @@ public:
     void enabledSequencedPackets() { m_sequencedPackets = true; }
     void enableBigPackets() { m_bigPackets = true; }
     void enableCompression() { m_compression = true; }
+    // Tibia 13.x+/crystalserver framing: the 2-byte ProtocolGame size header is
+    // transmitted as (realSize - 4) / 8 and read back as header*8 + 4 (an XTEA
+    // 8-byte-alignment packing). When enabled, the client applies the same
+    // scaling on the size header (see recv()/writeMessageSize).
+    void enableScaledPacketSize() { m_scaledPacketSize = true; }
 
     virtual void send(const OutputMessagePtr& outputMessage, bool rawPacket = false);
     virtual void recv();
@@ -86,11 +91,13 @@ protected:
     PacketPlayerPtr m_player;
     PacketRecorderPtr m_recorder;
 
+    bool m_scaledPacketSize = false;
+
 private:
     void internalRecvHeader(uint8* buffer, uint32 size);
     void internalRecvData(uint8* buffer, uint32 size);
 
-    bool xteaDecrypt(const InputMessagePtr& inputMessage);
+    bool xteaDecrypt(const InputMessagePtr& inputMessage, bool compressed = false);
     void xteaEncrypt(const OutputMessagePtr& outputMessage);
 
     bool m_checksumEnabled;

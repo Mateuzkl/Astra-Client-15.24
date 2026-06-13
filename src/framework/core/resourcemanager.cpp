@@ -585,6 +585,32 @@ std::string ResourceManager::resolvePath(std::string path)
     return path;
 }
 
+std::string ResourceManager::getRealPath(const std::string& physfsPath)
+{
+    // Phase 0 P0.8: Resolve a PHYSFS virtual path to a real filesystem path.
+    // The new asset loaders use std::ifstream on raw paths, so we need to
+    // translate "/things/1524" -> "<mount root>/things/1524" on the host FS.
+    std::string normalized = resolvePath(physfsPath);
+    if (normalized.empty())
+        return std::string();
+    // PHYSFS_getRealDir returns the mount-point root for an existing entry.
+    // For a path that doesn't exist (yet to be created file), it returns null.
+    const char* realDir = PHYSFS_getRealDir(normalized.c_str());
+    if (!realDir) {
+        // Fallback: if the entry doesn't exist, try the write dir as the
+        // most likely mount point. Callers that need strict semantics should
+        // check fileExists/directoryExists first.
+        if (m_writeDir.empty())
+            return std::string();
+        std::filesystem::path candidate = m_writeDir;
+        candidate /= std::filesystem::u8path(normalized.substr(normalized.front() == '/' ? 1 : 0));
+        return candidate.string();
+    }
+    std::filesystem::path full = std::filesystem::u8path(realDir);
+    full /= std::filesystem::u8path(normalized.front() == '/' ? normalized.substr(1) : normalized);
+    return full.string();
+}
+
 std::string ResourceManager::guessFilePath(const std::string& filename, const std::string& type)
 {
     if(isFileType(filename, type))

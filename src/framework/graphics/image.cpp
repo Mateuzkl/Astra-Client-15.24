@@ -98,16 +98,28 @@ void Image::blit(const Point& dest, const ImagePtr& other)
     if (!other)
         return;
 
-    int width = other->getWidth(), height = other->getHeight();
+    const int width = other->getWidth(), height = other->getHeight();
+    const int dstW = m_size.width(), dstH = m_size.height();
     uint8* otherPixels = other->getPixelData();
-    for (int y = 0, p = 0; y < height; ++y) {
-        int pos = ((dest.y + y) * m_size.width() + dest.x) * 4;
+    // Clip to the destination image bounds. A mismatched sprite/atlas layout (seen
+    // with some crystalserver 15.24 ThingTypes, e.g. id 9313) can produce a dest +
+    // source rect that runs past m_pixels; the old unchecked write smashed the heap
+    // and later crashed the render thread (c0000374) when the temporary Image was
+    // freed. Clipping draws what fits and ignores the overflow instead of corrupting
+    // memory.
+    for (int y = 0; y < height; ++y) {
+        const int dy = dest.y + y;
+        if (dy < 0 || dy >= dstH)
+            continue;
         for (int x = 0; x < width; ++x) {
+            const int dx = dest.x + x;
+            if (dx < 0 || dx >= dstW)
+                continue;
+            const int p = (y * width + x) * 4;
             if (otherPixels[p + 3] != 0) {
+                const int pos = (dy * dstW + dx) * 4;
                 *(uint32_t*)&m_pixels[pos] = *(uint32_t*)&otherPixels[p];
             }
-            pos += 4;
-            p += 4;
         }
     }
 }

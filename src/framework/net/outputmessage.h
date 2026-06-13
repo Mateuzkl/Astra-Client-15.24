@@ -66,7 +66,14 @@ protected:
 
     void writeChecksum();
     void writeSequence(uint32_t sequence);
-    void writeMessageSize(bool bigSize);
+    void writeMessageSize(bool bigSize, bool scaled = false);
+
+    // crystalserver/Canary SEQUENCE-XTEA framing: the encrypted block is
+    // [paddingCount U8][message body][padding bytes], padded so the whole block is
+    // a multiple of 8. The server's Protocol::XTEA_decrypt reads the FRONT byte as
+    // the padding count (writePaddingAmount()/getByte()). Returns the new block
+    // length (multiple of 8) so the caller can XTEA-encrypt exactly that range.
+    uint32 writePaddingAmount();
 
     friend class Protocol;
     friend class PacketPlayer;

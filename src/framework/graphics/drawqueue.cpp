@@ -1,4 +1,5 @@
 #include <stack>
+#include <algorithm>
 #include <framework/graphics/drawqueue.h>
 #include <framework/graphics/painter.h>
 #include <framework/graphics/atlas.h>

@@ -2,6 +2,7 @@
 #define DRAWQUEUE_H
 
 #include <vector>
+#include <algorithm>
 #include <framework/graphics/declarations.h>
 #include <framework/graphics/coordsbuffer.h>
 #include <framework/graphics/paintershaderprogram.h>
@@ -19,8 +20,22 @@ enum DrawType : uint8_t {
     DRAW_AFTER_MAP = 2
 };
 
+// Map draw-order layers, ported from the koliseu-client/mehah DrawPool. On the map
+// framebuffer queue, items are stable-sorted by this order before drawing so that
+// every tile's ground composites below every border, below every common/creature/top
+// item, regardless of the tile iteration order. UI queues (no framebuffer) keep pure
+// submission order (THIRD default) and are never reordered.
+enum DrawOrder : uint8_t {
+    DRAW_ORDER_FIRST  = 0,  // ground
+    DRAW_ORDER_SECOND = 1,  // ground border
+    DRAW_ORDER_THIRD  = 2,  // bottom, common items, creatures, top (DEFAULT)
+    DRAW_ORDER_FOURTH = 3,  // top effects
+    DRAW_ORDER_FIFTH  = 4,  // missiles (above all)
+    DRAW_ORDER_COUNT  = 5
+};
+
 struct DrawQueueItem {
-    DrawQueueItem(const TexturePtr& texture, const Color& color = Color::white) : 
+    DrawQueueItem(const TexturePtr& texture, const Color& color = Color::white) :
         m_texture(texture), m_color(color) {}
     virtual ~DrawQueueItem() = default;
     virtual void draw() {}
@@ -29,6 +44,7 @@ struct DrawQueueItem {
 
     TexturePtr m_texture;
     Color m_color;
+    uint8_t m_order = DRAW_ORDER_THIRD;
 };
 
 struct DrawQueueItemTexturedRect : public DrawQueueItem {
@@ -207,9 +223,10 @@ public:
         if (!item) return;
         m_queue.push_back(item);
     }
-    DrawQueueItemTexturedRect* addTexturedRect(const Rect& dest, const TexturePtr& texture, const Rect& src, const Color& color = Color::white)
+    DrawQueueItemTexturedRect* addTexturedRect(const Rect& dest, const TexturePtr& texture, const Rect& src, const Color& color = Color::white, uint8_t order = DRAW_ORDER_THIRD)
     {
         DrawQueueItemTexturedRect* item(new DrawQueueItemTexturedRect(dest, texture, src, color));
+        item->m_order = order;
         m_queue.push_back(item);
         return item;
     }
@@ -221,9 +238,11 @@ public:
     {
         m_queue.push_back(new DrawQueueItemColoredTextureCoords(coords, texture, colors));
     }
-    void addFilledRect(const Rect& dest, const Color& color = Color::white)
+    void addFilledRect(const Rect& dest, const Color& color = Color::white, uint8_t order = DRAW_ORDER_THIRD)
     {
-        m_queue.push_back(new DrawQueueItemFilledRect(dest, color));
+        auto* item = new DrawQueueItemFilledRect(dest, color);
+        item->m_order = order;
+        m_queue.push_back(item);
     }
     void addFillCoords(CoordsBuffer& coords, const Color& color = Color::white)
     {
@@ -284,6 +303,51 @@ public:
     size_t size()
     {
         return m_queue.size();
+    }
+
+    // Stable-sort a contiguous range of the queue by per-item draw order (FIRST..FIFTH).
+    // Called once per map floor with that floor's [start, size) range so ground sorts
+    // below border below items WITHIN the floor, while the floor-to-floor draw order
+    // (deep floor first) and per-floor index ranges (opacity/fading) stay intact.
+    // Sorting globally instead would interleave floors and break depth + opacity ranges.
+    void sortRangeByOrder(size_t start)
+    {
+        if (start >= m_queue.size())
+            return;
+        const size_t n = m_queue.size() - start;
+        // sort a permutation instead of the queue so condition ranges (e.g. marks set
+        // during drawFloor via setMark) can be remapped to the new indices afterwards
+        static std::vector<size_t> perm; // static scratch: avoid per-floor-per-frame allocs (render thread only)
+        perm.resize(n);
+        for (size_t i = 0; i < n; ++i) perm[i] = i;
+        std::stable_sort(perm.begin(), perm.end(), [&](size_t a, size_t b) {
+            return m_queue[start + a]->m_order < m_queue[start + b]->m_order;
+        });
+        // apply permutation to the queue
+        static std::vector<DrawQueueItem*> sorted;
+        sorted.resize(n);
+        for (size_t newI = 0; newI < n; ++newI) sorted[newI] = m_queue[start + perm[newI]];
+        std::copy(sorted.begin(), sorted.end(), m_queue.begin() + start);
+        // old index -> new index
+        static std::vector<size_t> oldToNew;
+        oldToNew.resize(n);
+        for (size_t newI = 0; newI < n; ++newI) oldToNew[perm[newI]] = newI;
+        // remap conditions registered inside the sorted range; at call time every
+        // condition either ends at/before `start` or lies fully inside [start, size)
+        for (auto& c : m_conditions) {
+            if (c->m_start < start || c->m_start >= c->m_end)
+                continue;
+            // min/max over the old range: exact for uniform-order ranges (stable sort
+            // keeps them contiguous) and never drops entries for mixed-order ranges
+            size_t newStart = m_queue.size(), newEnd = 0;
+            for (size_t i = c->m_start; i < c->m_end; ++i) {
+                const size_t ni = start + oldToNew[i - start];
+                if (ni < newStart) newStart = ni;
+                if (ni + 1 > newEnd) newEnd = ni + 1;
+            }
+            c->m_start = newStart;
+            c->m_end = newEnd;
+        }
     }
 
     void setOpacity(size_t start, float opacity)

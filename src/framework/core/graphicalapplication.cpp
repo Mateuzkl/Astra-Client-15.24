@@ -137,6 +137,8 @@ void GraphicalApplication::run()
     m_framebuffer->resize(g_painter->getResolution());
     m_mapFramebuffer = g_framebuffers.createFrameBuffer();
     m_mapFramebuffer->resize(g_painter->getResolution());
+    m_uiFramebuffer = g_framebuffers.createFrameBuffer();
+    m_uiFramebuffer->resize(g_painter->getResolution());
 
     ticks_t lastRender = stdext::micros();
 
@@ -149,6 +151,7 @@ void GraphicalApplication::run()
     std::mutex mutex;
     std::thread worker([&] {
         g_dispatcherThreadId = std::this_thread::get_id();
+        ticks_t uiBuildLast = 0; // throttles the after-map UI rebuild (pairs with the render-side cache)
         while (!m_stopping) {
             m_processingFrames.addFrame();
             {
@@ -158,7 +161,10 @@ void GraphicalApplication::run()
             }
 
             mutex.lock();
-            if (drawQueue && drawMapQueue && m_maxFps > 0) { // old drawQueue not processed yet
+            // back-pressure on the map queue (produced every cycle), not drawQueue: with
+            // the UI build throttled, drawQueue is null on skip-cycles, so gating on it
+            // would let the worker spin rebuilding the MAP at full rate. Pace on the map.
+            if (drawMapQueue && m_maxFps > 0) { // previous frame's queues not processed yet
                 mutex.unlock();
                 AutoStat s(STATS_MAIN, "Sleep");
                 stdext::millisleep(1);
@@ -184,16 +190,25 @@ void GraphicalApplication::run()
             drawMapForegroundQueue = g_drawQueue;
             mutex.unlock();
 
-            {
-                AutoStat s(STATS_MAIN, "DrawForeground");
-                g_drawQueue = std::make_shared<DrawQueue>();
-                g_ui.render(Fw::ForegroundPane);
+            // Throttle the UI (ForegroundPane) rebuild to ~60fps when the cache is on:
+            // the render thread reuses the last toDrawQueue (consumer: drawQueue ? : toDrawQueue)
+            // and its cached framebuffer, so rebuilding the widget tree at the full producer
+            // rate is wasted work (DrawForeground was ~40% of this thread). Always rebuild on
+            // m_mustRepaint so the consumer's (m_mustRepaint && !drawQueue) guard never stalls.
+            const ticks_t uiNow = stdext::micros();
+            if (!m_cacheUI || m_mustRepaint || uiNow - uiBuildLast >= 16666) {
+                {
+                    AutoStat s(STATS_MAIN, "DrawForeground");
+                    g_drawQueue = std::make_shared<DrawQueue>();
+                    g_ui.render(Fw::ForegroundPane);
+                }
+                mutex.lock();
+                drawQueue = g_drawQueue;
+                g_drawQueue = nullptr;
+                mutex.unlock();
+                uiBuildLast = uiNow;
             }
-
-            mutex.lock();
-            drawQueue = g_drawQueue;
-            g_drawQueue = nullptr;
-            mutex.unlock();
+            // else: skip the rebuild — drawQueue stays null, consumer keeps the last UI queue
 
             g_graphs[GRAPH_CPU_FRAME_TIME].addValue(stdext::millis() - renderStart);
 
@@ -208,6 +223,10 @@ void GraphicalApplication::run()
 
     std::shared_ptr<DrawQueue> toDrawQueue, toDrawMapQueue, toDrawMapForegroundQueue;
     ticks_t lastFrame = stdext::millis();
+    // UI framebuffer cache state (render thread only): last re-rasterization time
+    // and the resolution it was rendered at (a change forces a refresh).
+    ticks_t uiCacheLastRender = 0;
+    Size uiCacheSize;
     while (!m_stopping) {
         m_iteration += 1;
 
@@ -229,9 +248,11 @@ void GraphicalApplication::run()
         }
 
         mutex.lock();
-        if ((!drawQueue && !toDrawQueue) || 
-            ((!drawMapQueue || !drawMapForegroundQueue) && isOnline) || 
-            (m_mustRepaint && !drawQueue)) {
+        if ((!drawQueue && !toDrawQueue) ||
+            ((!drawMapQueue || !drawMapForegroundQueue) && isOnline) ||
+            (m_mustRepaint && !drawQueue && !m_cacheUI)) { // cache-on reuses the last UI queue,
+            // so never block waiting for a fresh UI build on repaint (would livelock vs the
+            // map back-pressure); the worker rebuilds within ~16ms / on m_mustRepaint anyway.
             mutex.unlock();
             AutoStat s(STATS_RENDER, "Wait");
             stdext::millisleep(1);
@@ -245,6 +266,7 @@ void GraphicalApplication::run()
 
         g_adaptiveRenderer.newFrame();
         m_graphicsFrames.addFrame();
+        const bool repaintRequested = m_mustRepaint; // capture before clear for the UI cache
         m_mustRepaint = false;
         lastRender = stdext::micros() > lastRender + frameDelay * 2 ? stdext::micros() : lastRender + frameDelay;
 
@@ -307,8 +329,37 @@ void GraphicalApplication::run()
         }
 
         {
+            // The after-map pass draws the ENTIRE UI over the map (~290 text draw-calls a
+            // frame). Re-rasterizing it at the full render rate (~1000fps) is wasteful since
+            // the UI changes at most a few times/sec. With the cache on, we render it into
+            // m_uiFramebuffer at most ~60fps and blit the cached texture every frame.
+            // m_uiFramebuffer is render-thread-owned (same as m_mapFramebuffer), so no
+            // cross-thread access; clips/conditions replay correctly because we call the
+            // exact same draw(DRAW_AFTER_MAP) path, just into the framebuffer.
             AutoStat s(STATS_RENDER, "DrawSecondForeground");
-            toDrawQueue->draw(DRAW_AFTER_MAP);
+            if (m_cacheUI) {
+                const Size uiRes = g_painter->getResolution();
+                const ticks_t uiNow = stdext::micros();
+                // refresh on resolution/scaling change, on explicit repaint, or once the
+                // ~60fps interval elapsed; otherwise reuse the cached texture.
+                if (uiRes != uiCacheSize || repaintRequested || uiNow - uiCacheLastRender >= 16666) {
+                    m_uiFramebuffer->resize(uiRes);
+                    m_uiFramebuffer->bind();
+                    g_painter->clear(Color::alpha);
+                    toDrawQueue->draw(DRAW_AFTER_MAP);
+                    m_uiFramebuffer->release();
+                    uiCacheLastRender = uiNow;
+                    uiCacheSize = uiRes;
+                }
+                // full reset (not just color): on cache-hit frames nothing reset the painter,
+                // so the previous draw's composition/blend/clip/shader could leak into the
+                // blit and diverge from the uncached path (which ends in DrawQueue::draw ->
+                // resetState). resetState leaves resolution intact.
+                g_painter->resetState();
+                m_uiFramebuffer->draw(Rect(0, 0, uiRes)); // composite UI over the map
+            } else {
+                toDrawQueue->draw(DRAW_AFTER_MAP);
+            }
         }
 
         {
@@ -349,6 +400,7 @@ void GraphicalApplication::run()
 
     m_framebuffer = nullptr;
     m_mapFramebuffer = nullptr;
+    m_uiFramebuffer = nullptr;
     g_drawQueue = nullptr;
     m_stopping = false;
     m_running = false;
@@ -396,6 +448,12 @@ void GraphicalApplication::inputEvent(InputEvent event)
     m_onInputEvent = true;
     g_ui.inputEvent(event);
     m_onInputEvent = false;
+    // keep interactions crisp under the UI build/render throttle: any input other than a
+    // bare mouse-move refreshes the UI immediately (rebuild + re-rasterize this cycle)
+    // instead of waiting up to ~32ms. Mouse-move is excluded so moving the cursor during
+    // play does not negate the throttle (drags still update at the 60fps throttle rate).
+    if (event.type != Fw::MouseMoveInputEvent)
+        m_mustRepaint = true;
 }
 
 void GraphicalApplication::doScreenshot(std::string file)

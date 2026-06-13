@@ -142,7 +142,11 @@ void InputMessage::checkWrite(int bytes)
 
 void InputMessage::addZlibFooter()
 {
-    if (m_messageSize + 4 > BUFFER_MAXSIZE)
+    // Bounds must account for m_headerPos: the footer is written at
+    // m_buffer[m_messageSize + m_headerPos ... +3]. The old check only tested
+    // m_messageSize + 4, which could let the 4 footer bytes (or the following
+    // inflate) run past m_buffer and corrupt the heap on a large/desynced packet.
+    if (m_messageSize + m_headerPos + 4 > BUFFER_MAXSIZE)
         return;
     m_buffer[m_messageSize + m_headerPos] = 0x00;
     m_buffer[m_messageSize + m_headerPos + 1] = 0x00;

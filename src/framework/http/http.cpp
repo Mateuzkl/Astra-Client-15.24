@@ -56,7 +56,10 @@ int Http::get(const std::string& url, int timeout, const std::map<std::string, s
                     g_lua.callGlobalField("g_http", "onGetProgress", result->operationId, result->url, result->progress);
                     return;
                 }
-                g_lua.callGlobalField("g_http", "onGet", result->operationId, result->url, result->error, result);
+                // Lua's HTTP.onGet expects the response body as a string; convert
+                // the byte vector here (see onPost note above).
+                std::string body(result->body.begin(), result->body.end());
+                g_lua.callGlobalField("g_http", "onGet", result->operationId, result->url, result->error, body);
             });
             if (finished) {
                 m_operations.erase(operationId);
@@ -90,7 +93,11 @@ int Http::post(const std::string& url, const std::string& data, int timeout, con
                     g_lua.callGlobalField("g_http", "onPostProgress", result->operationId, result->url, result->progress);
                     return;
                 }
-                g_lua.callGlobalField("g_http", "onPost", result->operationId, result->url, result->error, result);
+                // Lua's HTTP.onPost expects the response body as a string (it
+                // calls data:len()/json.decode(data)). result->body is a byte
+                // vector, so convert it here instead of passing the C++ object.
+                std::string body(result->body.begin(), result->body.end());
+                g_lua.callGlobalField("g_http", "onPost", result->operationId, result->url, result->error, body);
             });
             if (finished) {
                 m_operations.erase(operationId);

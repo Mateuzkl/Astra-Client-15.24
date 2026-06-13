@@ -173,7 +173,11 @@ void UIWidget::setColoredText(const std::vector<std::string>& texts, bool dontFi
     m_textEvents.clear();
 
     std::string text = "";
-    for(size_t i = 0, p = 0; i < texts.size() - 1; i += 2) {
+    // texts is [text0, color0, text1, color1, ...]. Guard the empty case: texts.size()
+    // is unsigned, so `texts.size() - 1` underflows to SIZE_MAX when empty and the loop
+    // runs out of bounds (fatal). Calling setColoredText("") -> empty vector is common
+    // (e.g. the stats proxy panel with no proxies), so this must not crash.
+    for(size_t i = 0, p = 0; i + 1 < texts.size(); i += 2) {
         Color c(Color::white);
         stdext::cast<Color>(texts[i + 1], c);
         text += texts[i];

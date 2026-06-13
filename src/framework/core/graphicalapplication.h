@@ -45,6 +45,12 @@ public:
     bool willRepaint() { return m_mustRepaint; }
     void repaint() { m_mustRepaint = true; }
 
+    // UI framebuffer cache: rasterize the after-map UI at most ~60fps into a
+    // framebuffer and blit it every frame, instead of redrawing the whole UI at
+    // the full render rate. Toggleable at runtime (g_app.setCacheUI) for A/B.
+    void setCacheUI(bool v) { m_cacheUI = v; if (v) m_mustRepaint = true; } // refresh now on enable
+    bool isCacheUI() { return m_cacheUI; }
+
     void setMaxFps(int maxFps) { m_maxFps = maxFps; }
     int getMaxFps() { return m_maxFps; }
     int getFps() { return m_graphicsFrames.getFps(); }
@@ -74,9 +80,10 @@ private:
     std::atomic<float> m_scaling = 1.0;
     std::atomic<float> m_lastScaling = 1.0;
     std::atomic_int m_maxFps = 100;
+    std::atomic_bool m_cacheUI = true;
+    std::atomic_bool m_mustRepaint = false; // atomic: set on worker thread, read+cleared on render thread
     stdext::boolean<false> m_onInputEvent;
-    stdext::boolean<false> m_mustRepaint;
-    FrameBufferPtr m_framebuffer, m_mapFramebuffer;
+    FrameBufferPtr m_framebuffer, m_mapFramebuffer, m_uiFramebuffer;
     FrameCounter m_graphicsFrames;
     FrameCounter m_processingFrames;
     stdext::timer m_windowPollTimer;

@@ -19,11 +19,14 @@ void Atlas::init()
             m_atlas[i]->resize(Size(m_size, m_size));
         } else { // text atlas
             m_atlas[i]->setSmooth(false);
-#ifdef BIG_FONTS
+            // Size the font atlas to m_size (min(4096, maxTextureSize)) instead of a
+            // fixed 2048. The 30 bundled .otfont textures pack right at the 2048 edge,
+            // and since the /data/fonts load order is not sorted (unlike styles) the
+            // quadtree packing varied per run and eventually overflowed -> the fatal
+            // "[Atlas] Out of space for new fonts" in cacheFont. 4096 gives 4x the
+            // slots; this GPU reports a 16384 max so it is well within budget. This is
+            // the BIG_FONTS behaviour, applied unconditionally (the define was never set).
             m_atlas[i]->resize(Size(m_size, m_size));
-#else
-            m_atlas[i]->resize(Size(2048, 2048));
-#endif
         }
 
         glActiveTexture(GL_TEXTURE6 + i);

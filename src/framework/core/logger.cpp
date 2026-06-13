@@ -144,7 +144,10 @@ void Logger::setLogFile(const std::string& file)
         m_outFile.close();
     }
 
-    m_outFile.open(stdext::utf8_to_latin1(file.c_str()).c_str(), std::ios::out | std::ios::app);
+    // Truncate the log on every start so each run produces a clean file
+    // (std::ios::trunc instead of std::ios::app). The previous run's contents
+    // were already captured above into m_lastLog for the in-app log viewer.
+    m_outFile.open(stdext::utf8_to_latin1(file.c_str()).c_str(), std::ios::out | std::ios::trunc);
     if(!m_outFile.is_open() || !m_outFile.good()) {
         g_logger.error(stdext::format("Unable to save log to '%s'", file));
         return;

@@ -156,7 +156,7 @@ void Protocol::send(const OutputMessagePtr& outputMessage, bool rawPacket)
             outputMessage->writeChecksum();
 
         // write message size
-        outputMessage->writeMessageSize(m_bigPackets);
+        outputMessage->writeMessageSize(m_bigPackets, m_scaledPacketSize);
     }
 
     if (m_proxy) {
@@ -204,6 +204,11 @@ void Protocol::internalRecvHeader(uint8* buffer, uint32 size)
     m_inputMessage->fillBuffer(buffer, size);
     uint32 remainingSize = m_inputMessage->readSize(m_bigPackets);
 
+    // Tibia 13.x+/crystalserver scales the ProtocolGame size header by 8 (the
+    // wire value is (realSize - 4) / 8). Undo it to get the real body length.
+    if (m_scaledPacketSize)
+        remainingSize = remainingSize * 8 + 4;
+
     // read remaining message data
     if (m_connection)
         m_connection->read(remainingSize, std::bind(&Protocol::internalRecvData, asProtocol(), std::placeholders::_1, std::placeholders::_2));
@@ -221,7 +226,11 @@ void Protocol::internalRecvData(uint8* buffer, uint32 size)
 
     bool decompress = false;
     if (m_sequencedPackets) {
-        if (m_inputMessage->getU32() >= 0xC0000000) {
+        // crystalserver/Canary mark a compressed sequenced packet by setting the
+        // high bit (1 << 31) of the sequence word: header = 0x80000000 | seq.
+        // The low 31 bits are the sequence number. Test the compression bit, not
+        // a >= 0xC0000000 threshold (which misses 0x80000001 = compressed seq 1).
+        if ((m_inputMessage->getU32() & 0x80000000) != 0) {
             decompress = true;
         }
     } else if (m_checksumEnabled) {
@@ -235,29 +244,53 @@ void Protocol::internalRecvData(uint8* buffer, uint32 size)
     }
 
     if (m_xteaEncryptionEnabled) {
-        if (!xteaDecrypt(m_inputMessage)) {
+        if (!xteaDecrypt(m_inputMessage, decompress)) {
             g_logger.traceError("failed to decrypt message");
             return;
         }
     }
 
-    if (decompress || m_compression) {
+    // Only decompress packets the server actually compressed (high bit set in the
+    // sequence word, captured in `decompress`). m_compression just means the
+    // feature is enabled — using it here forced inflate on EVERY packet, breaking
+    // the small uncompressed ones (zlib -3 on seq words 2,3,4,...).
+    if (decompress) {
         m_inputMessage->addZlibFooter();
-        m_zstream.next_in = m_inputMessage->getDataBuffer();
+        // crystalserver/Canary compress each packet INDEPENDENTLY with libdeflate
+        // (a self-contained raw-deflate block, BFINAL=1). So we must reset the
+        // inflate stream for every packet: once a packet inflates to Z_STREAM_END,
+        // a persistent zstream stays "finished" and every subsequent compressed
+        // packet returns Z_STREAM_END with 0 output -> the whole packet (e.g. tile
+        // updates that add stackpos-1 items) is silently dropped, which showed up as
+        // "no thing at pos ... stackpos:2" on walk. inflateReset re-arms the stream.
+        inflateReset(&m_zstream);
+        m_zstream.next_in = m_inputMessage->getReadBuffer();
         m_zstream.next_out = m_zstreamBuffer.data();
         m_zstream.avail_in = m_inputMessage->getUnreadSize();
         m_zstream.avail_out = m_zstreamBuffer.size();
-        if (inflate(&m_zstream, Z_SYNC_FLUSH) != Z_OK) {
-            g_logger.traceError("failed to decompress message");
+        int ret = inflate(&m_zstream, Z_SYNC_FLUSH);
+        if (ret != Z_OK && ret != Z_STREAM_END) {
+            g_logger.traceError(stdext::format("failed to decompress message (zlib %d)", ret));
             return;
         }
         int decryptedSize = m_zstreamBuffer.size() - m_zstream.avail_out;
         if (decryptedSize == 0) {
-            g_logger.traceError(stdext::format("invalid size of decompressed message - %i", (int)decryptedSize));
+            g_logger.traceError(stdext::format("invalid size of decompressed message - %i", decryptedSize));
             return;
         }
         m_inputMessage->fillBuffer(m_zstreamBuffer.data(), decryptedSize);
-        m_inputMessage->setMessageSize(m_inputMessage->getHeaderSize() + decryptedSize);
+        // The decompressed body was written at the CURRENT read position (past the
+        // sequence word), so the message size must be anchored to that read offset,
+        // not to getHeaderSize(). getHeaderSize() reports the size-header width (8),
+        // which is one byte wider than the actual bytes consumed to reach the body
+        // (the 4-byte size header is double-counted against the 4-byte sequence word
+        // read inside internalRecvData). Using getHeaderSize() left getUnreadSize()
+        // one byte too large, so after a packet decoded fully the parser saw 1 stray
+        // trailing byte, read it as a bogus opcode (0xcd / 0x69) and threw
+        // "InputMessage eof reached" -- which dropped the stackpos-1 tile items and
+        // surfaced as "no thing at pos ... stackpos:2" on walk.
+        const int bodyOffset = m_inputMessage->getReadPos() - (InputMessage::MAX_HEADER_SIZE - m_inputMessage->getHeaderSize());
+        m_inputMessage->setMessageSize(bodyOffset + decryptedSize);
     }
 
     if (m_recorder) {
@@ -293,7 +326,7 @@ std::vector<uint32> Protocol::getXteaKey()
     return xteaKey;
 }
 
-bool Protocol::xteaDecrypt(const InputMessagePtr& inputMessage)
+bool Protocol::xteaDecrypt(const InputMessagePtr& inputMessage, bool compressed)
 {
     uint32 encryptedSize = inputMessage->getUnreadSize();
     if (encryptedSize % 8 != 0) {
@@ -318,6 +351,29 @@ bool Protocol::xteaDecrypt(const InputMessagePtr& inputMessage)
         readPos = readPos + 2;
     }
 
+    // crystalserver/Canary XTEA payload framing differs from legacy OTServ.
+    // The server's writePaddingAmount() puts a single padding-count byte at the
+    // FRONT of the encrypted block: [paddingAmount:1][payload][padding...]. On
+    // decrypt we read that byte and the real payload length is
+    // encryptedSize - 1 - paddingAmount. (Legacy OTServ instead prepends a
+    // 2/4-byte message size — m_scaledPacketSize distinguishes the two.)
+    if (m_scaledPacketSize) {
+        // getU8() consumes the leading padding-count byte and advances the read
+        // position (so getUnreadSize() already dropped that 1 byte). We only
+        // need to trim the trailing XTEA padding from the total message size:
+        // subtract paddingAmount, NOT 1 + paddingAmount, otherwise the payload
+        // ends up 1 byte short and every parse hits "eof reached".
+        uint8 paddingAmount = inputMessage->getU8();
+        int realSize = (int)encryptedSize - 1 - (int)paddingAmount;
+        if (realSize < 0 || realSize > (int)encryptedSize) {
+            g_logger.traceError("invalid decrypted network message");
+            return false;
+        }
+        inputMessage->setMessageSize(inputMessage->getMessageSize() - paddingAmount);
+        return true;
+    }
+
+    // Legacy OTServ: the first field is the real message length.
     uint32 decryptedSize = m_bigPackets ? (inputMessage->getU32() + 4) : (inputMessage->getU16() + 2);
     int sizeDelta = decryptedSize - encryptedSize;
     if (sizeDelta > 0 || -sizeDelta > (int)encryptedSize) {
@@ -331,18 +387,32 @@ bool Protocol::xteaDecrypt(const InputMessagePtr& inputMessage)
 
 void Protocol::xteaEncrypt(const OutputMessagePtr& outputMessage)
 {
-    outputMessage->writeMessageSize(m_bigPackets);
-    uint32 encryptedSize = outputMessage->getMessageSize();
+    uint32 encryptedSize;
+    uint32* buffer;
 
-    //add bytes until reach 8 multiple
-    if ((encryptedSize % 8) != 0) {
-        uint32 n = 8 - (encryptedSize % 8);
-        outputMessage->addPaddingBytes(n);
-        encryptedSize += n;
+    if (m_sequencedPackets) {
+        // crystalserver/Canary SEQUENCE-XTEA: the encrypted block is
+        // [paddingCount U8][message body][padding], padded to a multiple of 8.
+        // writePaddingAmount() prepends the count byte (at m_headerPos) and appends
+        // the trailing padding; we then XTEA-encrypt the whole block starting at the
+        // header position. The legacy OTServ layout (size field at front, zero pad at
+        // end) made the server's XTEA_decrypt read a bogus padding size and silently
+        // DROP every client->server packet (walk, ping, actions), so nothing worked.
+        encryptedSize = outputMessage->writePaddingAmount();
+        buffer = (uint32*)outputMessage->getHeaderBuffer();
+    } else {
+        // Legacy OTServ XTEA (pre-sequence): size field at front, zero padding at end.
+        outputMessage->writeMessageSize(m_bigPackets);
+        encryptedSize = outputMessage->getMessageSize();
+        if ((encryptedSize % 8) != 0) {
+            uint32 n = 8 - (encryptedSize % 8);
+            outputMessage->addPaddingBytes(n);
+            encryptedSize += n;
+        }
+        buffer = (uint32*)(outputMessage->getDataBuffer() - (m_bigPackets ? 4 : 2));
     }
 
     uint32_t readPos = 0;
-    uint32* buffer = (uint32*)(outputMessage->getDataBuffer() - (m_bigPackets ? 4 : 2));
     while (readPos < encryptedSize / 4) {
         uint32 v0 = buffer[readPos], v1 = buffer[readPos + 1];
         uint32 delta = 0x61C88647;

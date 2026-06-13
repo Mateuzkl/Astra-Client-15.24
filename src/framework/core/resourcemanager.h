@@ -76,6 +76,13 @@ public:
     std::string guessFilePath(const std::string& filename, const std::string& type);
     bool isFileType(const std::string& filename, const std::string& type);
 
+    // Phase 0 P0.8: Translate a PHYSFS virtual path (e.g. "/things/1524") to
+    // a real on-disk filesystem path. Needed by the new asset loaders
+    // (SpriteSheetLoader, AppearancesLoader) which use std::ifstream and
+    // bypass PHYSFS. Returns empty string if the path cannot be resolved
+    // and there's no write dir to fall back on.
+    std::string getRealPath(const std::string& physfsPath);
+
     bool isLoadedFromArchive() { return m_loadedFromArchive; }
     bool isLoadedFromMemory() { return m_loadedFromMemory; }
 

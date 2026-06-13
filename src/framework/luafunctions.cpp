@@ -321,6 +321,8 @@ void Application::registerLuaFunctions()
     // GraphicalApplication
     g_lua.bindSingletonFunction("g_app", "setMaxFps", &GraphicalApplication::setMaxFps, &g_app);
     g_lua.bindSingletonFunction("g_app", "getMaxFps", &GraphicalApplication::getMaxFps, &g_app);
+    g_lua.bindSingletonFunction("g_app", "setCacheUI", &GraphicalApplication::setCacheUI, &g_app);
+    g_lua.bindSingletonFunction("g_app", "isCacheUI", &GraphicalApplication::isCacheUI, &g_app);
     g_lua.bindSingletonFunction("g_app", "getFps", &GraphicalApplication::getFps, &g_app);
     g_lua.bindSingletonFunction("g_app", "getGraphicsFps", &GraphicalApplication::getGraphicsFps, &g_app);
     g_lua.bindSingletonFunction("g_app", "getProcessingFps", &GraphicalApplication::getProcessingFps, &g_app);
@@ -912,6 +914,7 @@ void Application::registerLuaFunctions()
     g_lua.bindClassMemberFunction<InputMessage>("getU16", &InputMessage::getU16);
     g_lua.bindClassMemberFunction<InputMessage>("getU32", &InputMessage::getU32);
     g_lua.bindClassMemberFunction<InputMessage>("getU64", &InputMessage::getU64);
+    g_lua.bindClassMemberFunction<InputMessage>("getDouble", &InputMessage::getDouble);
     g_lua.bindClassMemberFunction<InputMessage>("getString", &InputMessage::getString);
     g_lua.bindClassMemberFunction<InputMessage>("peekU8", &InputMessage::peekU8);
     g_lua.bindClassMemberFunction<InputMessage>("peekU16", &InputMessage::peekU16);

@@ -82,7 +82,7 @@ void UITextEdit::drawSelf(Fw::DrawPane drawPane)
 
     if (textLength == 0) {
         if (m_placeholderColor != Color::alpha && !m_placeholder.empty()) {
-            m_placeholderFont->drawText(m_placeholder, m_drawArea, m_placeholderAlign, m_placeholderColor);
+            m_placeholderFont->drawText(m_placeholder, getPaddingRect(), m_placeholderAlign, m_placeholderColor);
         }
     }
 
