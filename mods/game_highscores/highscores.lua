@@ -16,6 +16,10 @@ function init()
   highscoresWindow = g_ui.displayUI('highscores')
   highscoresWindow:hide()
 
+  if initHighscoresProtocol then
+    initHighscoresProtocol()
+  end
+
   connect(g_game, {
     onGameEnd = offline,
     onHighscores = onHighscores,
@@ -29,6 +33,10 @@ function terminate()
     onGameEnd = offline,
     onHighscores = onHighscores,
   })
+
+  if terminateHighscoresProtocol then
+    terminateHighscoresProtocol()
+  end
 
   if highscoresWindow then
     highscoresWindow:destroy()

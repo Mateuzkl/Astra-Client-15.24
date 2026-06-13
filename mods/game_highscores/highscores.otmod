@@ -4,6 +4,6 @@ Module
   author: Ryukiimaru
   website: https://www.instagram.com/systemyart.dev/
   sandboxed: true
-  scripts: [ highscores ]
+  scripts: [ highscoresprotocol, highscores ]
   @onLoad: init()
   @onUnload: terminate()
