@@ -17,6 +17,9 @@ config.lua
 # Worktrees / state created by the Claude Code harness — never commit.
 .claude/
 
+# Crash-dump analysis scratch (WinDbg symbol cache, minidumps).
+crashdumps/
+
 # --- Game assets -------------------------------------------------------------
 # Legacy 8.60 assets: the .rar stays tracked as the canonical source, but the
 # unpacked tree (Tibia.spr / Tibia.dat / pics) is regenerated locally and must
