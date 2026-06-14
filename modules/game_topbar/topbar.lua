@@ -28,7 +28,6 @@ local manaBarSecond = nil
 local manaShieldBar = nil
 local topBar = nil
 local states = nil
-local useManaShield = nil
 local currentLayout = 'default'
 local currentDirection = 'top'
 
@@ -177,8 +176,6 @@ function refresh(profileChange, skipSetup)
     show()
     refreshVisibleBars()
 
-    useManaShield = canUseManaShield()
-
     onLevelChange(player, player:getLevel(), player:getLevelPercent())
     onHealthChange(player, player:getHealth(), player:getMaxHealth())
     onManaChange(player, player:getMana(), player:getMaxMana())
@@ -230,9 +227,6 @@ function setSkillsLayout()
 end
 
 function offline()
-    local player = g_game.getLocalPlayer()
-    useManaShield = false
-
     if not LoadedPlayer:isLoaded() then return end
     saveJsonStruct("/characterdata/" .. LoadedPlayer:getId() .. "/statusBarData.json", statusBarData)
 end
@@ -326,7 +320,7 @@ function onManaShieldChange(localPlayer, mana, maxMana)
         return
     end
 
-    if not localPlayer:useMagicShield() then
+    if not canUseManaShield() then
         manaBar:setVisible(true)
         manaBarSecond:setVisible(false)
         manaShieldBar:setVisible(false)
@@ -334,6 +328,9 @@ function onManaShieldChange(localPlayer, mana, maxMana)
         return
     end
 
+    -- Keep the real max for the label; the guarded value below is only to avoid a
+    -- divide-by-zero when the shield is inactive (mana = max = 0 for a mage idle).
+    local realMaxMana = maxMana
     maxMana = math.max(mana, maxMana > 0 and maxMana or 100)
 
     manaBarSecond:setVisible(true)
@@ -378,7 +375,7 @@ function onManaShieldChange(localPlayer, mana, maxMana)
     manaShieldBar:setImageRect(imageRect)
 
     local shieldTextFormat = currentLayout == 'large' and "%d / %d@" or "(%d / %d@)"
-    manaShieldText:setText(shieldTextFormat:format(mana, maxMana))
+    manaShieldText:setText(shieldTextFormat:format(mana, realMaxMana))
     manaShieldText:setFont("Icon-VBold-11px")
     manaShieldText:setColor("#ffffff")
     manaShieldBar:setValue(mana, 0, maxMana)
@@ -387,10 +384,14 @@ end
 function onManaChange(localPlayer, mana, maxMana)
     if not manaBar or not manaBarSecond then return end
 
-    maxMana = math.max(mana, maxMana)
+    -- Guard against 0/0 (idle/zero-mana) producing NaN, mirroring onManaShieldChange.
+    maxMana = math.max(mana, maxMana > 0 and maxMana or 100)
 
     local manaPercent = (mana / maxMana) * 100
-    local useShield = localPlayer:useMagicShield()
+    -- Split the mana bar for mages by vocation (canUseManaShield), not by whether the
+    -- magic shield is currently active, so the mana/mana-shield split stays visible
+    -- even with utamo vita deactivated.
+    local useShield = canUseManaShield()
     local verticalSideBar = (currentDirection == 'left' or currentDirection == 'right')
     local barType = useShield and "manashield" or "mana"
     local barSuffix = verticalSideBar and "-vertical" or ""
@@ -417,7 +418,10 @@ function onManaChange(localPlayer, mana, maxMana)
     imageClip.x, imageClip.y = 0, 0
 
     local manaBarToUpdate = useShield and manaBarSecond or manaBar
+    -- Own the mana-side visibility here so a mana-only tick keeps the split coherent
+    -- even if onManaShieldChange did not re-fire (the shield side is owned there).
     manaBar:setVisible(not useShield)
+    manaBarSecond:setVisible(useShield)
 
     manaBarToUpdate:setImageSource(imageSource)
     manaBarToUpdate:setImageClip(imageClip)
@@ -755,14 +759,22 @@ end
 
 function canUseManaShield()
     local player = g_game.getLocalPlayer()
-    if player and player:useMagicShield() then
+    if not player then return false end
+    -- Active utamo vita always shows the split (even a non-mage who cast it).
+    if player:useMagicShield() then
         return true
     end
-    return useManaShield
+    -- Otherwise mages (Sorcerer/Druid + promotions) always split the mana bar into
+    -- mana + mana-shield, even with the shield deactivated. Read the live C++ vocation
+    -- (translateVocation maps raw 3/13 -> 5 Sorcerer, 4/14 -> 6 Druid, matching the
+    -- helper) so the split survives module reloads and login ordering, instead of
+    -- depending on a transient onVocationChange flag.
+    local tv = translateVocation(player.getVocation and player:getVocation() or 0)
+    return tv == 5 or tv == 6
 end
 
 function onVocationChange(player, vocation, oldVocation)
-    useManaShield = table.contains({3, 4, 7, 8}, vocation)
+    -- Re-evaluate the split for the new vocation; canUseManaShield reads it directly.
     refresh()
 end
 

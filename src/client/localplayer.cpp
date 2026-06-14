@@ -603,6 +603,18 @@ void LocalPlayer::setMana(double mana, double maxMana)
     }
 }
 
+void LocalPlayer::setManaShield(double remaining, double total)
+{
+    if(m_manaShield != remaining || m_maxManaShield != total) {
+        double oldRemaining = m_manaShield;
+        double oldTotal = m_maxManaShield;
+        m_manaShield = remaining;
+        m_maxManaShield = total;
+
+        callLuaField("onManaShieldChange", remaining, total, oldRemaining, oldTotal);
+    }
+}
+
 void LocalPlayer::setMagicLevel(double magicLevel, double magicLevelPercent)
 {
     if(m_magicLevel != magicLevel || m_magicLevelPercent != magicLevelPercent) {

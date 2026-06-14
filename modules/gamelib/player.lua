@@ -293,7 +293,14 @@ end
 -- not expose useMagicShield(), so several UI modules (topbar mana bar) crashed with
 -- "attempt to call method 'useMagicShield' (a nil value)". Provide a Lua-side getter
 -- (defaults to false) so those modules work; setUseMagicShield can flip it later.
+-- The C++ LocalPlayer exposes getManaShield()/getMaxManaShield() (utamo vita
+-- capacity from AddPlayerStats); remaining > 0 means the shield is active. Prefer
+-- that real data so the topbar mana-shield bar shows live. Remote Players (no C++
+-- getters) fall back to the Lua-backed field.
 function Player:useMagicShield()
+  if self.getManaShield then
+    return self:getManaShield() > 0
+  end
   return self.m_useMagicShield == true
 end
 
@@ -309,7 +316,12 @@ end
 -- ---------------------------------------------------------------------------
 
 -- Mana shield / magic shield points (topbar mana-shield bar).
+-- Prefer the real C++ LocalPlayer getters when present (getManaShield), so the
+-- bar reflects the actual utamo vita capacity received from the server.
 function Player:getMagicShield()
+  if self.getManaShield then
+    return self:getManaShield()
+  end
   return self.m_magicShield or 0
 end
 
@@ -318,6 +330,9 @@ function Player:setMagicShield(value)
 end
 
 function Player:getMaxMagicShield()
+  if self.getMaxManaShield then
+    return self:getMaxManaShield()
+  end
   return self.m_maxMagicShield or 0
 end
 

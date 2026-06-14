@@ -103,7 +103,9 @@ public:
     // Magic shield (utamo vita) capacity from AddPlayerStats. remaining>0 == shield active.
     double getManaShield() { return m_manaShield; }
     double getMaxManaShield() { return m_maxManaShield; }
-    void setManaShield(double remaining, double total) { m_manaShield = remaining; m_maxManaShield = total; }
+    // Defined in localplayer.cpp so it can fire onManaShieldChange (like setMana),
+    // letting the topbar / healthinfo update the utamo vita bar live.
+    void setManaShield(double remaining, double total);
     double getMagicLevel() { return m_magicLevel; }
     double getMagicLevelPercent() { return m_magicLevelPercent; }
     double getBaseMagicLevel() { return m_baseMagicLevel; }
