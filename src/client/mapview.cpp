@@ -588,6 +588,14 @@ void MapView::drawPlayerHudConditions(const Rect& rect)
     int gap = std::max<int>(1, iconSize / 8);
     int pad = 6;
     int n = (int)icons.size();
+
+    // Cap to what fits the viewport height so the column never overflows off-screen
+    // (the lower icons would otherwise be clipped with no indication).
+    int maxIcons = std::max<int>(1, (rect.height() - 2 * pad) / (iconSize + gap));
+    if (n > maxIcons) {
+        icons.resize(maxIcons);
+        n = maxIcons;
+    }
     int totalH = n * iconSize + (n - 1) * gap;
 
     // VERTICAL column placed just to the LEFT of the health arc, vertically centered on
