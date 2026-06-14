@@ -951,24 +951,44 @@ void WIN32Window::displayFatalError(const std::string& message)
 
 int WIN32Window::internalLoadMouseCursor(const ImagePtr& image, const Point& hotSpot)
 {
+    // Build a true 32bpp colour cursor via CreateIconIndirect (the same technique
+    // setIcon uses for the window icon). The legacy CreateCursor + AND/XOR mono
+    // mask path could only carry white/transparent pixels, so every coloured pixel
+    // of a PNG collapsed to solid black. The colour bitmap's alpha channel now
+    // drives transparency, so the cursor keeps its real colours and edges.
     int width = image->getWidth();
     int height = image->getHeight();
-    int numbits = width * height;
-    int numbytes = (width * height)/8;
+    int n = width * height;
 
-    std::vector<uchar> andMask(numbytes, 0);
-    std::vector<uchar> xorMask(numbytes, 0);
-
-    for(int i=0;i<numbits;++i) {
-        uint32 rgba = stdext::readULE32(image->getPixelData() + i*4);
-        if(rgba == 0xffffffff) { //white
-            HSB_BIT_SET(xorMask, i);
-        } else if(rgba == 0x00000000) { //alpha
-            HSB_BIT_SET(andMask, i);
-        } // otherwise 0xff000000 => black
+    // RGBA source -> BGRA 32bpp bitmap (channel order matches setIcon).
+    std::vector<uint32> colorData(n);
+    for(int i = 0; i < n; ++i) {
+        uint8* pixel = (uint8*)&colorData[i];
+        pixel[2] = *(image->getPixelData() + (i * 4) + 0); // R
+        pixel[1] = *(image->getPixelData() + (i * 4) + 1); // G
+        pixel[0] = *(image->getPixelData() + (i * 4) + 2); // B
+        pixel[3] = *(image->getPixelData() + (i * 4) + 3); // A
     }
 
-    HCURSOR cursor = CreateCursor(m_instance, hotSpot.x, hotSpot.y, width, height, &andMask[0], &xorMask[0]);
+    HBITMAP hbmColor = CreateBitmap(width, height, 1, 32, &colorData[0]);
+
+    // 1bpp mask, fully zeroed (opaque) so the colour bitmap's alpha controls
+    // transparency. Monochrome DDB scanlines are WORD-aligned.
+    std::vector<uchar> maskBits(((width + 15) / 16) * 2 * height, 0);
+    HBITMAP hbmMask = CreateBitmap(width, height, 1, 1, &maskBits[0]);
+
+    ICONINFO ii;
+    ii.fIcon = FALSE; // FALSE => cursor (honours the hotspot)
+    ii.xHotspot = hotSpot.x;
+    ii.yHotspot = hotSpot.y;
+    ii.hbmColor = hbmColor;
+    ii.hbmMask = hbmMask;
+
+    HCURSOR cursor = (HCURSOR)CreateIconIndirect(&ii);
+
+    DeleteObject(hbmColor);
+    DeleteObject(hbmMask);
+
     m_cursors.push_back(cursor);
     return m_cursors.size()-1;
 }
