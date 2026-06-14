@@ -2438,23 +2438,50 @@ function resetActionBar()
 	isLoaded = true
 end
 
+-- Completely clear one action bar (the "Clear ... Action Bars" buttons in
+-- Options > Interface): drop every assignment (spell/text, item, passive, equip
+-- preset) from ALL of its slots and their hotkeys, then re-render it empty.
 function resetSlots(slot)
-	for _, actionbar in pairs(activeActionBars) do
-		if actionbar:getId() == "actionbar." .. slot then
-			for _, button in pairs(actionbar.tabBar:getChildren()) do
-				if button.cache.hotkey then
-					g_keyboard.unbindKeyPress(button.cache.hotkey, nil, gameRootPanel)
-					g_keyboard.unbindKeyDown(button.cache.hotkey, nil, gameRootPanel)
-					button.cache.hotkey = nil
-					button.hotkeyLabel:setText("")
-					Options.removeHotkey(button:getId())
-				end
+	slot = tonumber(slot)
+	if not slot then
+		return
+	end
 
-				clearButton(button, false)
-				resetButtonCache(button)
+	-- 1. Remove every stored mapping for this bar, regardless of its type. Iterate
+	--    backwards since we remove entries. This is the source of truth that the
+	--    buttons render from and that gets persisted, so doing it here works even if
+	--    the bar is not currently visible. (The previous version only searched the
+	--    VISIBLE bars and never re-rendered, so the icons stayed on screen.)
+	if Options.actionBarMappings then
+		for i = #Options.actionBarMappings, 1, -1 do
+			local data = Options.actionBarMappings[i]
+			if data and tonumber(data.actionBar) == slot then
+				table.remove(Options.actionBarMappings, i)
 			end
-			break
 		end
+	end
+
+	-- 2. If the bar is currently rendered, unbind each button's hotkey and re-render
+	--    it. updateButton() reads the (now-empty) mappings, so the button comes back
+	--    blank.
+	local actionbar = actionBars[slot]
+	if actionbar and actionbar.tabBar then
+		for _, button in pairs(actionbar.tabBar:getChildren()) do
+			if button.cache and button.cache.hotkey then
+				g_keyboard.unbindKeyPress(button.cache.hotkey, nil, gameRootPanel)
+				g_keyboard.unbindKeyDown(button.cache.hotkey, nil, gameRootPanel)
+				button.cache.hotkey = nil
+				if button.hotkeyLabel then
+					button.hotkeyLabel:setText("")
+				end
+			end
+			Options.removeHotkey(button:getId())
+			updateButton(button)
+		end
+		-- Force the same on-screen refresh as the bar add/remove path (setupActionBar
+		-- re-renders every slot from the now-empty mappings and re-syncs hotkey items),
+		-- so the cleared bar updates immediately instead of only after the next rebuild.
+		setupActionBar(slot)
 	end
 end
 

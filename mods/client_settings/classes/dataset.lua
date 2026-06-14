@@ -31,21 +31,13 @@ return {
 	allActionBar46 = {
 		value = false,
 		apply = function(value)
-            local huds = {"actionBarShowLeft1", "actionBarShowLeft2", "actionBarShowLeft3"}
-            for _, actionBar in pairs(huds) do
-                local hud = GameOptions:getLoadedWindow("actionsBars"):recursiveGetChildById(actionBar)
-                modules.game_actionbar.configureActionBar(actionBar, (value and hud:isChecked()))
-            end
-            return true
+            -- Hotkey path (setOption): toggle the whole group. In the Options
+            -- window the box is translated into its rows by setTempOption, so this
+            -- runs only for the "Show/hide Left Action Bars" hotkey.
+            return applyActionBarAll('allActionBar46', value)
         end,
         tempApply = function(value)
-            local huds = {"actionBarShowLeft1", "actionBarShowLeft2", "actionBarShowLeft3"}
-            for _, hud in pairs(huds) do
-              local actionBar = GameOptions:getLoadedWindow("actionsBars"):recursiveGetChildById(hud)
-              if actionBar then
-                actionBar:setColor(value and '$var-text-cip-color' or '$var-cip-inactive-color')
-              end
-            end
+            previewActionBarRows('allActionBar46', value)
             return true
         end,
 	},
@@ -88,21 +80,10 @@ return {
 	actionBarShowBottom1 = {
 		value = true,
         apply = function(value)
-            local parent = "allActionBar13"
-            local allBox
-            if TempOptions:getOption(parent) ~= nil then
-              allBox = TempOptions:getOption(parent)
-            elseif GameOptions:getOption(parent) ~= nil then
-              allBox = GameOptions:getOption(parent)
-            else
-              allBox = false
-            end
-
-            modules.game_actionbar.configureActionBar('actionBarShowBottom1', allBox and value)
-            return true
+            return applyActionBarShow('actionBarShowBottom1', value)
         end,
         tempApply = function(value)
-            handleTmpActionBarShow('actionBarShowBottom1', value, "allActionBar13")
+            previewActionBarAll('actionBarShowBottom1')
             return true
         end
 	},
@@ -110,21 +91,10 @@ return {
 	actionBarShowBottom2 = {
 		value = false,
         apply = function(value)
-            local parent = "allActionBar13"
-            local allBox
-            if TempOptions:getOption(parent) ~= nil then
-              allBox = TempOptions:getOption(parent)
-            elseif GameOptions:getOption(parent) ~= nil then
-              allBox = GameOptions:getOption(parent)
-            else
-              allBox = false
-            end
-
-            modules.game_actionbar.configureActionBar('actionBarShowBottom2', allBox and value)
-            return true
+            return applyActionBarShow('actionBarShowBottom2', value)
         end,
         tempApply = function(value)
-            handleTmpActionBarShow('actionBarShowBottom2', value, "allActionBar13")
+            previewActionBarAll('actionBarShowBottom2')
             return true
         end
 	},
@@ -132,21 +102,10 @@ return {
 	actionBarShowBottom3 = {
 		value = false,
         apply = function(value)
-            local parent = "allActionBar13"
-            local allBox
-            if TempOptions:getOption(parent) ~= nil then
-              allBox = TempOptions:getOption(parent)
-            elseif GameOptions:getOption(parent) ~= nil then
-              allBox = GameOptions:getOption(parent)
-            else
-              allBox = false
-            end
-
-            modules.game_actionbar.configureActionBar('actionBarShowBottom3', allBox and value)
-            return true
+            return applyActionBarShow('actionBarShowBottom3', value)
         end,
         tempApply = function(value)
-            handleTmpActionBarShow('actionBarShowBottom3', value, "allActionBar13")
+            previewActionBarAll('actionBarShowBottom3')
             return true
         end
 	},
@@ -154,21 +113,10 @@ return {
   actionBarShowLeft1 = {
 		value = false,
         apply = function(value)
-            local parent = "allActionBar46"
-            local allBox
-            if TempOptions:getOption(parent) ~= nil then
-              allBox = TempOptions:getOption(parent)
-            elseif GameOptions:getOption(parent) ~= nil then
-              allBox = GameOptions:getOption(parent)
-            else
-              allBox = false
-            end
-
-            modules.game_actionbar.configureActionBar('actionBarShowLeft1', allBox and value)
-            return true
+            return applyActionBarShow('actionBarShowLeft1', value)
         end,
         tempApply = function(value)
-            handleTmpActionBarShow('actionBarShowLeft1', value, "allActionBar46")
+            previewActionBarAll('actionBarShowLeft1')
             return true
         end
 	},
@@ -176,21 +124,10 @@ return {
   actionBarShowLeft2 = {
 		value = false,
         apply = function(value)
-            local parent = "allActionBar46"
-            local allBox
-            if TempOptions:getOption(parent) ~= nil then
-              allBox = TempOptions:getOption(parent)
-            elseif GameOptions:getOption(parent) ~= nil then
-              allBox = GameOptions:getOption(parent)
-            else
-              allBox = false
-            end
-
-            modules.game_actionbar.configureActionBar('actionBarShowLeft2', allBox and value)
-            return true
+            return applyActionBarShow('actionBarShowLeft2', value)
         end,
         tempApply = function(value)
-            handleTmpActionBarShow('actionBarShowLeft2', value, "allActionBar46")
+            previewActionBarAll('actionBarShowLeft2')
             return true
         end
 	},
@@ -198,21 +135,10 @@ return {
   actionBarShowLeft3 = {
 		value = false,
         apply = function(value)
-            local parent = "allActionBar46"
-            local allBox
-            if TempOptions:getOption(parent) ~= nil then
-              allBox = TempOptions:getOption(parent)
-            elseif GameOptions:getOption(parent) ~= nil then
-              allBox = GameOptions:getOption(parent)
-            else
-              allBox = false
-            end
-
-            modules.game_actionbar.configureActionBar('actionBarShowLeft3', allBox and value)
-            return true
+            return applyActionBarShow('actionBarShowLeft3', value)
         end,
         tempApply = function(value)
-            handleTmpActionBarShow('actionBarShowLeft3', value, "allActionBar46")
+            previewActionBarAll('actionBarShowLeft3')
             return true
         end
 	},
@@ -220,21 +146,10 @@ return {
   actionBarShowRight1 = {
 		value = false,
         apply = function(value)
-            local parent = "allActionBar79"
-            local allBox
-            if TempOptions:getOption(parent) ~= nil then
-              allBox = TempOptions:getOption(parent)
-            elseif GameOptions:getOption(parent) ~= nil then
-              allBox = GameOptions:getOption(parent)
-            else
-              allBox = false
-            end
-
-            modules.game_actionbar.configureActionBar('actionBarShowRight1', allBox and value)
-            return true
+            return applyActionBarShow('actionBarShowRight1', value)
         end,
         tempApply = function(value)
-            handleTmpActionBarShow('actionBarShowRight1', value, "allActionBar79")
+            previewActionBarAll('actionBarShowRight1')
             return true
         end
 	},
@@ -242,21 +157,10 @@ return {
 	actionBarShowRight2 = {
 		value = false,
         apply = function(value)
-            local parent = "allActionBar79"
-            local allBox
-            if TempOptions:getOption(parent) ~= nil then
-              allBox = TempOptions:getOption(parent)
-            elseif GameOptions:getOption(parent) ~= nil then
-              allBox = GameOptions:getOption(parent)
-            else
-              allBox = false
-            end
-
-            modules.game_actionbar.configureActionBar('actionBarShowRight2', allBox and value)
-            return true
+            return applyActionBarShow('actionBarShowRight2', value)
         end,
         tempApply = function(value)
-            handleTmpActionBarShow('actionBarShowRight2', value, "allActionBar79")
+            previewActionBarAll('actionBarShowRight2')
             return true
         end
 	},
@@ -264,21 +168,10 @@ return {
 	actionBarShowRight3 = {
 		value = false,
         apply = function(value)
-            local parent = "allActionBar79"
-            local allBox
-            if TempOptions:getOption(parent) ~= nil then
-              allBox = TempOptions:getOption(parent)
-            elseif GameOptions:getOption(parent) ~= nil then
-              allBox = GameOptions:getOption(parent)
-            else
-              allBox = false
-            end
-
-            modules.game_actionbar.configureActionBar('actionBarShowRight3', allBox and value)
-            return true
+            return applyActionBarShow('actionBarShowRight3', value)
         end,
         tempApply = function(value)
-            handleTmpActionBarShow('actionBarShowRight3', value, "allActionBar79")
+            previewActionBarAll('actionBarShowRight3')
             return true
         end
 	},
@@ -416,21 +309,13 @@ return {
 	allActionBar13 = {
 		value = false,
         apply = function(value)
-            local huds = {"actionBarShowBottom1", "actionBarShowBottom2", "actionBarShowBottom3"}
-            for _, actionBar in pairs(huds) do
-                local hud = GameOptions:getLoadedWindow("actionsBars"):recursiveGetChildById(actionBar)
-                modules.game_actionbar.configureActionBar(actionBar, (value and hud:isChecked()))
-            end
-            return true
+            -- Hotkey path (setOption): toggle the whole group. In the Options
+            -- window the box is translated into its rows by setTempOption, so this
+            -- runs only for the "Show/hide Bottom Action Bars" hotkey.
+            return applyActionBarAll('allActionBar13', value)
         end,
         tempApply = function(value)
-            local huds = {"actionBarShowBottom1", "actionBarShowBottom2", "actionBarShowBottom3"}
-            for _, hud in pairs(huds) do
-              local actionBar = GameOptions:getLoadedWindow("actionsBars"):recursiveGetChildById(hud)
-              if actionBar then
-                actionBar:setColor(value and '$var-text-cip-color' or '$var-cip-inactive-color')
-              end
-            end
+            previewActionBarRows('allActionBar13', value)
             return true
         end,
 	},
@@ -569,6 +454,7 @@ return {
             return true
         end,
         tempApply = function(value)
+            g_map.setArcOpacity(value / 100)
             local wid = GameOptions:getLoadedWindow('hud'):recursiveGetChildById('opacityLabel')
             if wid then
               wid:setText(tr('Opacity: %d%%', value))
@@ -697,7 +583,7 @@ return {
 	},
 
 	stackEffects = {
-		value = true,
+		value = false,
         apply = function(value)
             g_map.enableStackEffects(value)
             return true
@@ -716,7 +602,7 @@ return {
     value = false,
     apply = function(value)
         local gameMapPanel = m_interface.getMapPanel()
-        gameMapPanel:setShowArcs(value)
+        g_map.setShowArcs(value)
         return true
     end,
     tempApply = function(value)
@@ -738,12 +624,12 @@ return {
                     healthCheck:setChecked(arcSide)
                     manaCheck:setChecked(not arcSide)
                     local gameMapPanel = m_interface.getMapPanel()
-                    gameMapPanel:setHarmonyLeftDraw(arcSide)
+                    g_map.setHarmonyLeftDraw(arcSide)
                 end
             end
         end
         local gameMapPanel = m_interface.getMapPanel()
-        gameMapPanel:setShowArcs(value)
+        g_map.setShowArcs(value)
         return true
     end
   },
@@ -751,6 +637,10 @@ return {
   sizeBox = {
 		value = 1,
         apply = function(value)
+            g_map.setArcStyle(value - 1)
+            return true
+        end,
+        tempApply = function(value)
             g_map.setArcStyle(value - 1)
             return true
         end,
@@ -1214,6 +1104,7 @@ return {
             return true
         end,
         tempApply = function(value)
+            g_map.setArcDistance(value / 100)
             local wid = GameOptions:getLoadedWindow('hud'):recursiveGetChildById('distanceLabel')
             if wid then
               wid:setText(tr('Distance: %d%%', value))
@@ -1226,12 +1117,12 @@ return {
     value = true,
     apply = function(value)
         local gameMapPanel = m_interface.getMapPanel()
-        gameMapPanel:setHarmonyLeftDraw(value)
+        g_map.setHarmonyLeftDraw(value)
         return true
     end,
     tempApply = function(value)
         local gameMapPanel = m_interface.getMapPanel()
-        gameMapPanel:setHarmonyLeftDraw(value)
+        g_map.setHarmonyLeftDraw(value)
         return true
     end,
   },
@@ -1354,21 +1245,13 @@ return {
 	allActionBar79 = {
 		value = false,
         apply = function(value)
-            local huds = {"actionBarShowRight1", "actionBarShowRight2", "actionBarShowRight3"}
-            for _, actionBar in pairs(huds) do
-                local hud = GameOptions:getLoadedWindow("actionsBars"):recursiveGetChildById(actionBar)
-                modules.game_actionbar.configureActionBar(actionBar, (value and hud:isChecked()))
-            end
-            return true
+            -- Hotkey path (setOption): toggle the whole group. In the Options
+            -- window the box is translated into its rows by setTempOption, so this
+            -- runs only for the "Show/hide Right Action Bars" hotkey.
+            return applyActionBarAll('allActionBar79', value)
         end,
         tempApply = function(value)
-            local huds = {"actionBarShowRight1", "actionBarShowRight2", "actionBarShowRight3"}
-            for _, hud in pairs(huds) do
-              local actionBar = GameOptions:getLoadedWindow("actionsBars"):recursiveGetChildById(hud)
-              if actionBar then
-                actionBar:setColor(value and '$var-text-cip-color' or '$var-cip-inactive-color')
-              end
-            end
+            previewActionBarRows('allActionBar79', value)
             return true
         end,
 	},
@@ -1820,7 +1703,7 @@ return {
     value = true,
     apply = function(value)
         local gameMapPanel = m_interface.getMapPanel()
-        gameMapPanel:setDrawHUDStatus(value)
+        g_map.setDrawHUDStatus(value)
 
         ConditionsHUD:setShowInHudEnabled(value)
         return true

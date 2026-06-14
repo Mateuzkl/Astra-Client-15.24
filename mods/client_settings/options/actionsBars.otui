@@ -562,7 +562,7 @@ ActionsWindow < Panel
       margin-right: 5
       margin-top: 5
       image-source: /images/skin/show-gui-help-grey
-      !tooltip: tr('If you click on one of the buttons to clear an action bar and then on \n"Ok" or "Apply", all actions assigned to an action button in the \nselected action bar will be removed. Hotkeys, however, will stay \nbonded to the action buttons to which they have been assigned. They \ncan only be removed via the context menu.')
+      !tooltip: tr('If you click on one of the buttons to clear an action bar, all \nactions assigned to an action button in the selected action bar will \nbe removed immediately. Hotkeys, however, will stay bonded to the \naction buttons to which they have been assigned. They can only be \nremoved via the context menu.')
 
   Button
     id: resetButton

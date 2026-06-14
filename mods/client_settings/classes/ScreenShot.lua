@@ -86,8 +86,15 @@ function takeScreenshot(isMapScreenshot)
     end
 
     local fileName = getUniqueFileName(baseName)
+    -- "Only Capture Game Window" (gameWindowScreen) also applies to manual shots:
+    -- when enabled, capture just the game window via the map-screenshot path.
+    local mapShot = isMapScreenshot or getOption("gameWindowScreen")
     screenshotScheduleEvent = scheduleEvent(function()
-        (isMapScreenshot and g_app.doMapScreenshot or g_app.doScreenshot)(fileName)
+        if mapShot then
+            g_app.doMapScreenshot(fileName)
+        else
+            g_app.doScreenshot(fileName)
+        end
         logScreenshot(fileName, isMapScreenshot and "Map Manual" or "Manual")
     end, 50)
 end

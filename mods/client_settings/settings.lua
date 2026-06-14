@@ -290,7 +290,7 @@ function toggleDisplays()
       gameMapPanel:setDrawHarmonyBar(true)
     end
     if getOption("showHealthManaCircle") then
-      gameMapPanel:setShowArcs(true)
+      g_map.setShowArcs(true)
     end
   elseif displayState == 1 then
     -- Ocultar own
@@ -298,7 +298,7 @@ function toggleDisplays()
     gameMapPanel:setDrawOwnHealth(false)
     gameMapPanel:setDrawOwnManaBar(false)
     gameMapPanel:setDrawOwnManaShieldBar(false)
-    gameMapPanel:setShowArcs(false)
+    g_map.setShowArcs(false)
   elseif displayState == 2 then
     -- Ocultar others e mostrar own
     gameMapPanel:setDrawNames(false)
@@ -313,7 +313,7 @@ function toggleDisplays()
       gameMapPanel:setDrawOwnManaShieldBar(true)
     end
     if getOption("showHealthManaCircle") then
-      gameMapPanel:setShowArcs(true)
+      g_map.setShowArcs(true)
     end
   elseif displayState == 3 then
     -- Ocultar tudo
@@ -329,7 +329,7 @@ function toggleDisplays()
       gameMapPanel:setDrawOwnManaShieldBar(false)
     end
     if getOption("showHealthManaCircle") then
-      gameMapPanel:setShowArcs(false)
+      g_map.setShowArcs(false)
     end
   end
 end
@@ -362,6 +362,10 @@ function closeOptions()
   TempOptions:resetAllOptions()
   tmpResetActions = {}
 
+  -- Cancel discards the temp values but leaves the boxes visually toggled; put
+  -- the action-bar boxes back in sync with the bars that are actually shown.
+  syncActionBarCheckboxes()
+
   -- Force update options upon close
   KeyBinds:setupAndReset(Options.currentHotkeySetName, (Options.isChatOnEnabled and "chatOn" or "chatOff"))
 end
@@ -370,6 +374,7 @@ function openOptions()
   optionsWindow:show(true)
   optionsWindow:focus()
   g_client.setInputLockWidget(optionsWindow)
+  syncActionBarCheckboxes()
   onClickOptionButton(loadedButton["controls"])
 end
 
@@ -377,6 +382,8 @@ function setup()
   -- load options
   GameOptions:loadSettings()
   TempOptions:resetAllOptions()
+  syncActionBarCheckboxes()
+  disableUnsupportedOptions()
 
   if g_game.isOnline() then
     online()
@@ -512,10 +519,41 @@ function onApplyOptions(var, isFromOk)
     isFromOk = false
   end
 
+  -- Did the user touch any action-bar visibility box? Capture it before
+  -- applyOptions() clears the temp values, so we know to persist the new layout.
+  local touchedBars = false
+  for key in pairs(TempOptions.options) do
+    if actionBarGroups[key] or actionBarRowParent[key] then
+      touchedBars = true
+      break
+    end
+  end
+
   TempOptions:applyOptions()
 
+  -- Reconcile every "All" box with the bars that are now actually shown, so the
+  -- master box can never be left checked while its bars are hidden (or vice versa).
+  for parent in pairs(actionBarGroups) do
+    commitActionBarAll(parent)
+  end
+
+  local didReset = next(tmpResetActions) ~= nil
   for slot, _ in pairs(tmpResetActions) do
     modules.game_actionbar.resetSlots(slot)
+  end
+
+  if didReset then
+    -- Re-render every visible bar from the now-cleared mappings so the HUD updates
+    -- INSTANTLY. (setupProfile() below only does this when a hotkey profile is
+    -- selected, so the icons otherwise lingered until the next interaction.)
+    modules.game_actionbar.resetActionBar()
+  end
+
+  -- Persist the cleared action-bar mappings (and removed hotkeys) and the bar
+  -- visibility. Without this the change lives only in memory and clientoptions.json
+  -- restores the old state on the next relog.
+  if didReset or touchedBars then
+    Options.saveData()
   end
 
   tmpResetActions = {}
@@ -559,30 +597,273 @@ function getTmpOption(key)
   return TempOptions:getOption(key)
 end
 
-function handleTmpActionBarShow(key, value, parent)
-  local allBox
-  if getTmpOption(parent) ~= nil then
-    allBox = getTmpOption(parent)
-  elseif getOption(parent) ~= nil then
-    allBox = getOption(parent)
-  else
-    allBox = false
+-- ===========================================================================
+-- Action-bar visibility checkboxes
+--
+-- The single source of truth for "is this bar shown" is Options.actionBar[i]
+-- .isVisible -- exactly what the HUD renders (persisted in clientoptions.json).
+-- The Options checkboxes are a faithful MIRROR of that state, reconciled every
+-- time the window is set up or (re)opened, so the ticked boxes match the visible
+-- bars on the first launch and on every later one. Each "All" box simply means
+-- "every bar in its group is shown". The old code instead trusted a separate
+-- g_settings store with an "allBox AND row" gate, which diverged from the HUD
+-- (e.g. bottom bar 1 shown but greyed/unticked on first launch).
+-- ===========================================================================
+actionBarGroups = {
+  allActionBar13 = {"actionBarShowBottom1", "actionBarShowBottom2", "actionBarShowBottom3"},
+  allActionBar46 = {"actionBarShowLeft1",   "actionBarShowLeft2",   "actionBarShowLeft3"},
+  allActionBar79 = {"actionBarShowRight1",  "actionBarShowRight2",  "actionBarShowRight3"},
+}
+
+actionBarRowParent = {}
+for parent, rows in pairs(actionBarGroups) do
+  for _, rowId in ipairs(rows) do
+    actionBarRowParent[rowId] = parent
   end
-  local hud = loadedWindows["actionsBars"]:recursiveGetChildById(key)
-  if hud then
-    hud:setColor(allBox and '$var-text-cip-color' or '$var-cip-inactive-color')
-    hud:setChecked(value)
+end
+
+-- 1-3 bottom, 4-6 left, 7-9 right: matches the Options.actionBar layout built in
+-- modules/client_options/options.lua.
+local actionBarRowIndex = {
+  actionBarShowBottom1 = 1, actionBarShowBottom2 = 2, actionBarShowBottom3 = 3,
+  actionBarShowLeft1   = 4, actionBarShowLeft2   = 5, actionBarShowLeft3   = 6,
+  actionBarShowRight1  = 7, actionBarShowRight2  = 8, actionBarShowRight3  = 9,
+}
+
+-- True while we programmatically re-tick the boxes to mirror the HUD: it
+-- suppresses the onCheckChange -> setTempOption path so the sync (and the "All"
+-- box auto-tick) is not mistaken for a user edit.
+syncingActionBars = false
+
+local function actionBarWidget(id)
+  local win = loadedWindows["actionsBars"]
+  return win and win:recursiveGetChildById(id) or nil
+end
+
+-- The real, rendered visibility of a bar, with a fallback to the persisted
+-- checkbox value if Options.actionBar is not populated yet.
+local function actionBarVisible(rowId)
+  local idx = actionBarRowIndex[rowId]
+  local entry = idx and Options.actionBar and Options.actionBar[idx]
+  if entry ~= nil and entry.isVisible ~= nil then
+    return entry.isVisible and true or false
+  end
+  return getOption(rowId) and true or false
+end
+
+-- Row checkbox -> show/hide that bar in the HUD (runs on Apply).
+function applyActionBarShow(rowId, value)
+  modules.game_actionbar.configureActionBar(rowId, value and true or false)
+  return true
+end
+
+-- "All" box as a master toggle: show/hide every bar in the group and bring each
+-- row's checkbox/persisted value along. This runs for the "Show/hide ... Action
+-- Bars" hotkeys (which call setOption directly). In the Options window the box is
+-- instead translated into its rows by setTempOption, so this apply never fights an
+-- individually-unticked row there.
+function applyActionBarAll(parent, value)
+  local rows = actionBarGroups[parent]
+  if not rows then
+    return true
+  end
+
+  value = value and true or false
+  for _, rowId in ipairs(rows) do
+    modules.game_actionbar.configureActionBar(rowId, value)
+    if GameOptions.options[rowId] then
+      GameOptions.options[rowId].value = value
+    end
+    g_settings.set(rowId, value)
+
+    local w = actionBarWidget(rowId)
+    if w then
+      local prev = syncingActionBars
+      syncingActionBars = true
+      w:setChecked(value)
+      syncingActionBars = prev
+    end
+  end
+  return true
+end
+
+-- Live: re-tick a group's "All" box to mean "all three rows are ticked". Visual
+-- only; the persisted value is reconciled by commitActionBarAll() on Apply.
+function previewActionBarAll(rowId)
+  local parent = actionBarRowParent[rowId]
+  if not parent then
+    return
+  end
+
+  local all = true
+  for _, r in ipairs(actionBarGroups[parent]) do
+    local w = actionBarWidget(r)
+    if not w or not w:isChecked() then
+      all = false
+      break
+    end
+  end
+
+  local allWidget = actionBarWidget(parent)
+  if allWidget then
+    -- Don't let this convenience tick cascade back into previewActionBarRows
+    -- (save/restore keeps an outer sync's suppression intact).
+    local prev = syncingActionBars
+    syncingActionBars = true
+    allWidget:setChecked(all)
+    syncingActionBars = prev
+  end
+end
+
+-- Live: user toggled an "All" box -> mirror it onto its three rows (visual +
+-- TempOptions so they are applied on Apply).
+function previewActionBarRows(parent, value)
+  local rows = actionBarGroups[parent]
+  if not rows then
+    return
+  end
+
+  for _, rowId in ipairs(rows) do
+    local w = actionBarWidget(rowId)
+    if w then
+      w:setChecked(value)
+    end
+    setTempOption(rowId, value)
+  end
+end
+
+-- On Apply: force each "All" box to reflect "all three bars shown" and persist
+-- it straight to the store (no apply recursion).
+function commitActionBarAll(parent)
+  local rows = actionBarGroups[parent]
+  if not rows then
+    return
+  end
+
+  local all = true
+  for _, rowId in ipairs(rows) do
+    if not getOption(rowId) then
+      all = false
+      break
+    end
+  end
+
+  if GameOptions.options[parent] then
+    GameOptions.options[parent].value = all
+  end
+  g_settings.set(parent, all)
+
+  local w = actionBarWidget(parent)
+  if w then
+    -- Suppress the onCheckChange cascade: ticking the master box here must not
+    -- re-drive the rows (which would wrongly uncheck still-visible bars).
+    local prev = syncingActionBars
+    syncingActionBars = true
+    w:setChecked(all)
+    syncingActionBars = prev
+  end
+end
+
+-- Mirror every checkbox onto the bars the HUD is actually showing. Called from
+-- setup() (first launch) and openOptions()/closeOptions() (every later one), so
+-- the ticked boxes always match the visible bars and any cancelled edits are
+-- reverted.
+function syncActionBarCheckboxes()
+  if not loadedWindows["actionsBars"] then
+    return
+  end
+
+  syncingActionBars = true
+  for parent, rows in pairs(actionBarGroups) do
+    for _, rowId in ipairs(rows) do
+      local v = actionBarVisible(rowId)
+      if GameOptions.options[rowId] then
+        GameOptions.options[rowId].value = v
+      end
+      g_settings.set(rowId, v)
+
+      local row = actionBarWidget(rowId)
+      if row then
+        row:setChecked(v)
+        row:setEnabled(true)
+        row:setColor('$var-text-cip-color')
+      end
+    end
+    commitActionBarAll(parent)
+  end
+  syncingActionBars = false
+end
+
+-- Options with no working backend in this fork yet. They are greyed out and made
+-- non-interactive so users are not presented with dead controls. Remove an id from
+-- this list once its feature is actually implemented.
+local unsupportedOptions = {
+  -- Misc: no consumer / no protocol support
+  "stayLoggedInforSession",
+  "optimiseConnectionStability",
+  "quickLogin",
+  -- Gameplay: needs a server send opcode / engine path that does not exist here
+  "allowInspect",
+  "quickAllCorpses",
+  -- Screenshots: auto-capture never triggers (C++ never emits onTakeScreenshot)
+  "screenshotCombo",
+  "autoScreenshot",
+  "screenshotLevelUp", "screenshotSkillUp", "screenshotAchievement",
+  "screenshotBestiaryUnlocked", "screenshotBestiaryComplete", "screenshotTreasure",
+  "screenshotValuableLoot", "screenshotBossDefeated", "screenshotDeathPve",
+  "screenshotDeathPvp", "screenshotPlayerKill", "screenshotPlayerKillAssist",
+  "screenshotPlayerAttacking", "screenshotHighestDamage", "screenshotHighestHealing",
+  "screenshotLowHealth", "screenshotGiftOfLife",
+}
+
+function disableUnsupportedOptions()
+  for _, id in ipairs(unsupportedOptions) do
+    for _, window in pairs(loadedWindows) do
+      local widget = window:recursiveGetChildById(id)
+      if widget then
+        widget:setEnabled(false)
+        if widget.setColor then
+          widget:setColor('$var-cip-inactive-color')
+        end
+        break
+      end
+    end
   end
 end
 
 function setTempOption(key, value)
+  -- Ignore the onCheckChange that fires while we programmatically re-tick the
+  -- action-bar boxes to mirror the HUD: it is not a user edit, and recording it
+  -- would re-apply (and could duplicate) bars on the next Apply.
+  if syncingActionBars and (actionBarGroups[key] or actionBarRowParent[key]) then
+    return
+  end
+
+  -- An "All" box in the Options window is just a shortcut for its three rows.
+  -- Translate it into them and DON'T record the master key itself, so Apply can
+  -- never get an ordering conflict between the master and an individually
+  -- unticked row. (The hotkeys go through setOption, not here, and still toggle
+  -- the whole group via applyActionBarAll.)
+  if actionBarGroups[key] then
+    previewActionBarRows(key, value)
+    return
+  end
+
   TempOptions:setOption(key, value)
 end
 -- options
 
 -- hotkeys
 function resetAction(slot)
+  -- Clear the bar in the HUD immediately (and persist it) instead of waiting for
+  -- Ok/Apply -- the previous deferral meant the icons lingered until some other
+  -- change repainted the bar. tmpResetActions still flags it so the Apply path
+  -- re-renders as a harmless, idempotent safety net.
   tmpResetActions[slot] = true
+  if g_game.isOnline() then
+    modules.game_actionbar.resetSlots(slot)
+    Options.saveData()
+  end
 end
 
 function removeGeneralUsedHotkey(key, currentButton, chatOn)
@@ -2154,9 +2435,8 @@ function resetActionBars()
     setTempOption('actionBarShowRight1', false)
     setTempOption('actionBarShowRight2', false)
     setTempOption('actionBarShowRight3', false)
-    setTempOption('allActionBar13', true)
-    setTempOption('allActionBar46', true)
-    setTempOption('allActionBar79', true)
+    -- The "All" boxes are derived from the rows now (reconciled in onApplyOptions),
+    -- so setting them here would wrongly force every bar in the group on.
     onApplyOptions()
     optionsWindow:show(true)
     g_client.setInputLockWidget(optionsWindow)
@@ -2324,12 +2604,12 @@ function harmonyArcSide(value)
         setTempOption("harmonyArcSide", true, true) 
         healthCheck:setChecked(true)
         manaCheck:setChecked(false)
-        gameMapPanel:setHarmonyLeftDraw(true)
+        g_map.setHarmonyLeftDraw(true)
     elseif value == "mana" then
         setTempOption("harmonyArcSide", false, true)
         healthCheck:setChecked(false)
         manaCheck:setChecked(true)
-        gameMapPanel:setHarmonyLeftDraw(false)
+        g_map.setHarmonyLeftDraw(false)
     end
 
     harmonyArc = false
@@ -2347,7 +2627,7 @@ function resetScreenshotOptions()
   }
 
   local function applyReset()
-      for _, event in ipairs(ScreenShot.AutoScreenshotEvents) do
+      for _, event in pairs(ScreenShot.AutoScreenshotEvents) do
           local defaultValue = defaultEvents[event.settingKey] or false
           TempOptions:setOption(event.settingKey, defaultValue)
           local checkbox = GameOptions:getLoadedWindow("screenshot"):recursiveGetChildById(event.settingKey)
