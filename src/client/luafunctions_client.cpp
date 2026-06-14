@@ -757,6 +757,7 @@ void Client::registerLuaFunctions()
     g_lua.bindClassMemberFunction<Item>("getServerId", &Item::getServerId);
     g_lua.bindClassMemberFunction<Item>("getStoreId", &Item::getStoreId);
     g_lua.bindClassMemberFunction<Item>("getTier", &Item::getTier);
+    g_lua.bindClassMemberFunction<Item>("getUpgradeLevel", &Item::getUpgradeLevel);
     g_lua.bindClassMemberFunction<Item>("getName", &Item::getName);
     g_lua.bindClassMemberFunction<Item>("getDescription", &Item::getDescription);
     g_lua.bindClassMemberFunction<Item>("getText", &Item::getText);
@@ -769,6 +770,7 @@ void Client::registerLuaFunctions()
     g_lua.bindClassMemberFunction<Item>("getTeleportDestination", &Item::getTeleportDestination);
     g_lua.bindClassMemberFunction<Item>("setTeleportDestination", &Item::setTeleportDestination);
     g_lua.bindClassMemberFunction<Item>("setTier", &Item::setTier);
+    g_lua.bindClassMemberFunction<Item>("setUpgradeLevel", &Item::setUpgradeLevel);
     g_lua.bindClassMemberFunction<Item>("isContainer", &Item::isThingTypeContainer);
     g_lua.bindClassMemberFunction<Item>("isStackable", &Item::isStackable);
     g_lua.bindClassMemberFunction<Item>("isStatic", &Item::isStatic);

@@ -5132,6 +5132,12 @@ ItemPtr ProtocolGame::getItem(const InputMessagePtr& msg, int id, bool hasDescri
         if (tt->isWrapKit())
             msg->getU16(); // wrap kit (unWrapId, 0 when none)
 
+        // Custom server upgrade level. MUST mirror the matching byte appended at the
+        // END of crystalserver's ProtocolGame::AddItem() (after the wrap-kit block).
+        // 0 = no upgrade. Gated so vanilla servers don't desync. See GameItemUpgradeSystem.
+        if (g_game.getFeature(Otc::GameItemUpgradeSystem))
+            item->setUpgradeLevel(msg->getU8());
+
         return item;
     }
 

@@ -26,6 +26,7 @@
 #include <framework/otml/otml.h>
 #include <framework/graphics/graphics.h>
 #include <framework/graphics/fontmanager.h>
+#include <framework/graphics/texturemanager.h>
 
 UIItem::UIItem()
 {
@@ -77,6 +78,51 @@ void UIItem::drawSelf(Fw::DrawPane drawPane)
                     m_lastDecayUpdate = stdext::millis();
                 }
                 g_drawQueue->addText(m_font, m_decayText, drawRect, Fw::AlignBottomRight, isPaused ? m_decayPausedColor : m_decayColor);
+            }
+        }
+
+        // Tier badge: the small orange classification badge with the tier number,
+        // drawn at the top-right of the slot. Artwork:
+        // data/images/game/items/tier-<n>.png with n = 1..10 (the "big" variant is
+        // for detail views and is far too large for an inventory slot).
+        if (m_item->getTier() > 0) {
+            int tier = std::min<int>(m_item->getTier(), 10);
+            const TexturePtr& tierTexture = g_textures.getTexture("/images/game/items/tier-" + std::to_string(tier));
+            if (tierTexture) {
+                Size tierSize = tierTexture->getSize();
+                Rect tierRect(drawRect.topRight() - Point(tierSize.width() - 1, 0), tierSize);
+                g_drawQueue->addTexturedRect(tierRect, tierTexture, Rect(0, 0, tierSize));
+            }
+        }
+
+        // Upgrade badge (custom server upgrade system): green for weapons, blue for
+        // set pieces (helmet/armor/legs/boots). Drawn at the top-left so it never
+        // collides with the tier badge (top-right) or the count/duration (bottom-right).
+        // A single blank badge image per colour is used and the upgrade level number
+        // is drawn on top as text (so any level is supported, e.g. +12). Artwork
+        // (to be supplied): /images/game/items/upgrade-weapon.png (green) and
+        // /images/game/items/upgrade-set.png (blue).
+        if (m_item->getUpgradeLevel() > 0) {
+            ThingType* tt = m_item->rawGetThingType();
+            const bool isWeapon = tt && tt->getWeaponType() > 0;
+            std::string variant;
+            if (isWeapon) {
+                variant = "weapon";
+            } else if (tt) {
+                const int slot = tt->getClothSlot();
+                if (slot == Otc::InventorySlotHead || slot == Otc::InventorySlotArmor ||
+                    slot == Otc::InventorySlotLegs || slot == Otc::InventorySlotFeet)
+                    variant = "set";
+            }
+            if (!variant.empty()) {
+                const TexturePtr& upgradeTexture = g_textures.getTexture("/images/game/items/upgrade-" + variant);
+                if (upgradeTexture) {
+                    Size upgradeSize = upgradeTexture->getSize();
+                    Rect upgradeRect(drawRect.topLeft(), upgradeSize);
+                    g_drawQueue->addTexturedRect(upgradeRect, upgradeTexture, Rect(0, 0, upgradeSize));
+                    if (m_font)
+                        g_drawQueue->addText(m_font, std::to_string(m_item->getUpgradeLevel()), upgradeRect, Fw::AlignCenter, Color::white, true);
+                }
             }
         }
     }

@@ -344,7 +344,9 @@ GameTibia13Protocol = 136
 GameTibia15Protocol = 137
 GameModernClient = 138
 
-LastGameFeature = 139
+GameItemUpgradeSystem = 139
+
+LastGameFeature = 140
 
 TextColors = {
   red        = '#F55E5E',

@@ -49,6 +49,7 @@ Item::Item() :
     m_obtainFlags(0),
     m_charges(0),
     m_tier(0),
+    m_upgradeLevel(0),
     m_phase(0),
     m_lastPhase(0),
     m_durationTime(0),

@@ -131,6 +131,8 @@ public:
     uint16 getServerId() { return m_serverId; }
     uint32 getStoreId() { return 0; }
     int getTier() { return m_tier; }
+    // Custom server upgrade level (see Otc::GameItemUpgradeSystem). 0 = no upgrade.
+    int getUpgradeLevel() { return m_upgradeLevel; }
     std::string getName();
     bool isValid();
     std::string getTooltip() { return m_tooltip; }
@@ -161,6 +163,7 @@ public:
     void setActionId(uint16 actionId) { m_attribs.set(ATTR_ACTION_ID, actionId); }
     void setUniqueId(uint16 uniqueId) { m_attribs.set(ATTR_UNIQUE_ID, uniqueId); }
     void setTier(int tier) { m_tier = tier; }
+    void setUpgradeLevel(int level) { m_upgradeLevel = level; }
 
     std::string getText() { return m_attribs.get<std::string>(ATTR_TEXT); }
     std::string getDescription() { return m_attribs.get<std::string>(ATTR_DESC); }
@@ -232,6 +235,7 @@ private:
     uint32 m_obtainFlags;
     uint32 m_charges;
     int m_tier;
+    int m_upgradeLevel;
     uint8 m_phase;
     ticks_t m_lastPhase;
 

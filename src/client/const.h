@@ -512,7 +512,13 @@ namespace Otc
         GameTibia15Protocol = 137,
         GameModernClient = 138,
 
-        LastGameFeature = 139
+        // Custom server feature (crystalserver fork): per-item upgrade level. When
+        // enabled, getItem() reads ONE extra U8 (upgrade level, 0 = none) at the end
+        // of every modern (12+) item block. The server MUST append the matching byte
+        // at the end of ProtocolGame::AddItem(); otherwise all item parsing desyncs.
+        GameItemUpgradeSystem = 139,
+
+        LastGameFeature = 140
     };
 
     enum PathFindResult {

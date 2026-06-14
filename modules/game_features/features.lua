@@ -269,6 +269,13 @@ function updateFeatures(version)
 
     if(version >= 1524) then
       g_game.enableFeature(GameModernClient)
+
+      -- Custom server upgrade system: per-item upgrade level badge (green=weapon,
+      -- blue=set). Enabled now that crystalserver's ProtocolGame::AddItem() appends the
+      -- matching U8 (upgrade_level) at the end for !oldProtocol. Both sides MUST ship
+      -- together: with the feature on, the client reads that byte for every item, so a
+      -- server without the append would desync every item parse.
+      g_game.enableFeature(GameItemUpgradeSystem)
     end
 
     modules.game_things.load()
