@@ -568,7 +568,8 @@ function registerProtocol()
   end)
 
   registerOpcode(ServerPackets.UpdateSupplyTracker, function(protocol, msg)
-	msg:getU16() -- Item client ID
+	local itemId = msg:getU16() -- Item client ID
+	signalcall(g_game.onSupplyTracker, itemId)
   end)
 
   registerOpcode(ServerPackets.UpdateTrackerAnalyzer, function(protocol, msg)

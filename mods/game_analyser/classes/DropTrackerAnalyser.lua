@@ -85,6 +85,21 @@ function DropTrackerAnalyser:updateWindow(ignoreVisible)
 			widget.itemName:setText(string.capitalize(short_text(getItemServerName(itemId), 13)))
 			widget.drops:setText(formatMoney(config.dropCount, ","))
 
+			-- right-click an item to remove it from the drop tracker
+			local removableId = itemId
+			widget.onMouseRelease = function(_w, mousePosition, mouseButton)
+				if mouseButton ~= MouseRightButton then
+					return false
+				end
+				local menu = g_ui.createWidget('PopupMenu')
+				menu:setGameMenu(true)
+				menu:addOption(tr('Remove from Drop Tracker'), function()
+					DropTrackerAnalyser:managerDropItem(removableId, false)
+				end)
+				menu:display(mousePosition)
+				return true
+			end
+
 			for _, monsterDrop in ipairs(config.monsterDrop) do
 				local monsterWidget = g_ui.createWidget('MonsterPanel', widget.dropMonster)
 				monsterWidget.monster:setOutfit(monsterDrop.outfit)
