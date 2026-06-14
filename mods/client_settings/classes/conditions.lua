@@ -542,10 +542,9 @@ function ConditionsHUD:addHUDCondition(localPlayer, id)
         return
     end
 
-    local conditionId = tonumber(id)
-    if conditionId then
-        localPlayer:addHUDCondition(conditionId)
-    end
+    -- Use the string id so named conditions (skulls, emblems, ...) are supported
+    -- too; it must match the key used by g_client.addHudConfig (also tostring'd).
+    localPlayer:addHUDCondition(tostring(id))
 end
 
 function ConditionsHUD:removeHUDCondition(localPlayer, id)
@@ -553,10 +552,7 @@ function ConditionsHUD:removeHUDCondition(localPlayer, id)
         return
     end
 
-    local conditionId = tonumber(id)
-    if conditionId then
-        localPlayer:removeHUDCondition(conditionId)
-    end
+    localPlayer:removeHUDCondition(tostring(id))
 end
 
 function ConditionsHUD:save()

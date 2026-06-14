@@ -230,6 +230,40 @@ public:
     float getEffectAlpha() { return m_effectAlpha; }
     void setMissileAlpha(float alpha) { m_missileAlpha = std::min<float>(1.0f, std::max<float>(0.0f, alpha)); }
     float getMissileAlpha() { return m_missileAlpha; }
+
+    // When disabled (default), a new effect of the same type replaces an existing
+    // one on a tile instead of piling up. Driven by the "Stack Effects" client
+    // setting (client_settings dataset.lua -> g_map.enableStackEffects).
+    void enableStackEffects(bool enable) { m_stackEffects = enable; }
+    bool isStackEffectsEnabled() { return m_stackEffects; }
+
+    // Player health/mana/utamo-vita arcs, driven by the HUD "Show Arcs" controls
+    // (dataset.lua -> g_map.setArcStyle/setArcDistance/setArcOpacity). The actual
+    // arcs are rendered by MapView::drawPlayerArcs.
+    // Arc/HUD draw-state is kept on the Map singleton (not UIMap) so the Lua
+    // options drive it via g_map.* — a clean singleton binding that can't be
+    // shadowed by the modules/corelib/globals.lua UIWidget fallback stubs.
+    void setShowArcs(bool enable) { m_showArcs = enable; }
+    bool isShowingArcs() { return m_showArcs; }
+    void setHarmonyLeftDraw(bool healthOnLeft) { m_harmonyLeftDraw = healthOnLeft; }
+    bool isHarmonyLeftDraw() { return m_harmonyLeftDraw; }
+    void setDrawHUDStatus(bool enable) { m_drawHUDStatus = enable; }
+    bool isDrawingHUDStatus() { return m_drawHUDStatus; }
+    void setArcStyle(int style) { m_arcStyle = style; }
+    int getArcStyle() { return m_arcStyle; }
+    void setArcDistance(float distance) { m_arcDistance = distance; }
+    float getArcDistance() { return m_arcDistance; }
+    void setArcOpacity(float opacity) { m_arcOpacity = opacity; }
+    float getArcOpacity() { return m_arcOpacity; }
+
+    // Condition HUD overlay config: condition id -> arc image path. Fed from Lua
+    // (g_client.addHudConfig -> g_map.addHudConfig) and consumed by MapView to draw
+    // the active conditions around the local character ("Show in HUD" option).
+    void addHudConfig(const std::string& id, const std::string& path) { m_hudConfigs[id] = path; }
+    void updateHudPath(const std::string& id, const std::string& path) { m_hudConfigs[id] = path; }
+    void clearHudConfigs() { m_hudConfigs.clear(); }
+    const std::map<std::string, std::string>& getHudConfigs() { return m_hudConfigs; }
+
     Color getZoneColor(tileflags_t flag);
     tileflags_t getZoneFlags() { return (tileflags_t)m_zoneFlags; }
     bool showZones() { return m_zoneFlags != 0; }
@@ -314,6 +348,14 @@ private:
     float m_zoneOpacity;
     float m_effectAlpha = 1.0f;
     float m_missileAlpha = 1.0f;
+    bool m_stackEffects = false; // default: effects do NOT stack on a tile
+    bool m_showArcs = false;     // "Show Arcs" toggle (default off)
+    bool m_harmonyLeftDraw = true; // health arc on the left, mana on the right
+    bool m_drawHUDStatus = true; // "Show in HUD" master toggle
+    int m_arcStyle = 1;          // 0 = small, 1 = default, 2 = large
+    float m_arcDistance = 0.15f; // distanceArc / 100
+    float m_arcOpacity = 0.70f;  // opacityArc / 100
+    std::map<std::string, std::string> m_hudConfigs; // condition id -> arc image path
 
     Light m_light;
     Position m_centralPosition;

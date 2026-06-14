@@ -20,7 +20,7 @@ actionBarShowRight3: false
 allActionBar79: false
 enableLights: false
 ambientLight: 100
-stackEffects: true
+stackEffects: false
 maxEffects: false
 limitEffects: 400
 opacityEffects: 100

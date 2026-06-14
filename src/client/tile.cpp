@@ -360,10 +360,24 @@ void Tile::addThing(const ThingPtr& thing, int stackPos)
         return;
 
     if(thing->isEffect()) {
-        if(thing->isTopEffect())
-            m_effects.insert(m_effects.begin(), thing->static_self_cast<Effect>());
+        EffectPtr effect = thing->static_self_cast<Effect>();
+        // When effect stacking is disabled (default) a new effect of the same type
+        // replaces any existing instance on this tile, so identical effects don't
+        // pile up. When enabled, effects accumulate as before.
+        if(!g_map.isStackEffectsEnabled()) {
+            for(auto it = m_effects.begin(); it != m_effects.end(); ++it) {
+                if((*it)->getId() == effect->getId()) {
+                    EffectPtr old = *it;
+                    m_effects.erase(it);
+                    old->onDisappear();
+                    break;
+                }
+            }
+        }
+        if(effect->isTopEffect())
+            m_effects.insert(m_effects.begin(), effect);
         else
-            m_effects.push_back(thing->static_self_cast<Effect>());
+            m_effects.push_back(effect);
     } else {
         // priority                                    854
         // 0 - ground,                        -->      -->

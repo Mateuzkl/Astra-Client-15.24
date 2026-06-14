@@ -46,6 +46,7 @@
 
 #include <framework/util/extras.h>
 #include <framework/core/adaptiverenderer.h>
+#include <cmath>
 
 MapView::MapView()
 {
@@ -295,6 +296,17 @@ void MapView::drawMapForeground(const Rect& rect)
         c.first->drawInformation(c.second, g_map.isCovered(c.first->getPrewalkingPosition(), m_cachedFirstVisibleFloor), rect, flags);
     }
 
+    // Player health/mana/utamo-vita arcs ("Show Arcs"): a stable HUD ring anchored
+    // to the viewport center (the followed player sits there), so it doesn't jitter
+    // with every walk step.
+    if (g_map.isShowingArcs())
+        drawPlayerArcs(rect);
+
+    // Condition HUD ("Show in HUD"): a vertical bar anchored to the left of the life arc
+    // (same viewport-center anchor as the arc), so the two track together.
+    if (g_map.isDrawingHUDStatus())
+        drawPlayerHudConditions(rect);
+
     if (m_lightView) {
         g_drawQueue->add(m_lightView.release());
     }
@@ -386,6 +398,235 @@ void MapView::drawMapForeground(const Rect& rect)
     }
 	
 	drawTileWidget(rect, srcRect);
+}
+
+// Draws the colored fill of one player-arc half (sprite-clip technique, like
+// OTClientV8's health-circle): the white "_full" sprite is tinted by `color` and
+// clipped from the top so it fills bottom->top in proportion to `ratio`.
+static void drawArcFill(const Rect& dest, const TexturePtr& fill, double ratio,
+                        const Color& color, float opacity)
+{
+    if (!fill || ratio <= 0.0)
+        return;
+
+    const Size fs = fill->getSize();
+    const int h = fs.height();
+    const int cut = (int)((1.0 - ratio) * h);
+    if (cut >= h)
+        return;
+
+    // dest may be scaled down (e.g. the nested inner lane), so scale the dest top
+    // offset by dest.height()/nativeH to keep the clipped fill registered with it.
+    const float sy = dest.height() / (float)h;
+    Rect src(0, cut, fs.width(), h - cut);
+    Rect d(dest.x(), dest.y() + (int)(cut * sy), dest.width(), dest.height() - (int)(cut * sy));
+    g_drawQueue->addTexturedRect(d, fill, src, color.opacity(opacity));
+}
+
+// Tibia-style health palette (green when healthy -> red when low).
+static Color arcHealthColor(double health)
+{
+    const int p = (int)(health * 100);
+    if (p > 92) return Color(0x00, 0xBC, 0x00);
+    if (p > 60) return Color(0x50, 0xA1, 0x50);
+    if (p > 30) return Color(0xA1, 0xA1, 0x00);
+    if (p > 8)  return Color(0xBF, 0x0A, 0x0A);
+    if (p > 3)  return Color(0x91, 0x0F, 0x0F);
+    return Color(0x85, 0x0C, 0x0C);
+}
+
+// Filled rounded rectangle composed from primitives (the draw queue has no native
+// rounded-rect): a cross of filled rects + four quarter-circle corner triangle-fans.
+static void drawRoundedRect(const Rect& r, int radius, const Color& color)
+{
+    const int x = r.x(), y = r.y(), w = r.width(), h = r.height();
+    radius = std::max<int>(0, std::min<int>(radius, std::min<int>(w, h) / 2));
+    if (radius <= 0) {
+        g_drawQueue->addFilledRect(r, color);
+        return;
+    }
+
+    g_drawQueue->addFilledRect(Rect(x, y + radius, w, h - 2 * radius), color);                   // middle band
+    g_drawQueue->addFilledRect(Rect(x + radius, y, w - 2 * radius, radius), color);              // top edge
+    g_drawQueue->addFilledRect(Rect(x + radius, y + h - radius, w - 2 * radius, radius), color); // bottom edge
+
+    const float pi = 3.14159265358979f;
+    const int seg = 6;
+    auto corner = [&](int cx, int cy, float a0, float a1) {
+        for (int i = 0; i < seg; ++i) {
+            const float t0 = a0 + (a1 - a0) * i / seg;
+            const float t1 = a0 + (a1 - a0) * (i + 1) / seg;
+            Point p0(cx + (int)(std::cos(t0) * radius), cy + (int)(std::sin(t0) * radius));
+            Point p1(cx + (int)(std::cos(t1) * radius), cy + (int)(std::sin(t1) * radius));
+            g_drawQueue->addFilledTriangle(Point(cx, cy), p0, p1, color);
+        }
+    };
+    corner(x + radius,     y + radius,     pi,        pi * 1.5f);  // top-left
+    corner(x + w - radius, y + radius,     pi * 1.5f, pi * 2.0f);  // top-right
+    corner(x + w - radius, y + h - radius, 0.0f,      pi * 0.5f);  // bottom-right
+    corner(x + radius,     y + h - radius, pi * 0.5f, pi);         // bottom-left
+}
+
+// On-screen rect of the health ("left") arc for the current style/distance, anchored to
+// the viewport center (the followed player sits there). Shared by drawPlayerArcs and the
+// condition HUD bar, which sits just to the LEFT of this arc and must track it when the
+// arc distance/style changes. Returns false if the arc texture is unavailable.
+bool MapView::getHealthArcRect(const Rect& rect, Rect& out)
+{
+    std::string style = "default";
+    switch (g_map.getArcStyle()) {
+        case 0: style = "small"; break;
+        case 2: style = "large"; break;
+        default: style = "default"; break;
+    }
+    TexturePtr leftFull = g_textures.getTexture("/images/arcs/" + style + "-left_full");
+    if (!leftFull)
+        return false;
+
+    const int hw = leftFull->getSize().width();
+    const int hh = leftFull->getSize().height();
+
+    // EgzoT barDistance: ~panelHeight/2 * 0.2, floored at 90; the "distance" slider
+    // (0..1) then widens the central gap on each side.
+    int barDistance = 90;
+    const int computed = (int)(rect.height() / 2.0f * 0.2f);
+    if (computed > barDistance)
+        barDistance = computed;
+    const int half = barDistance + (int)(g_map.getArcDistance() * hh);
+
+    const Point ctr = rect.center();
+    out = Rect(ctr.x - half - hw, ctr.y - hh / 2, hw, hh); // health "(" lane
+    return true;
+}
+
+void MapView::drawPlayerArcs(const Rect& rect)
+{
+    LocalPlayerPtr player = g_game.getLocalPlayer();
+    if (!player)
+        return;
+
+    double maxHealth = player->getMaxHealth();
+    double health = maxHealth > 0 ? std::min<double>(1.0, player->getHealth() / maxHealth) : 1.0;
+    double maxMana = player->getMaxMana();
+    double mana = maxMana > 0 ? std::min<double>(1.0, player->getMana() / maxMana) : 1.0;
+    double maxShield = player->getMaxManaShield();
+    double shield = maxShield > 0 ? std::min<double>(1.0, player->getManaShield() / maxShield) : 0.0;
+
+    // Arc sprite set by size (matches the "sizeBox" Small/Default/Large option).
+    std::string style = "default";
+    switch (g_map.getArcStyle()) {
+        case 0: style = "small"; break;
+        case 2: style = "large"; break;
+        default: style = "default"; break;
+    }
+    const std::string base = "/images/arcs/" + style + "-";
+    TexturePtr leftEmpty  = g_textures.getTexture(base + "left_empty");
+    TexturePtr leftFull   = g_textures.getTexture(base + "left_full");
+    TexturePtr rightBg    = g_textures.getTexture(base + "bg-full");       // grey double-band track
+    TexturePtr manaBand   = g_textures.getTexture(base + "maximal_white"); // outer band = mana
+    TexturePtr shieldBand = g_textures.getTexture(base + "minimal_white"); // inner band = utamo vita
+    if (!leftEmpty || !leftFull || !rightBg || !manaBand || !shieldBand)
+        return;
+
+    const float opacity = std::min<float>(1.0f, std::max<float>(0.0f, g_map.getArcOpacity()));
+
+    // Geometry (anchored to the viewport center) shared with the condition HUD bar.
+    Rect leftDest;
+    if (!getHealthArcRect(rect, leftDest))
+        return;
+    const int hw = leftDest.width();
+    const int hh = leftDest.height();
+    const Point ctr = rect.center();
+    Rect rightDest(2 * ctr.x - leftDest.x() - hw, leftDest.y(), hw, hh); // mana ")" mirrored about center
+
+    const Color hpColor = arcHealthColor(health);
+    const Color manaColor(0x00, 0x36, 0x78);   // topbar mana blue
+    const Color shieldColor(0x8f, 0x00, 0xb7); // topbar utamo-vita purple
+
+    // HEALTH: left single lane (grey "_empty" track, then tinted clipped fill).
+    g_drawQueue->addTexturedRect(leftDest, leftEmpty, Rect(0, 0, leftEmpty->getSize()), Color::white.opacity(opacity));
+    drawArcFill(leftDest, leftFull, health, hpColor, opacity);
+
+    // MANA + UTAMO VITA: right double-band lane, DIVIDED. The grey double-band track
+    // (bg-full) is always shown; the OUTER band = MANA (blue), the INNER band = UTAMO
+    // VITA (purple). The utamo band is always present -- it just shows the empty grey
+    // track when the player has no magic shield active.
+    g_drawQueue->addTexturedRect(rightDest, rightBg, Rect(0, 0, rightBg->getSize()), Color::white.opacity(opacity));
+    drawArcFill(rightDest, manaBand, mana, manaColor, opacity);
+    drawArcFill(rightDest, shieldBand, shield, shieldColor, opacity);
+}
+
+void MapView::drawPlayerHudConditions(const Rect& rect)
+{
+    LocalPlayerPtr player = g_game.getLocalPlayer();
+    if (!player)
+        return;
+
+    const std::set<std::string>& active = player->getHUDConditions();
+    if (active.empty())
+        return;
+
+    const std::map<std::string, std::string>& configs = g_map.getHudConfigs();
+    if (configs.empty())
+        return;
+
+    // Collect the icons of the active "Show in HUD" conditions.
+    std::vector<TexturePtr> icons;
+    for (const std::string& id : active) {
+        auto it = configs.find(id);
+        if (it == configs.end())
+            continue;
+        TexturePtr tex = g_textures.getTexture(it->second);
+        if (tex)
+            icons.push_back(tex);
+    }
+    if (icons.empty())
+        return;
+
+    int sprite = g_sprites.spriteSize();
+    int iconSize = std::max<int>(14, (int)(sprite * 0.5f));
+    int gap = std::max<int>(1, iconSize / 8);
+    int pad = 6;
+    int n = (int)icons.size();
+    int totalH = n * iconSize + (n - 1) * gap;
+
+    // VERTICAL column placed just to the LEFT of the health arc, vertically centered on
+    // it, so it tracks the arc when its distance/style changes (instead of piling on the
+    // character). Falls back to the left of the viewport center if the arc is unavailable.
+    int rightEdge, vcenter;
+    Rect arcRect;
+    if (getHealthArcRect(rect, arcRect)) {
+        rightEdge = arcRect.x();          // left edge of the health "(" arc
+        vcenter = arcRect.center().y;
+    } else {
+        const Point ctr = rect.center();
+        rightEdge = ctr.x - 100;
+        vcenter = ctr.y;
+    }
+
+    const int margin = 8; // gap between the condition bar and the arc
+    int x = rightEdge - margin - iconSize;
+    int y0 = vcenter - totalH / 2;
+
+    // Keep the column on-screen on the left (tiny viewports / large arc style).
+    if (x - pad < rect.left())
+        x = rect.left() + pad;
+
+    // Keep the column inside the viewport vertically.
+    if (y0 - pad < rect.top())
+        y0 = rect.top() + pad;
+    if (y0 + totalH + pad > rect.bottom())
+        y0 = std::max<int>(rect.top() + pad, rect.bottom() - pad - totalH);
+
+    Rect bg(x - pad, y0 - pad, iconSize + 2 * pad, totalH + 2 * pad);
+    drawRoundedRect(bg, 6, Color(0x20, 0x20, 0x20).opacity(0.78f));
+
+    int y = y0;
+    for (int i = 0; i < n; ++i) {
+        Rect dest(x, y, iconSize, iconSize);
+        g_drawQueue->addTexturedRect(dest, icons[i], Rect(0, 0, icons[i]->getSize()));
+        y += iconSize + gap;
+    }
 }
 
 

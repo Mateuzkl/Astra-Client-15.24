@@ -132,9 +132,13 @@ public:
     int getInventoryCount(int itemId, int upgradeTier = 0);
     bool hasEquippedItemId(int itemId, int upgradeTier = 0);
     uint64 getResourceValue(int resource);
-    void addHUDCondition(int condition) { m_hudConditions.insert(condition); }
-    void removeHUDCondition(int condition) { m_hudConditions.erase(condition); }
-    bool hasHUDCondition(int condition) { return m_hudConditions.find(condition) != m_hudConditions.end(); }
+    // Active "Show in HUD" conditions, keyed by the Lua condition id (string, so
+    // both numeric state ids and named ids like skulls/emblems are supported).
+    // Consumed by MapView::drawPlayerHudConditions to draw the HUD ring.
+    void addHUDCondition(const std::string& condition) { m_hudConditions.insert(condition); }
+    void removeHUDCondition(const std::string& condition) { m_hudConditions.erase(condition); }
+    bool hasHUDCondition(const std::string& condition) { return m_hudConditions.find(condition) != m_hudConditions.end(); }
+    const std::set<std::string>& getHUDConditions() { return m_hudConditions; }
 
     bool hasSight(const Position& pos);
     bool isKnown() { return m_known; }
@@ -221,7 +225,7 @@ private:
     std::vector<int> m_skillsLevelPercent;
     std::vector<int> m_skillsLoyalty;
     std::vector<int> m_spells;
-    std::set<int> m_hudConditions;
+    std::set<std::string> m_hudConditions;
     std::map<int, uint64> m_resources;
 
     int m_states;

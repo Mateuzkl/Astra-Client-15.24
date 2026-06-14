@@ -402,7 +402,14 @@ if UIProgressRect then
 
     local remaining = math.max(0, (widget._durationEndsAt or 0) - g_clock.millis())
     if widget.setPercent and widget._showProgress ~= false then
-      widget:setPercent((widget._duration or 0) > 0 and remaining * 100 / widget._duration or 0)
+      -- UIProgressRect draws the dark clock overlay as percent DROPS: 100 = no
+      -- overlay (ready), 0 = full overlay (just used). A cooldown must therefore
+      -- sweep from covered to clear, i.e. count UP from 0 to 100 as it elapses.
+      -- The old `remaining*100/duration` ran it backwards (clear at cast, then
+      -- darkening as it became ready), which made "Show Graphical Cooldown" look
+      -- broken on the action bars.
+      local duration = widget._duration or 0
+      widget:setPercent(duration > 0 and (duration - remaining) * 100 / duration or 100)
     end
     if widget.setText then
       widget:setText((widget._showTime ~= false and remaining > 0) and tostring(math.ceil(remaining / 1000)) or '')
@@ -458,6 +465,9 @@ if UIProgressRect then
 
   UIProgressRect.showProgress = UIProgressRect.showProgress or function(self, show)
     self._showProgress = (show ~= false)
+    -- Turning the graphical cooldown off must wipe any overlay that is frozen
+    -- mid-cooldown (the timer stops updating percent), so percent 100 = clear.
+    if not self._showProgress and self.setPercent then self:setPercent(100) end
   end
 end
 
@@ -638,9 +648,12 @@ if g_game then
   g_game.getVocationNameBase = g_game.getVocationNameBase or function() return '' end
 end
 
-g_client.clearHudConfigs = g_client.clearHudConfigs or noop
-g_client.addHudConfig = g_client.addHudConfig or noop
-g_client.updateHudPath = g_client.updateHudPath or noop
+-- Condition HUD overlay config now lives in the C++ Map (g_map) so MapView can
+-- read it while drawing the "Show in HUD" ring. Forward to g_map and normalise the
+-- id to a string so it matches LocalPlayer:addHUDCondition(tostring(id)).
+g_client.clearHudConfigs = g_client.clearHudConfigs or function() g_map.clearHudConfigs() end
+g_client.addHudConfig = g_client.addHudConfig or function(id, path) g_map.addHudConfig(tostring(id), path) end
+g_client.updateHudPath = g_client.updateHudPath or function(id, path) g_map.updateHudPath(tostring(id), path) end
 g_client.setMissileAlpha = g_client.setMissileAlpha or function(value) g_map.setMissileAlpha(value) end
 g_client.setEffectAlpha = g_client.setEffectAlpha or function(value) g_map.setEffectAlpha(value) end
 g_client.setIgnoreSpecialEffects = g_client.setIgnoreSpecialEffects or noop

@@ -43,6 +43,9 @@ private:
     void drawFloor(short floor, const Position& cameraPosition, const TilePtr& crosshairTile = nullptr);
     void drawTileTexts(const Rect& rect, const Rect& srcRect);
     void drawTileWidget(const Rect& rect, const Rect& srcRect);
+    void drawPlayerArcs(const Rect& rect);
+    bool getHealthArcRect(const Rect& rect, Rect& out);
+    void drawPlayerHudConditions(const Rect& rect);
     void updateGeometry(const Size& visibleDimension, const Size& optimizedSize);
     void updateVisibleTilesCache();
     void requestVisibleTilesCacheUpdate() { m_mustUpdateVisibleTilesCache = true; }
