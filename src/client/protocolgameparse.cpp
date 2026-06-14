@@ -1498,14 +1498,16 @@ void ProtocolGame::parseOpenNpcTrade(const InputMessagePtr& msg)
 {
     std::vector<std::tuple<ItemPtr, std::string, int, int64_t, int64_t>> items;
     std::string npcName;
+    int currencyId = 0;
+    std::string currencyName;
 
     if (g_game.getFeature(Otc::GameNameOnNpcTrade))
         npcName = msg->getString();
     if (g_game.getFeature(Otc::GameTibia12Protocol)) {
         if(g_game.getProtocolVersion() >= 1220)
-            msg->getU16(); // shop item id
+            currencyId = msg->getU16(); // currency item id used by this shop
         if (g_game.getProtocolVersion() >= 1240)
-            msg->getString();
+            currencyName = msg->getString(); // currency name ("" = default gold)
     }
 
     int listCount;
@@ -1529,7 +1531,7 @@ void ProtocolGame::parseOpenNpcTrade(const InputMessagePtr& msg)
         items.push_back(std::make_tuple(item, name, weight, buyPrice, sellPrice));
     }
 
-    g_game.processOpenNpcTrade(items);
+    g_game.processOpenNpcTrade(items, currencyId, currencyName);
 }
 
 void ProtocolGame::parsePlayerGoods(const InputMessagePtr& msg)

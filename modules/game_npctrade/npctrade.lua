@@ -742,7 +742,9 @@ function onCloseNpcTrade()
   addEvent(hide)
 end
 
-function onPlayerGoods(items)
+-- money comes from the server here but this module reads the player's balance from
+-- resources (getPlayerMoney), so the first arg is intentionally ignored.
+function onPlayerGoods(_money, items)
   playerItems = {}
   for id, amount in pairs(items) do
     if not playerItems[id] then
