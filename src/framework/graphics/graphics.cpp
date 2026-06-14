@@ -36,7 +36,13 @@ Graphics g_graphics;
 
 Graphics::Graphics()
 {
-    m_maxTextureSize = 2048;
+    // Default >= 4096 so the font atlas (atlas.cpp sizes it to min(4096, this)) does
+    // not collapse back to an overflowing 2048 when the GL_MAX_TEXTURE_SIZE query in
+    // init() fails to report a value. The DirectX backend returns 0 for that query, so
+    // the "only upgrade" guard below leaves this default untouched -> the bundled fonts
+    // need > 2048^2 of atlas area and the 2048 text atlas overflows ("Out of space for
+    // new fonts" fatal in Atlas::cacheFont at boot). Real GPUs (>= 8192) still scale up.
+    m_maxTextureSize = 4096;
 }
 
 void Graphics::init()
