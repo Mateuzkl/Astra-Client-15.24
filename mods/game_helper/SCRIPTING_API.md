@@ -4,15 +4,30 @@ The **Script** tab (in the Helper window) lets you write your own Lua scripts.
 
 ## How scripts run
 
-- Each script's **code is the body that runs on a loop** — about every **200 ms** while the script is **enabled**.
-- Use **`bot.delay(ms)`** inside a script to make it sleep (it won't run again until `ms` passes). Without a delay it runs every tick.
-- Each script has its own persistent table **`storage`** — use it to keep state between runs (it is wiped on relog, not saved to disk).
-- Errors are caught. A script that errors **5 times** is auto‑disabled so it can't spam the console.
+- Each script's **file body runs exactly once** — the moment the script is **enabled** ("loaded"). Use it to set up state and register your timers.
+- For recurring work, register a **`Timer(intervalMs, fn)`** (see below). It runs `fn` every `intervalMs` while the script stays loaded. There is **no** implicit 200 ms loop anymore.
+- Each script has its own persistent table **`storage`** — use it to keep state between ticks (it is wiped on relog, not saved to disk).
+- Errors are caught. A script that errors **5 times** is auto‑disabled (which also stops its timers) so it can't spam the console.
 - Scripts run in a sandbox that also gives you the normal client globals (`g_game`, `g_map`, `math`, `string`, `table`, …) if you need something not in `bot`.
+
+### Scheduling — `Timer`
+`Timer(intervalMs, fn)` is a global available to every script.
+
+```lua
+print("loaded once")              -- body: runs a single time on load
+
+Timer(1000, function()            -- runs every 1000 ms while loaded
+  if bot.hpp() < 50 then bot.useItem(266) end
+end)
+```
+
+- The first tick happens **after** one `intervalMs` (not immediately). Do anything you need right away in the body.
+- Register **as many timers as you like** (e.g. one at 250 ms for healing, one at 2000 ms for looting).
+- It returns a handle: call **`handle:stop()`** to cancel just that timer. All of a script's timers are cancelled automatically when it is unloaded, errors out, or you relog.
 
 ### Controls
 - **New / Rename / Delete** — manage scripts (right‑click a script in the list too).
-- **Enable / Disable** — double‑click a script, or use the button. Enabled scripts run on the loop.
+- **Enable / Disable** — double‑click a script, or use the button. Enabling runs the body once and starts its timers; disabling stops them.
 - **Run** — run the selected script once, right now (good for testing).
 - **Save** — save the editor's code (recompiles it if the script is enabled).
 
@@ -63,8 +78,8 @@ The **Script** tab (in the Helper window) lets you write your own Lua scripts.
 ### Timing / logging
 | Function | Returns | Description |
 |---|---|---|
-| `bot.now()` | number | Monotonic milliseconds (for your own timers). |
-| `bot.delay(ms)` | — | Pause **this** script for `ms` (throttle its loop). |
+| `bot.now()` | number | Monotonic milliseconds (for your own timing math). |
+| `Timer(ms, fn)` | handle | **Global.** Run `fn` every `ms` while loaded. `handle:stop()` cancels it. See *Scheduling* above. |
 | `bot.log(...)` | — | Print to the console, prefixed with the script name. (`print` also works.) |
 
 ### Cavebot control — `bot.cavebot.*`
@@ -88,38 +103,47 @@ The **Script** tab (in the Helper window) lets you write your own Lua scripts.
 
 ## Examples
 
-**Re‑pot mana when low:**
+**Re‑pot mana when low (every 800 ms):**
 ```lua
-if bot.mpp() < 40 and bot.itemCount(268) > 0 then
-  bot.useItem(268)        -- mana potion
-end
-bot.delay(800)
+Timer(800, function()
+  if bot.mpp() < 40 and bot.itemCount(268) > 0 then
+    bot.useItem(268)        -- mana potion
+  end
+end)
 ```
 
 **Switch the cavebot to a "Refill" tab when out of potions, back to "Hunt" otherwise:**
 ```lua
-if bot.itemCount(268) == 0 then
-  if bot.cavebot.tab() ~= "Refill" then bot.cavebot.gotoTab("Refill") end
-elseif bot.cavebot.tab() ~= "Hunt" then
-  bot.cavebot.gotoTab("Hunt")
-end
-bot.delay(1000)
+Timer(1000, function()
+  if bot.itemCount(268) == 0 then
+    if bot.cavebot.tab() ~= "Refill" then bot.cavebot.gotoTab("Refill") end
+  elseif bot.cavebot.tab() ~= "Hunt" then
+    bot.cavebot.gotoTab("Hunt")
+  end
+end)
 ```
 
-**Pause the cavebot and turn off the shooter while a player is on screen (anti‑PK):**
+**Turn off the shooter while a player is on screen (anti‑PK), re‑enable when clear:**
 ```lua
-local pk = #bot.players(8) > 0
-bot.cavebot.disable() -- only call when needed; here we just demo
-if pk then
-  bot.log("player nearby!", bot.players(8)[1]:getName())
-end
-bot.delay(500)
+Timer(500, function()
+  local pk = #bot.players(8) > 0
+  bot.helper.setShooter(not pk)
+  if pk then
+    bot.log("player nearby!", bot.players(8)[1]:getName())
+  end
+end)
 ```
 
-**Count kills using `storage` (persists between runs):**
+**Count kills using `storage` (persists between ticks). Two timers, different rates:**
 ```lua
 storage.kills = storage.kills or 0
-local t = bot.target()
-if t and t:getHealthPercent() <= 0 then storage.kills = storage.kills + 1 end
-bot.delay(250)
+
+Timer(250, function()
+  local t = bot.target()
+  if t and t:getHealthPercent() <= 0 then storage.kills = storage.kills + 1 end
+end)
+
+Timer(10000, function()
+  bot.log("kills so far:", storage.kills)
+end)
 ```

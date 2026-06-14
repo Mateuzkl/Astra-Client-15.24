@@ -625,20 +625,15 @@ function cavebotOpenSettings()
   local s = cfg.settings
 
   -- Recording
-  w.recIntervalBox:setMinimum(1); w.recIntervalBox:setMaximum(50)
-  w.recIntervalBox:setValue(s.recordInterval or 3)
+  initPercentSelector(w.recIntervalBox, s.recordInterval or 3, 1, 50, 1, '')
   w.recTypeBox:clearOptions()
   w.recTypeBox:addOption('Walk', 'walk')
   w.recTypeBox:addOption('Stand', 'stand')
   w.recTypeBox:setCurrentOption(s.recordType == 'stand' and 'Stand' or 'Walk', true)
 
-  -- Movement (run speed shows "%" inside the box via onValueChange; getValue stays numeric)
-  w.runSpeedBox.onValueChange = function(self, v) self:setText(v .. '%') end
-  w.runSpeedBox:setMinimum(10); w.runSpeedBox:setMaximum(100); w.runSpeedBox:setStep(10)
-  w.runSpeedBox:setValue(s.runSpeed or 100)
-  w.runSpeedBox:setText((s.runSpeed or 100) .. '%')
-  w.reachRadiusBox:setMinimum(1); w.reachRadiusBox:setMaximum(10)
-  w.reachRadiusBox:setValue(s.reachRadius or 2)
+  -- Movement (run speed in 10% steps; reach radius / record interval are plain counts)
+  initPercentSelector(w.runSpeedBox, s.runSpeed or 100, 10, 100, 10, '%')
+  initPercentSelector(w.reachRadiusBox, s.reachRadius or 2, 1, 10, 1, '')
   w.startNearestCheck:setChecked(s.startNearest and true or false)
 
   -- Hunt mode: Single / Box / Cait. Start/Stop (creature counts) only apply to Box/Cait.
@@ -647,8 +642,8 @@ function cavebotOpenSettings()
   w.huntModeBox:addOption('Box', 'box')
   w.huntModeBox:addOption('Cait', 'cait')
   w.huntModeBox:setCurrentOption(({ single = 'Single', box = 'Box', cait = 'Cait' })[s.huntMode or 'single'] or 'Single', true)
-  w.huntStartBox:setMinimum(1); w.huntStartBox:setMaximum(99); w.huntStartBox:setValue(s.huntStart or 5)
-  w.huntStopBox:setMinimum(0);  w.huntStopBox:setMaximum(99); w.huntStopBox:setValue(s.huntStop or 0)
+  initPercentSelector(w.huntStartBox, s.huntStart or 5, 1, 99, 1, '')
+  initPercentSelector(w.huntStopBox, s.huntStop or 0, 0, 99, 1, '')
   local function syncHuntFields()
     local m = w.huntModeBox:getCurrentOption()
     local enable = (m and m.data) ~= 'single' -- Single ignores Start/Stop (stops at 1st creature)
@@ -663,16 +658,16 @@ function cavebotOpenSettings()
   end
   w.cancelButton.onClick = close
   w.saveButton.onClick = function()
-    s.recordInterval = math.max(1, w.recIntervalBox:getValue())
+    s.recordInterval = math.max(1, getPercentValue(w.recIntervalBox))
     local rt2 = w.recTypeBox:getCurrentOption()
     s.recordType = (rt2 and rt2.data) or 'walk'
-    s.runSpeed = math.max(10, math.min(100, w.runSpeedBox:getValue()))
-    s.reachRadius = math.max(1, math.min(10, w.reachRadiusBox:getValue()))
+    s.runSpeed = math.max(10, math.min(100, getPercentValue(w.runSpeedBox)))
+    s.reachRadius = math.max(1, math.min(10, getPercentValue(w.reachRadiusBox)))
     s.startNearest = w.startNearestCheck:isChecked()
     local hmo = w.huntModeBox:getCurrentOption()
     s.huntMode = (hmo and hmo.data) or 'single'
-    s.huntStart = math.max(1, w.huntStartBox:getValue())
-    s.huntStop  = math.max(0, w.huntStopBox:getValue())
+    s.huntStart = math.max(1, getPercentValue(w.huntStartBox))
+    s.huntStop  = math.max(0, getPercentValue(w.huntStopBox))
     if s.huntStop >= s.huntStart then s.huntStop = s.huntStart - 1 end -- keep Stop < Start (hysteresis)
     rt.fighting = false -- thresholds changed; re-evaluate the box/cait phase cleanly
     hudKey = nil        -- force the HUD list to rebuild (labels/colors may differ)
@@ -1063,6 +1058,7 @@ end
 syncEnableButton = function()
   if enableButton then
     enableButton:setText(cfg.enabled and tr('Disable Cavebot') or tr('Enable Cavebot'))
+    enableButton:setImageColor(cfg.enabled and '#44ad25' or '#cc4444') -- green on / red off
   end
   if not cfg.enabled then
     setStatus(tr('Inactive'), COLOR_RED)
@@ -1522,6 +1518,9 @@ local function mountUI(window)
   panel:addAnchor(AnchorTop, 'optionsTabBar', AnchorBottom)
   panel:addAnchor(AnchorLeft, 'parent', AnchorLeft)
   panel:addAnchor(AnchorRight, 'parent', AnchorRight)
+  -- Pin the panel bottom to the helper's footer divider so the Set Hotkey button
+  -- (anchored to parent.bottom) sits just above it, instead of covering the footer.
+  panel:addAnchor(AnchorBottom, 'separator', AnchorTop)
   panel:setMarginTop(5)
   panel:hide()
 

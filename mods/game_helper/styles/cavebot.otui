@@ -107,7 +107,7 @@ CavebotHotkeyWindow < MainWindow
 // here (recording, movement/lure, hunt mode + thresholds). Wired up in cavebotOpenSettings().
 CavebotSettings < MainWindow
   id: cavebotSettings
-  size: 312 476
+  size: 312 492
   !text: tr('Cavebot Settings')
   font: $var-cip-font
 
@@ -120,14 +120,11 @@ CavebotSettings < MainWindow
     color: #c8a05a
     font: $var-cip-font
 
-  SpinBox
+  PercentSelector
     id: recIntervalBox
     anchors.top: recHeader.bottom
     anchors.right: parent.right
     margin-top: 4
-    width: 70
-    minimum: 1
-    maximum: 50
   Label
     anchors.left: parent.left
     anchors.verticalCenter: recIntervalBox.verticalCenter
@@ -155,28 +152,22 @@ CavebotSettings < MainWindow
     color: #c8a05a
     font: $var-cip-font
 
-  SpinBox
+  PercentSelector
     id: runSpeedBox
     anchors.top: moveHeader.bottom
     anchors.right: parent.right
     margin-top: 4
-    width: 70
-    minimum: 10
-    maximum: 100
   Label
     anchors.left: parent.left
     anchors.verticalCenter: runSpeedBox.verticalCenter
     !text: tr('Run speed')
     font: $var-cip-font
 
-  SpinBox
+  PercentSelector
     id: reachRadiusBox
     anchors.top: runSpeedBox.bottom
     anchors.right: parent.right
     margin-top: 6
-    width: 70
-    minimum: 1
-    maximum: 10
   Label
     anchors.left: parent.left
     anchors.verticalCenter: reachRadiusBox.verticalCenter
@@ -214,28 +205,22 @@ CavebotSettings < MainWindow
     !text: tr('Mode')
     font: $var-cip-font
 
-  SpinBox
+  PercentSelector
     id: huntStartBox
     anchors.top: huntModeBox.bottom
     anchors.right: parent.right
     margin-top: 6
-    width: 56
-    minimum: 1
-    maximum: 99
   Label
     anchors.left: parent.left
     anchors.verticalCenter: huntStartBox.verticalCenter
     !text: tr('Start (creatures on screen)')
     font: $var-cip-font
 
-  SpinBox
+  PercentSelector
     id: huntStopBox
     anchors.top: huntStartBox.bottom
     anchors.right: parent.right
     margin-top: 6
-    width: 56
-    minimum: 0
-    maximum: 99
   Label
     anchors.left: parent.left
     anchors.verticalCenter: huntStopBox.verticalCenter
@@ -544,8 +529,6 @@ CavebotPanel < Panel
       padding: 0
       !tooltip: tr('Cavebot settings (recording, run speed, reach radius, hunt mode)')
       @onClick: cavebotOpenSettings()
-      $hover:
-        image-clip: 0 20 20 20
       $pressed:
         image-clip: 0 20 20 20
     Button
@@ -589,20 +572,24 @@ CavebotPanel < Panel
 
     Button
       id: hudBtn
-      size: 104 20
+      height: 20
       anchors.top: toolsHeader.bottom
       anchors.left: parent.left
+      anchors.right: parent.right
       margin-top: 2
       !text: tr('HUD: Off')
       !tooltip: tr('Show/hide colored markers on waypoint tiles in the game window')
       @onClick: cavebotToggleHud()
-    Button
-      id: hotkeyBtn
-      height: 20
-      anchors.top: hudBtn.top
-      anchors.left: hudBtn.right
-      anchors.right: parent.right
-      margin-left: 3
-      !text: tr('Set Hotkey')
-      !tooltip: tr('Bind a key to toggle the cavebot on/off')
-      @onClick: cavebotBindHotkey()
+  // Set Hotkey: pinned to the bottom of the panel. CavebotPanel's bottom is anchored
+  // to the helper's footer divider (cavebot.lua mountUI), so this lands just above it.
+  Button
+    id: hotkeyBtn
+    height: 16
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    margin-bottom: 6
+    image-color: #3d7fc2
+    !text: tr('Set Hotkey')
+    !tooltip: tr('Bind a key to toggle the cavebot on/off')
+    @onClick: cavebotBindHotkey()

@@ -1,17 +1,19 @@
 --[[
   Scripting tab for AstraClient (3rd script of game_helper).
   --------------------------------------------------------
-  A place for players to write their own Lua scripts. Each script's CODE BODY is
-  run on a loop (every ~200ms) while the script is ENABLED ("loaded"), inside a
-  sandbox that exposes the shared `bot` API (game + cavebot + helper) and a
-  per-script persistent `storage` table.
+  A place for players to drop their own Lua scripts. Scripts are plain .lua FILES
+  in the bot scripts folder (the "Open Scripts Folder" button opens it). Each file's
+  body runs ONCE when the script is ENABLED ("loaded"); for recurring work the script
+  registers Timer(intervalMs, fn) callbacks. It all runs inside a sandbox that exposes
+  the shared `bot` API (game + cavebot + helper), the global `Timer`, and a per-script
+  persistent `storage` table.
 
-  UI: the tab is just two lists -- "Available" (disabled) and "Running" (enabled).
-  Load/Unload move a script between them. The code editor and the debug console
-  (script print()s + errors) are separate windows.
+  UI: the tab is just two lists -- "Available" (in the folder, not running) and
+  "Running" (loaded). Load/Unload move a script between them. The debug console
+  (script print()s + errors) is a separate window.
 
-  Mounted as a tab in the helper window (Scripting.init(window), like Cavebot).
-  Persisted per character at /characterdata/<id>/scripts.json.
+  Scripts folder: <writeDir>/bot_scripts (shared by all characters). Which files
+  are running is persisted per character at /characterdata/<id>/scripts.json.
 
   The full `bot` API is documented in mods/game_helper/SCRIPTING_API.md (wiki).
 ]]
@@ -27,17 +29,16 @@ local disabledListW = nil   -- "Available" list (enabled == false)
 local enabledListW  = nil   -- "Running" list (enabled == true)
 local statusLabel   = nil
 
-local editorWindow = nil    -- transient code-editor window
-local editName     = nil    -- script being edited
 local debugWindow  = nil    -- transient debug console window
 local debugListW   = nil    -- the debug console's row list (nil while closed)
 local debugScrollW = nil    -- its scrollbar (for auto-scroll)
 
-local loopEvent  = nil
-local scripts    = {}      -- name -> { name, code, enabled, fn, nextRun, errors, storage }
+local rescanEvent = nil    -- folder-watch timer (auto-pick-up of dropped files)
+local lastFolderSig = nil  -- last seen folder file-set (skip rebuilds when unchanged)
+local scripts    = {}      -- name -> { name, code, enabled, fn, events, errors, storage }
 local order      = {}      -- display/run order of names
 local selName    = nil     -- selected script (in either list)
-local runningScript = nil  -- the script currently executing (for bot.delay/log)
+local runningScript = nil  -- the script currently executing (for Timer registration / log context)
 local MAX_ERRORS = 5       -- auto-disable a script after this many runtime errors
 
 local debugLines = {}      -- ring buffer of { text, color } for the debug console
@@ -68,18 +69,62 @@ end
 -- ---------------------------------------------------------------------------
 -- Persistence
 -- ---------------------------------------------------------------------------
+-- Scripts live as plain .lua files here (one folder shared by all characters).
+local SCRIPTS_DIR = '/bot_scripts'   -- virtual path (mounted under the write dir)
+
+local function ensureDir()
+  if not g_resources.directoryExists(SCRIPTS_DIR) then
+    pcall(function() g_resources.makeDir(SCRIPTS_DIR) end)
+  end
+end
+
+-- Real OS path of the scripts folder (for g_platform.openDir).
+local function scriptsRealDir()
+  local wd = g_resources.getWriteDir() or ''
+  wd = wd:gsub('[\\/]+$', '')
+  -- Backslashes only: explorer.exe treats a '/' in the path as a command-line switch
+  -- and ignores the path (which is why it was opening Documents instead of the folder).
+  return (wd .. SCRIPTS_DIR):gsub('/', '\\')
+end
+
+-- Sorted list of .lua file names in the scripts folder.
+local function listScripts()
+  ensureDir()
+  local files = {}
+  local ok, list = pcall(function() return g_resources.listDirectoryFiles(SCRIPTS_DIR) end)
+  if ok and type(list) == 'table' then
+    for _, name in ipairs(list) do
+      if type(name) == 'string' and name:lower():match('%.lua$') then
+        files[#files + 1] = name
+      end
+    end
+  end
+  table.sort(files, function(a, b) return a:lower() < b:lower() end)
+  return files
+end
+
+local function readScriptCode(s)
+  local vp = SCRIPTS_DIR .. '/' .. s.name
+  if not g_resources.fileExists(vp) then return nil, 'file not found' end
+  local ok, content = pcall(function() return g_resources.readFileContents(vp) end)
+  if not ok then return nil, tostring(content) end
+  return content or ''
+end
+
 local function configPath()
   if not LoadedPlayer or not LoadedPlayer:isLoaded() then return nil end
   return '/characterdata/' .. LoadedPlayer:getId() .. '/scripts.json'
 end
 
+-- We only persist WHICH files are running (per character); the code lives in the files.
 local function save()
   local p = configPath()
   if not p then return end
-  local out = { order = order, scripts = {}, selected = selName }
-  for name, s in pairs(scripts) do
-    out.scripts[name] = { code = s.code or '', enabled = s.enabled and true or false }
+  local enabled = {}
+  for _, name in ipairs(order) do
+    if scripts[name] and scripts[name].enabled then enabled[#enabled + 1] = name end
   end
+  local out = { enabled = enabled, selected = selName }
   local ok, res = pcall(function() return json.encode(out, 2) end)
   if ok and res then g_resources.writeFileContents(p, res) end
 end
@@ -154,8 +199,6 @@ function bot.say(text) if text ~= nil then g_game.talk(tostring(text)) end end
 
 -- timing / logging ----------------------------------------------------------
 function bot.now() return g_clock.millis() end
--- Pause THIS script for `ms` (it won't run again until then). Use it to throttle.
-function bot.delay(ms) if runningScript then runningScript.nextRun = g_clock.millis() + (tonumber(ms) or 0) end end
 function bot.log(...)
   local parts = {}
   for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
@@ -195,51 +238,94 @@ bot.helper = {
 
 -- ---------------------------------------------------------------------------
 -- Compile / run
+--   A loaded script's FILE BODY runs exactly ONCE (on load). For recurring work
+--   the script registers callbacks with Timer(intervalMs, fn): each Timer is its
+--   own cycleEvent, tracked on the script and torn down when it unloads/relogs.
 -- ---------------------------------------------------------------------------
 local moduleEnv = (type(getfenv) == 'function') and getfenv(1) or _G
 
+-- Cancel every recurring Timer a script registered.
+local function stopScript(s)
+  if s.events then
+    for _, h in ipairs(s.events) do
+      if h.ev then pcall(removeEvent, h.ev); h.ev = nil end
+    end
+  end
+  s.events = {}
+end
+
+-- Count a runtime error against a script; auto-disable after MAX_ERRORS (which also
+-- kills its Timers, so a broken script can't keep firing).
+local function onScriptError(s, err)
+  s.errors = (s.errors or 0) + 1
+  debugAppend(s.name .. ' runtime error: ' .. tostring(err), '#ff6666')
+  if s.errors >= MAX_ERRORS then
+    s.enabled = false
+    stopScript(s)
+    debugAppend(s.name .. ' disabled after ' .. MAX_ERRORS .. ' errors', '#ffaa55')
+    Scripting.refreshLists()
+    save()
+  end
+end
+
+-- Run the script's file body ONCE. The body sets up state and registers Timers.
+local function runScriptOnce(s)
+  if not s.fn then return end
+  stopScript(s)            -- clear any Timers left from a previous run
+  runningScript = s
+  local ok, err = pcall(s.fn)
+  runningScript = nil
+  if not ok then onScriptError(s, err) end
+end
+
+-- Timer(intervalMs, fn): exposed to scripts. Runs `fn` every `intervalMs` (first
+-- tick after one interval) while the script stays loaded. Returns a handle whose
+-- :stop() cancels just this timer. All of a script's timers are auto-cancelled when
+-- it is unloaded, errors out, or you relog.
+local function botTimer(interval, fn)
+  local s = runningScript
+  if not s then
+    error('Timer() can only be called while a script is running', 2)
+  end
+  interval = tonumber(interval)
+  if not interval or interval < 1 or type(fn) ~= 'function' then
+    error('Timer(intervalMs, fn): expected a positive number and a function', 2)
+  end
+  local h = {}
+  h.ev = cycleEvent(function()
+    if not h.ev or not s.enabled or not g_game.isOnline() then return end
+    runningScript = s
+    local ok, err = pcall(fn)
+    runningScript = nil
+    if not ok then onScriptError(s, err) end
+  end, interval)
+  s.events = s.events or {}
+  s.events[#s.events + 1] = h
+  return { stop = function() if h.ev then pcall(removeEvent, h.ev); h.ev = nil end end }
+end
+
 local function compile(s)
   s.fn = nil
-  if not s.code or #s.code == 0 then return true end
-  local fn, err = loadstring(s.code, '@' .. s.name)
+  local code, rerr = readScriptCode(s)
+  if not code then
+    debugAppend(s.name .. ' read error: ' .. tostring(rerr), '#ff6666')
+    return false, rerr
+  end
+  s.code = code
+  if #code == 0 then return true end
+  local fn, err = loadstring(code, '@' .. s.name)
   if not fn then
     debugAppend(s.name .. ' compile error: ' .. tostring(err), '#ff6666')
     return false, err
   end
-  -- Sandbox: expose `bot`, a persistent `storage`, and `print`=bot.log; fall back
-  -- to the module env (g_game, g_map, math, string, ...) for everything else.
+  -- Sandbox: expose `bot`, `Timer`, a persistent `storage`, and `print`=bot.log;
+  -- fall back to the module env (g_game, g_map, math, string, ...) for the rest.
   if setfenv then
-    setfenv(fn, setmetatable({ bot = bot, storage = s.storage, print = bot.log },
+    setfenv(fn, setmetatable({ bot = bot, storage = s.storage, print = bot.log, Timer = botTimer },
                              { __index = moduleEnv }))
   end
   s.fn = fn
   return true
-end
-
-local function runOne(s, now)
-  if not s.fn or now < (s.nextRun or 0) then return end
-  runningScript = s
-  local ok, err = pcall(s.fn)
-  runningScript = nil
-  if not ok then
-    s.errors = (s.errors or 0) + 1
-    debugAppend(s.name .. ' runtime error: ' .. tostring(err), '#ff6666')
-    if s.errors >= MAX_ERRORS then
-      s.enabled = false
-      debugAppend(s.name .. ' disabled after ' .. MAX_ERRORS .. ' errors', '#ffaa55')
-      Scripting.refreshLists()
-      save()
-    end
-  end
-end
-
-local function loop()
-  if not g_game.isOnline() then return end
-  local now = g_clock.millis()
-  for _, name in ipairs(order) do
-    local s = scripts[name]
-    if s and s.enabled then runOne(s, now) end
-  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -256,9 +342,12 @@ local function setEnabled(s, on)
       end
       return false
     end
-    s.nextRun = 0
+    s.enabled = true        -- set before the body runs so its Timers see it enabled
+    runScriptOnce(s)        -- run the file body exactly once; it registers Timers
+  else
+    s.enabled = false
+    stopScript(s)
   end
-  s.enabled = on
   save()
   return true
 end
@@ -332,46 +421,20 @@ function Scripting.unloadSelected()
 end
 
 -- ---------------------------------------------------------------------------
--- New / edit / delete
+-- Scripts folder
 -- ---------------------------------------------------------------------------
-local function uniqueName(base)
-  local n, name = 0, base
-  while scripts[name] do n = n + 1; name = base .. ' ' .. n end
-  return name
+function Scripting.openFolder()
+  ensureDir()
+  local real = scriptsRealDir()
+  local ok = pcall(function() g_platform.openDir(real) end)
+  if not ok then
+    setStatus(tr('Could not open: %s', real), '#cc4444')
+  end
+  -- Re-scan shortly after, so files added in the folder show up on return.
+  scheduleEvent(function() Scripting.rescan() end, 1500)
 end
 
-function Scripting.newScript()
-  local name = uniqueName('Script')
-  scripts[name] = { name = name, enabled = false, storage = {},
-    code = '-- ' .. name .. '\n-- Runs every ~200ms while loaded. Use print(...) to debug.\n-- See SCRIPTING_API.md for the full bot.* API.\n\n' }
-  table.insert(order, name)
-  selName = name
-  Scripting.refreshLists()
-  save()
-  Scripting.openEditor(name)
-end
-
-function Scripting.editSelected()
-  if not selName or not scripts[selName] then setStatus(tr('Select a script first.'), '#cc4444'); return end
-  Scripting.openEditor(selName)
-end
-
-function Scripting.deleteSelected()
-  local name = selName
-  if not name or not scripts[name] then setStatus(tr('Select a script first.'), '#cc4444'); return end
-  local box
-  local function close() if box then box:destroy(); box = nil end end
-  box = displayGeneralBox(tr('Delete Script'), tr('Delete "%s"?', name),
-    { { text = tr('Yes'), callback = function()
-          scripts[name] = nil
-          for i, n in ipairs(order) do if n == name then table.remove(order, i); break end end
-          if selName == name then selName = order[1] end
-          if editName == name and editorWindow then editorWindow:destroy(); editorWindow = nil; editName = nil end
-          Scripting.refreshLists(); save(); close()
-        end },
-      { text = tr('No'), callback = close } }, nil, close)
-end
-
+-- Right-click a row: just load/unload (scripts are edited as files in the folder).
 function Scripting.scriptMenu(name, mousePos)
   local menu = g_ui.createWidget('PopupMenu')
   menu:setGameMenu(true)
@@ -380,72 +443,8 @@ function Scripting.scriptMenu(name, mousePos)
     Scripting.selectScript(name)
     if s and s.enabled then Scripting.unloadSelected() else Scripting.loadSelected() end
   end)
-  menu:addOption(tr('Edit'), function() Scripting.selectScript(name); Scripting.openEditor(name) end)
-  menu:addOption(tr('Rename'), function() Scripting.renameScript(name) end)
-  menu:addOption(tr('Delete'), function() Scripting.selectScript(name); Scripting.deleteSelected() end)
+  menu:addOption(tr('Open Scripts Folder'), function() Scripting.openFolder() end)
   menu:display(mousePos)
-end
-
-function Scripting.renameScript(old)
-  local box = UIInputBox.create(tr('Rename Script'), function(name)
-    if not name or #name == 0 or name == old or scripts[name] then return end
-    local s = scripts[old]; scripts[old] = nil; s.name = name; scripts[name] = s
-    for i, n in ipairs(order) do if n == old then order[i] = name end end
-    if selName == old then selName = name end
-    if editName == old then editName = name end
-    Scripting.refreshLists()
-    save()
-  end, nil)
-  box:addLineEdit(tr('New name'), old, 200)
-  box:display()
-end
-
--- ---------------------------------------------------------------------------
--- Editor window
--- ---------------------------------------------------------------------------
-function Scripting.openEditor(name)
-  local s = scripts[name]
-  if not s then return end
-  if editorWindow then editorWindow:destroy(); editorWindow = nil end
-  local w = g_ui.createWidget('ScriptEditorWindow', g_ui.getRootWidget())
-  editorWindow = w
-  editName = name
-  w:setText(tr('Script Editor') .. ' - ' .. name)
-
-  local code = w:recursiveGetChildById('codeEdit')
-  if code then code:setText(s.code or '') end
-  local estatus = w:recursiveGetChildById('editorStatus')
-  local function setE(t, c) if estatus then estatus:setText(t or ''); if c then estatus:setColor(c) end end end
-
-  local function close()
-    if editorWindow then editorWindow:destroy(); editorWindow = nil; editName = nil end
-  end
-  w:recursiveGetChildById('closeBtn').onClick = close
-
-  w:recursiveGetChildById('saveBtn').onClick = function()
-    if code then s.code = code:getText() end
-    s.errors = 0
-    if s.enabled then
-      local ok = compile(s)
-      if not ok then setE(tr('Saved (syntax error — see Debug)'), '#cc4444')
-      else s.nextRun = 0; setE(tr('Saved & recompiled'), '#44ad25') end
-    else
-      setE(tr('Saved'), '#44ad25')
-    end
-    save()
-  end
-
-  w:recursiveGetChildById('runBtn').onClick = function()
-    if code then s.code = code:getText() end
-    local ok = compile(s)
-    if not ok then setE(tr('Syntax error — see Debug'), '#cc4444'); return end
-    if not s.fn then setE(tr('Nothing to run (empty)'), '#c0c0c0'); return end
-    runningScript = s
-    local pok, perr = pcall(s.fn)
-    runningScript = nil
-    if pok then setE(tr('Ran once OK'), '#44ad25')
-    else setE(tr('Runtime error — see Debug'), '#cc4444'); debugAppend(name .. ' run: ' .. tostring(perr), '#ff6666') end
-  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -481,31 +480,77 @@ end
 -- ---------------------------------------------------------------------------
 local function load()
   scripts, order, selName = {}, {}, nil
+  -- Per-character: which files were running last session.
+  local enabledSet = {}
   local p = configPath()
   if p and g_resources.fileExists(p) then
     local ok, res = pcall(function() return json.decode(g_resources.readFileContents(p)) end)
     if ok and type(res) == 'table' then
-      for _, name in ipairs(res.order or {}) do
-        local sc = res.scripts and res.scripts[name]
-        if sc then
-          scripts[name] = { name = name, code = sc.code or '', enabled = false, storage = {} }
-          table.insert(order, name)
-        end
-      end
+      for _, name in ipairs(res.enabled or {}) do enabledSet[name] = true end
       selName = res.selected
-      -- compile + re-enable any that were enabled
-      for _, name in ipairs(order) do
-        local saved = res.scripts[name]
-        if saved and saved.enabled then setEnabled(scripts[name], true) end
-      end
     end
   end
-  if #order == 0 then
-    scripts['Example'] = { name = 'Example', enabled = false, storage = {},
-      code = '-- Example: print your HP% every 5s (open Debug to see it).\nprint("HP", bot.hpp() .. "%")\nbot.delay(5000)\n' }
-    table.insert(order, 'Example')
+  ensureDir()
+  local files = listScripts()
+  -- Seed a starter script the first time the folder is empty.
+  if #files == 0 then
+    pcall(function()
+      g_resources.writeFileContents(SCRIPTS_DIR .. '/example.lua',
+        '-- Example script. The file body runs ONCE when the script is loaded.\n' ..
+        '-- For recurring work, register a Timer(intervalMs, function): it runs your\n' ..
+        '-- callback every intervalMs while the script stays loaded.\n' ..
+        '-- See mods/game_helper/SCRIPTING_API.md for the full bot.* API.\n\n' ..
+        'print("script loaded for", bot.name())\n\n' ..
+        'Timer(5000, function()\n' ..
+        '  print("HP", bot.hpp() .. "%")\n' ..
+        'end)\n')
+    end)
+    files = listScripts()
+  end
+  for _, name in ipairs(files) do
+    scripts[name] = { name = name, enabled = false, storage = {}, errors = 0 }
+    order[#order + 1] = name
+  end
+  -- Re-enable files that were running last session.
+  for _, name in ipairs(order) do
+    if enabledSet[name] then setEnabled(scripts[name], true) end
   end
   if not selName or not scripts[selName] then selName = order[1] end
+end
+
+-- Re-scan the folder, keeping running scripts running. Picks up files the user
+-- added/removed externally; called when the tab is shown and after Open Folder.
+function Scripting.rescan()
+  if not panel then return end
+  ensureDir()
+  local files = listScripts()
+  local present = {}
+  for _, name in ipairs(files) do present[name] = true end
+  -- Drop entries whose file vanished (stop them and their Timers if running).
+  for name, s in pairs(scripts) do
+    if not present[name] then stopScript(s); s.enabled = false; scripts[name] = nil end
+  end
+  -- Add newly-appeared files.
+  for _, name in ipairs(files) do
+    if not scripts[name] then
+      scripts[name] = { name = name, enabled = false, storage = {}, errors = 0 }
+    end
+  end
+  -- Rebuild order (alphabetical) from what's actually present.
+  order = {}
+  for _, name in ipairs(files) do order[#order + 1] = name end
+  if not selName or not scripts[selName] then selName = order[1] end
+  lastFolderSig = table.concat(files, '|')
+  Scripting.refreshLists()
+  save()
+end
+
+-- Folder watch: while the Scripts tab is open, cheaply poll the folder and rescan
+-- only when its file set actually changed, so files dropped in show up on their own.
+function Scripting.autoRescan()
+  if not panel or not panel:isVisible() or not g_game.isOnline() then return end
+  local sig = table.concat(listScripts(), '|')
+  if sig ~= lastFolderSig then Scripting.rescan() end
 end
 
 -- ---------------------------------------------------------------------------
@@ -541,28 +586,35 @@ function Scripting.init(window)
 end
 
 function Scripting.online()
-  load()
+  load()  -- re-enables the scripts that were running last session (runs each body once)
+  lastFolderSig = table.concat(order, '|')
   Scripting.refreshLists()
   setStatus(tr('Ready'), '#c0c0c0')
-  if loopEvent then removeEvent(loopEvent) end
-  loopEvent = cycleEvent(loop, 200)
+  if rescanEvent then removeEvent(rescanEvent) end
+  rescanEvent = cycleEvent(Scripting.autoRescan, 2000) -- folder watch (only while tab visible)
 end
 
 function Scripting.offline()
-  if loopEvent then removeEvent(loopEvent); loopEvent = nil end
+  for _, s in pairs(scripts) do stopScript(s) end  -- cancel every script's Timers
+  if rescanEvent then removeEvent(rescanEvent); rescanEvent = nil end
   save()
 end
 
 function Scripting.terminate()
-  if loopEvent then removeEvent(loopEvent); loopEvent = nil end
-  if editorWindow then editorWindow:destroy(); editorWindow = nil end
+  for _, s in pairs(scripts) do stopScript(s) end
+  if rescanEvent then removeEvent(rescanEvent); rescanEvent = nil end
   if debugWindow then debugWindow:destroy(); debugWindow = nil end
   debugListW, debugScrollW = nil, nil
   helperWindow = nil
   panel = nil
 end
 
-function Scripting.showPanel() if panel then panel:show() end end
+function Scripting.showPanel()
+  if not panel then return end
+  panel:show()
+  -- Pick up files added/edited in the folder while the tab was hidden.
+  if g_game.isOnline() then Scripting.rescan() end
+end
 function Scripting.hidePanel() if panel then panel:hide() end end
 
 -- Register styles before helper.lua displays its UI.

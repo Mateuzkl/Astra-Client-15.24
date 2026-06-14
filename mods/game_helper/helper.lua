@@ -67,7 +67,9 @@ local timers = {
   checkMagicShooter = 0,
   checkAutoTarget = 0,
   checkExerciseEvent = 0,
-  checkMageShield = 0
+  checkUtamoVita = 0,
+  checkExanaVita = 0,
+  checkShieldPotion = 0
 }
 
 local eventTable = {
@@ -79,7 +81,9 @@ local eventTable = {
   checkMagicShooter = { interval = 100, action = nil },
   checkAutoTarget = { interval = 250, action = nil },
   checkExerciseEvent = { interval = 10000, action = nil },
-  checkMageShield = { interval = 200, action = nil }
+  checkUtamoVita = { interval = 150, action = nil },
+  checkExanaVita = { interval = 300, action = nil },
+  checkShieldPotion = { interval = 150, action = nil }
 }
 
 local spellsCooldown = {}
@@ -184,32 +188,71 @@ helperConfig = {
   currentLockedTargetId = 0
 }
 
+-- Synced from the koliseuot server (2026-06-13, data/scripts/actions/items/foods.lua):
+-- every food that actually feeds. Zero-nutrition items (headache pill, stale mushroom
+-- beer) and the infinite buff-foods are intentionally excluded from auto-eat here.
 local foodIds = {
-  3577, 3578, 3579, 3581, 3582, 3583, 3585, 3586, 3587,
-  3588, 3589, 3592, 3595, 3597, 3600, 3601, 3602, 3606,
-  3607, 3723, 3724, 3725, 3728, 3731, 3732, 8011, 8014,
-  8016, 8017, 12310, 14085, 17457, 17820, 17821, 21143,
-  21144, 21146, 23535, 23545
+  169, 229, 836, 841, 901, 904, 3250, 3577, 3578, 3579,
+  3580, 3581, 3582, 3583, 3584, 3585, 3586, 3587, 3588, 3589,
+  3590, 3591, 3592, 3593, 3594, 3595, 3596, 3597, 3598, 3599,
+  3600, 3601, 3602, 3606, 3607, 3723, 3724, 3725, 3726, 3727,
+  3728, 3729, 3730, 3731, 3732, 5096, 5678, 6125, 6277, 6278,
+  6392, 6393, 6500, 6541, 6542, 6543, 6544, 6545, 6569, 6574,
+  7158, 7159, 7373, 7374, 7375, 7376, 7377, 8010, 8011, 8012,
+  8013, 8014, 8015, 8016, 8017, 8019, 8177, 8197, 10219, 10329,
+  10453, 11459, 11460, 11461, 11462, 11681, 11682, 11683, 12310, 13992,
+  14084, 14085, 14681, 16103, 17457, 17820, 17821, 20310, 21143, 21144,
+  21145, 21146, 22185, 22187, 23535, 23545, 24382, 24383, 24396, 24948,
+  25692, 30198, 30202, 31560, 32069, 37530, 37531, 37532, 37533, 48116,
+  48251, 48252, 48253, 48254, 48255, 48256, 48273, 48508, 48509, 48511,
+  48544
 }
 
+-- Infinite/permanent buff-foods (server does not consume them) -- eaten first.
 local infiniteFoodIds = {
-  61615, 61672, 61930, 62184, 62267, 62268, 63235, 63314,
-  63723
+  60023, 60055
 }
 
-local exerciseDummies = {
-  28558, 28559, 28560, 28561, 28562, 28563, 28564, 28565,
-  61621, 61622, 61623, 61624, 61698, 61699, 61892, 61893,
-  61974, 61975, 62118, 62119, 62191, 62192, 62228, 62229,
-  62294, 62295, 63249, 63250, 63713
+-- Exercise dummies as a map of item id -> training rate, synced from the koliseuot
+-- server (items.xml type=dummy attribute, 2026-06-14). Rate tiers:
+--   150 = premium / levelable (undead soldier + skins; each dummy level adds +20 on
+--         top, but the level is server-only and invisible to the client),
+--   120/130 = house / expert, 100 = public / store.
+-- The auto-trainer prefers the highest-rate reachable dummy and falls back down the
+-- tiers. (5787/5788 "training dummy" and 15710 "target dummy" are NOT type=dummy on
+-- the server -> not trainable, intentionally excluded.)
+local dummyRates = {
+  [28558]=100, [28561]=120, [28562]=120, [28563]=120, [28564]=120, [28565]=100,
+  [57244]=150, [57248]=150, [60009]=150, [60010]=150, [60012]=150, [60013]=150,
+  [60014]=150, [60015]=150, [60018]=150, [60019]=150, [60021]=100, [60026]=100,
+  [60031]=120, [60032]=120, [60033]=120, [60034]=120, [60062]=120, [60063]=120,
+  [60102]=120, [60103]=120, [60127]=120, [60128]=120, [60130]=150, [60131]=150,
+  [60139]=120, [60140]=120, [60153]=120, [60154]=120, [60163]=120, [60164]=120,
+  [60261]=120, [60262]=120, [60298]=120, [60299]=120, [60308]=150, [60309]=150,
+  [60310]=150, [60311]=150, [60453]=120, [60454]=120, [60620]=130, [60621]=130,
+  [60856]=150, [60857]=150, [61198]=150, [61199]=150, [62806]=120, [62809]=120,
+  [63007]=150, [63008]=150, [63066]=150, [63067]=150, [63068]=150, [63069]=150,
+  [63070]=150, [63071]=150, [63571]=150, [63572]=150, [63573]=150, [63574]=150,
+  [64198]=150, [64199]=150, [64201]=150, [64202]=150, [64203]=150, [64204]=150,
+  [64205]=150, [64206]=150, [64207]=150, [64208]=150, [64209]=150, [64210]=150,
+  [64308]=150, [64309]=150
 }
 
+-- Exercise weapons (server exerciseWeaponsTable + boosted), server-synced 2026-06-13.
 local exercises = {
-  28552, 28553, 28554, 28555, 28556, 28557, 35279, 35280,
-  35281, 35282, 35283, 35284, 35285, 35286, 35287, 35288,
-  35289, 35290, 44064, 44065, 44066, 44067, 50292, 50293,
-  50294, 50295, 62101, 62102, 62103, 62104, 62105, 62106,
-  62107, 63492
+  28540, 28541, 28542, 28543, 28544, 28545, 28552, 28553, 28554, 28555,
+  28556, 28557, 35279, 35280, 35281, 35282, 35283, 35284, 35285, 35286,
+  35287, 35288, 35289, 35290, 44064, 44065, 44066, 44067, 50292, 50293,
+  50294, 50295, 60640, 60641, 60642, 60643, 60644, 60645, 60646
+}
+
+-- Exercise weapons usable from a distance (allowFarUse on the server: rods, wands,
+-- bows/distance). Anything else (sword/axe/club/fist/shield) must hit an ADJACENT
+-- dummy, so the auto-trainer only considers dummies within 1 sqm for those.
+local farUseExercises = {
+  [28543]=true, [28544]=true, [28545]=true, [28555]=true, [28556]=true, [28557]=true,
+  [35282]=true, [35283]=true, [35284]=true, [35288]=true, [35289]=true, [35290]=true,
+  [60644]=true, [60645]=true
 }
 
 -- spells that can be cast on both targets and self
@@ -273,19 +316,28 @@ local ignoredTrainingSpells = {
   [277] = true,
 }
 
+-- Drinkable HP/mana/spirit potions, synced from the koliseuot server (2026-06-13,
+-- data/scripts/actions/items/potions.lua). Spirit potions restore both but are
+-- classed as "health" (used in the healer's health slot, matching prior behaviour).
 local potionWhitelist = {
+  -- Mana
   { id = 268,   name = "Mana Potion",            type = "mana" },
   { id = 237,   name = "Strong Mana Potion",     type = "mana" },
   { id = 238,   name = "Great Mana Potion",      type = "mana" },
   { id = 23373, name = "Ultimate Mana Potion",   type = "mana" },
+  { id = 60258, name = "Cosmic Mana Potion",     type = "mana" },
+  -- Health
+  { id = 7876,  name = "Small Health Potion",    type = "health" },
   { id = 266,   name = "Health Potion",          type = "health" },
   { id = 236,   name = "Strong Health Potion",   type = "health" },
   { id = 239,   name = "Great Health Potion",    type = "health" },
   { id = 7643,  name = "Ultimate Health Potion", type = "health" },
   { id = 23375, name = "Supreme Health Potion",  type = "health" },
+  { id = 60259, name = "Cosmic Health Potion",   type = "health" },
+  -- Spirit (restore both HP and mana)
   { id = 7642,  name = "Great Spirit Potion",    type = "health" },
   { id = 23374, name = "Ultimate Spirit Potion", type = "health" },
-  { id = 7876,  name = "Small Health Potion",    type = "health" }
+  { id = 60260, name = "Cosmic Spirit Potion",   type = "health" }
 }
 
 local hasteWhiteList = {
@@ -312,6 +364,7 @@ function init()
     onPartyDataUpdate = onPartyDataUpdate,
     onPartyDataClear = onPartyDataClear,
     onMultiUseCooldown = onMultiUseCooldown,
+    onTextMessage = onExerciseTextMessage,
   })
 
   connect(Creature, {
@@ -393,6 +446,7 @@ function terminate()
     onPartyDataUpdate = onPartyDataUpdate,
     onPartyDataClear = onPartyDataClear,
     onMultiUseCooldown = onMultiUseCooldown,
+    onTextMessage = onExerciseTextMessage,
   })
 
   disconnect(Creature, {
@@ -461,69 +515,113 @@ end
 -- ===========================================================================
 local MAGIC_SHIELD_SPELL_ID = 44   -- "Magic Shield" (utamo vita)
 local MAGIC_SHIELD_GROUP    = 3    -- support-spell cooldown group (utamo/exana vita)
+local MAGIC_SHIELD_POTION_ID = 35563 -- Tibia "magic shield potion" client id (locked)
 local mageShieldIsMage   = false   -- cached vocation gate
 local mageShieldPanel    = nil     -- the tools sub-panel (nil until mounted)
 local mageShieldBound    = {}      -- which -> bound key combo (to unbind on rebind)
-local mageShieldNextAction = 0     -- throttle so we never spam casts/potions
 
 local function msChild(id) return mageShieldPanel and mageShieldPanel:recursiveGetChildById(id) or nil end
 
--- The loop (eventTable.checkMageShield, ~200ms).
-local function checkMageShield()
-  if not hotkeyHelperStatus or not mageShieldIsMage then return end
+-- Reusable +/- percent selector (matches the Auto-Healing widget). Global so the
+-- cavebot (2nd script) can use it too. State is stored on the selector widget.
+function initPercentSelector(selector, value, minv, maxv, step, suffix, onChange)
+  if not selector then return end
+  selector.percentMin = minv or 0
+  selector.percentMax = maxv or 99
+  selector.percentStep = step or 1
+  selector.percentSuffix = suffix or '%'
+  selector.percentValue = math.max(selector.percentMin, math.min(selector.percentMax, tonumber(value) or 0))
+  selector.onPercentChange = onChange
+  -- label lives inside the 'bg' child, so it must be looked up recursively
+  local lbl = selector:recursiveGetChildById('label')
+  if lbl then lbl:setText(selector.percentValue .. selector.percentSuffix) end
+end
+
+function onPercentStep(selector, delta)
+  if not selector or (selector.isEnabled and not selector:isEnabled()) then return end
+  local v = (selector.percentValue or 0) + delta * (selector.percentStep or 1)
+  v = math.max(selector.percentMin or 0, math.min(selector.percentMax or 99, v))
+  selector.percentValue = v
+  local lbl = selector:recursiveGetChildById('label')
+  if lbl then lbl:setText(v .. (selector.percentSuffix or '%')) end
+  if selector.onPercentChange then selector.onPercentChange(v) end
+end
+
+function getPercentValue(selector) return (selector and selector.percentValue) or 0 end
+
+-- Mage-shield checks run as INDEPENDENT eventTable timers (utamo / exana / potion),
+-- so each fires on its own schedule and a throttle/condition in one never blocks the
+-- others -- and they are fully independent from the healer/shooter checks too.
+-- mageCtx() gathers the shared player state once per call (nil = not applicable now).
+local function mageCtx()
+  if not hotkeyHelperStatus or not mageShieldIsMage then return nil end
   local p = g_game.getLocalPlayer()
-  if not p or not g_game.isOnline() then return end
-  local ms = helperConfig and helperConfig.mageShield
-  if not ms then return end
-
-  local now = g_clock.millis()
-  if now < mageShieldNextAction then return end
-
+  if not p or not g_game.isOnline() then return nil end
   local maxhp = p:getMaxHealth()
-  if maxhp <= 0 then return end
-  local lifePct  = p:getHealth() / maxhp * 100
+  if maxhp <= 0 then return nil end
+  local now = g_clock.millis()
   local shieldRem = (p.getManaShield and p:getManaShield()) or 0
   local shieldMax = (p.getMaxManaShield and p:getMaxManaShield()) or 0
-  local shieldActive = shieldRem > 0
-  local shieldPct = (shieldMax > 0) and (shieldRem / shieldMax * 100) or 0
-  local vitaOnCd  = getSpellCooldown(MAGIC_SHIELD_SPELL_ID) > now or getGroupSpellCooldown(MAGIC_SHIELD_GROUP) > now
+  return {
+    p = p, now = now,
+    life = p:getHealth() / maxhp * 100,
+    mana = p:getMana(),
+    shieldActive = shieldRem > 0,
+    shieldPct = (shieldMax > 0) and (shieldRem / shieldMax * 100) or 0,
+    vitaOnCd = getSpellCooldown(MAGIC_SHIELD_SPELL_ID) > now or getGroupSpellCooldown(MAGIC_SHIELD_GROUP) > now,
+  }
+end
 
-  -- 1) Utamo Vita: keep the shield up (cast on low life, or renew when shield low).
-  local u = ms.utamo
-  if u and u.enabled and not vitaOnCd and p:getMana() >= 50 then
-    local cast = lifePct <= (u.life or 0)
-    if not cast and u.renew and shieldActive and shieldPct < (u.renewShield or 0) then cast = true end
-    if cast then
-      g_game.talk('utamo vita')
-      mageShieldNextAction = now + 1000
-      return
-    end
-  end
-
-  -- 2) Exana Vita: drop the shield when safe (life above threshold AND shield up).
-  local e = ms.exana
-  if e and e.enabled and shieldActive and lifePct > (e.life or 100) and not vitaOnCd then
-    g_game.talk('exana vita')
-    mageShieldNextAction = now + 1000
-    return
-  end
-
-  -- 3) Magic Shield Potion: gated by life / shield% / fear, optionally only on vita CD.
-  local po = ms.potion
-  if po and po.enabled and po.itemId and po.itemId > 0 then
-    local feared = (PlayerStates and PlayerStates.Feared and p.hasState and p:hasState(PlayerStates.Feared)) or false
-    local trigger = false
-    if po.forceOnFear and feared then trigger = true end
-    if po.life > 0 and lifePct <= po.life then trigger = true end
-    if po.shield > 0 and shieldActive and shieldPct < po.shield then trigger = true end
-    if trigger and not (po.onlyVitaCd and not vitaOnCd) then
-      g_game.useInventoryItem(po.itemId)
-      mageShieldNextAction = now + 1000
-      return
-    end
+-- 1) Utamo Vita: keep the shield up (cast on low life, or renew when shield is low).
+local utamoNextCast = 0
+local function checkUtamoVita()
+  local u = helperConfig.mageShield and helperConfig.mageShield.utamo
+  if not u or not u.enabled then return end
+  local c = mageCtx(); if not c then return end
+  if c.now < utamoNextCast or c.vitaOnCd or c.mana < 50 then return end
+  local cast = c.life <= (u.life or 0)
+  if not cast and u.renew and c.shieldActive and c.shieldPct < (u.renewShield or 0) then cast = true end
+  if cast then
+    g_game.talk('utamo vita')
+    utamoNextCast = c.now + 500 -- cover the cooldown-packet latency window
   end
 end
-eventTable.checkMageShield.action = checkMageShield
+eventTable.checkUtamoVita.action = checkUtamoVita
+
+-- 2) Exana Vita: drop the shield when safe (life above threshold AND shield up).
+local exanaNextCast = 0
+local function checkExanaVita()
+  local e = helperConfig.mageShield and helperConfig.mageShield.exana
+  if not e or not e.enabled then return end
+  local c = mageCtx(); if not c then return end
+  if c.now < exanaNextCast or c.vitaOnCd or not c.shieldActive then return end
+  if c.life > (e.life or 100) then
+    g_game.talk('exana vita')
+    exanaNextCast = c.now + 500
+  end
+end
+eventTable.checkExanaVita.action = checkExanaVita
+
+-- 3) Magic Shield Potion: gated by life / shield% / fear, optionally only on vita CD.
+local potionNextUse = 0
+local function checkShieldPotion()
+  local po = helperConfig.mageShield and helperConfig.mageShield.potion
+  if not po or not po.enabled then return end
+  local c = mageCtx(); if not c then return end
+  if c.now < potionNextUse then return end
+  local feared = (PlayerStates and PlayerStates.Feared and c.p.hasState and c.p:hasState(PlayerStates.Feared)) or false
+  local trigger = false
+  if po.forceOnFear and feared then trigger = true end
+  if po.life > 0 and c.life <= po.life then trigger = true end
+  if po.shield > 0 and c.shieldActive and c.shieldPct < po.shield then trigger = true end
+  -- "only on vita CD" only makes sense if Utamo Vita is enabled; otherwise ignore it.
+  local onlyVitaCd = po.onlyVitaCd and (helperConfig.mageShield.utamo and helperConfig.mageShield.utamo.enabled)
+  if trigger and not (onlyVitaCd and not c.vitaOnCd) then
+    g_game.useInventoryItem(MAGIC_SHIELD_POTION_ID)
+    potionNextUse = c.now + 1000 -- potions have a ~1s use exhaust
+  end
+end
+eventTable.checkShieldPotion.action = checkShieldPotion
 
 -- Enable/disable toggles (also driven by the hotkeys). Update the checkbox + save.
 function toggleUtamoEnabled()
@@ -570,8 +668,14 @@ end
 local function syncMageHotkeyButtons()
   local cu = helperConfig.mageShield.utamo.hotkey or ''
   local ce = helperConfig.mageShield.exana.hotkey or ''
-  local bu = msChild('msUtamoKey'); if bu then bu:setText((#cu > 0) and tr('Key: %s', cu) or tr('Set Key')) end
-  local be = msChild('msExanaKey'); if be then be:setText((#ce > 0) and tr('Key: %s', ce) or tr('Set Key')) end
+  local bu = msChild('msUtamoKey')
+  if bu then
+    bu:setTooltip((#cu > 0) and tr('Utamo Vita hotkey: %s (click to change)', cu) or tr('Set a hotkey to toggle Utamo Vita'))
+  end
+  local be = msChild('msExanaKey')
+  if be then
+    be:setTooltip((#ce > 0) and tr('Exana Vita hotkey: %s (click to change)', ce) or tr('Set a hotkey to toggle Exana Vita'))
+  end
 end
 
 -- Key-capture window (MageHotkeyWindow). `which` = 'utamo' | 'exana'.
@@ -612,11 +716,11 @@ function openUtamoSettings()
   local u = helperConfig.mageShield.utamo
   local w = g_ui.createWidget('MageShieldSettings', g_ui.getRootWidget())
   w.renewCheck:setChecked(u.renew and true or false)
-  w.renewBox:setMinimum(1); w.renewBox:setMaximum(99); w.renewBox:setValue(u.renewShield or 50)
+  initPercentSelector(w.renewBox, u.renewShield or 50, 1, 99, 1, '%')
   w.cancelButton.onClick = function() w:destroy() end
   w.saveButton.onClick = function()
     u.renew = w.renewCheck:isChecked()
-    u.renewShield = math.max(1, math.min(99, w.renewBox:getValue()))
+    u.renewShield = getPercentValue(w.renewBox)
     saveSettings(); w:destroy()
   end
 end
@@ -624,16 +728,17 @@ end
 function openPotionSettings()
   local po = helperConfig.mageShield.potion
   local w = g_ui.createWidget('MageShieldPotionSettings', g_ui.getRootWidget())
-  w.itemBox:setMinimum(0); w.itemBox:setMaximum(99999); w.itemBox:setValue(po.itemId or 0)
-  w.lifeBox:setMinimum(0); w.lifeBox:setMaximum(99); w.lifeBox:setValue(po.life or 0)
-  w.shieldBox:setMinimum(0); w.shieldBox:setMaximum(99); w.shieldBox:setValue(po.shield or 0)
-  w.vitaCdCheck:setChecked(po.onlyVitaCd and true or false)
+  initPercentSelector(w.lifeBox, po.life or 0, 0, 99, 1, '%')
+  initPercentSelector(w.shieldBox, po.shield or 0, 0, 99, 1, '%')
+  -- "only on vita CD" is only meaningful while Utamo Vita is enabled.
+  local utamoOn = (helperConfig.mageShield.utamo and helperConfig.mageShield.utamo.enabled) and true or false
+  w.vitaCdCheck:setChecked(po.onlyVitaCd and utamoOn)
+  w.vitaCdCheck:setEnabled(utamoOn)
   w.fearCheck:setChecked(po.forceOnFear and true or false)
   w.cancelButton.onClick = function() w:destroy() end
   w.saveButton.onClick = function()
-    po.itemId = math.max(0, w.itemBox:getValue())
-    po.life   = math.max(0, math.min(99, w.lifeBox:getValue()))
-    po.shield = math.max(0, math.min(99, w.shieldBox:getValue()))
+    po.life   = getPercentValue(w.lifeBox)
+    po.shield = getPercentValue(w.shieldBox)
     po.onlyVitaCd  = w.vitaCdCheck:isChecked()
     po.forceOnFear = w.fearCheck:isChecked()
     saveSettings(); w:destroy()
@@ -659,9 +764,9 @@ function setupMageShield()
   local ms = helperConfig.mageShield
   local function setup(id, fn) local w = msChild(id); if w then fn(w) end end
   setup('msUtamoEnable', function(w) w:setChecked(ms.utamo.enabled and true or false) end)
-  setup('msUtamoLife', function(w) w:setMinimum(0); w:setMaximum(99); w:setValue(ms.utamo.life or 30) end)
+  initPercentSelector(msChild('msUtamoLife'), ms.utamo.life or 30, 0, 99, 1, '%', function(v) ms.utamo.life = v; saveSettings() end)
   setup('msExanaEnable', function(w) w:setChecked(ms.exana.enabled and true or false) end)
-  setup('msExanaLife', function(w) w:setMinimum(0); w:setMaximum(99); w:setValue(ms.exana.life or 80) end)
+  initPercentSelector(msChild('msExanaLife'), ms.exana.life or 80, 0, 99, 1, '%', function(v) ms.exana.life = v; saveSettings() end)
   setup('msPotionEnable', function(w) w:setChecked(ms.potion.enabled and true or false) end)
   syncMageHotkeyButtons()
   bindMageHotkeys()
@@ -902,8 +1007,10 @@ function loadMenu(menuId)
       priorityButton2:setTooltip(
       "Uses a healing or mana potion when your health or\nmana reaches the defined percentage.")
     end
+    applyPotionPriorityButtons() -- reflect each potion's Health/Mana mode (red/blue icon + tooltip)
   elseif menuId == 'toolsMenu' then
-    helper:setSize(tosize("295 275"))
+    -- mages get a taller window so the Magic Shield sub-panel fits below the tools
+    helper:setSize((vocationId == 5 or vocationId == 6) and tosize("295 422") or tosize("295 275"))
     healingPanel:hide()
     shooterPanel:hide()
     toolsPanel:show(true)
@@ -1530,6 +1637,15 @@ function isManaPotion(potionId)
   return false
 end
 
+-- The "I" toggle on each potion row decides which resource its % threshold checks:
+-- priority 1 = Health (red icon), priority 2 = Mana (blue icon). A legacy/unset
+-- priority (0) falls back to the potion's intrinsic type.
+function potionMode(potion)
+  if potion.priority == 1 then return "health" end
+  if potion.priority == 2 then return "mana" end
+  return isManaPotion(potion.id) and "mana" or "health"
+end
+
 function usePotion(potionId)
   local player = g_game.getLocalPlayer()
   if not player then
@@ -1626,9 +1742,11 @@ function updatePotionButton(button, potionId, potionName)
   helperConfig.potions[slotID + 1].id = potionId
   helperConfig.potions[slotID + 1].percent = helperConfig.potions[slotID + 1].percent
 
-  if potionId == 7642 or potionId == 23374 then
-    helperConfig.potions[slotID + 1].priority = 1
-    local priorityButton = healingPanel:recursiveGetChildById("priority" .. slotID)
+  -- Initialize the "I" toggle ALWAYS red = Health (threshold checks HP). Flip it to blue
+  -- (Mana) by clicking the "I" on the row.
+  helperConfig.potions[slotID + 1].priority = 1
+  local priorityButton = healingPanel:recursiveGetChildById("priority" .. slotID)
+  if priorityButton then
     priorityButton:setImageSource("/images/skin/show-gui-help-red")
     priorityButton:setTooltip("This potion is healing health...")
     priorityButton:setActionId(1)
@@ -2058,7 +2176,7 @@ function checkHealthHealing()
   end)
 
   for _, potion in ipairs(prioritizedPotions) do
-    if hasItemInBackpack(potion.id) and isHealthPotion(potion.id) and healthPercent <= potion.percent then
+    if hasItemInBackpack(potion.id) and potionMode(potion) == "health" and healthPercent <= potion.percent then
       usePotion(potion.id)
     end
   end
@@ -2107,7 +2225,7 @@ function checkManaHealing(mana, maxMana)
   local healthPotionPriority = false
   for _, potion in ipairs(helperConfig.potions) do
     local healthPercent = (player:getHealth() / player:getMaxHealth()) * 100
-    if hasItemInBackpack(potion.id) and isHealthPotion(potion.id) and healthPercent <= potion.percent then
+    if hasItemInBackpack(potion.id) and potionMode(potion) == "health" and healthPercent <= potion.percent then
       healthPotionPriority = true
     end
   end
@@ -2118,7 +2236,7 @@ function checkManaHealing(mana, maxMana)
 
   local prioritizedManaPotions = {}
   for _, potion in ipairs(helperConfig.potions) do
-    if isManaPotion(potion.id) or potion.priority == 2 then
+    if potionMode(potion) == "mana" then
       table.insert(prioritizedManaPotions, potion)
     end
   end
@@ -3419,19 +3537,16 @@ function onLoadHelperData()
       local itemWidget = g_ui.createWidget('PotionItem', button)
       itemWidget:setItemId(v.id)
       itemWidget:setId('potionItem')
-      if v.id == 7642 or v.id == 23374 then
-        local priorityButton = healingPanel:recursiveGetChildById("priority" .. k - 1)
-        if v.priority == 1 then
-          priorityButton:setImageSource("/images/skin/show-gui-help-red")
-          priorityButton:setTooltip("This potion is healing health...")
-          priorityButton:setActionId(1)
-          helperConfig.potions[k].priority = 1
-        else
-          priorityButton:setImageSource("/images/skin/show-gui-help-blue")
-          priorityButton:setTooltip("This potion is healing mana...")
-          priorityButton:setActionId(2)
-          helperConfig.potions[k].priority = 2
-        end
+      -- Restore the "I" toggle for EVERY potion (red = Health, blue = Mana). A saved blue
+      -- (priority 2) is kept; a legacy/unset priority defaults to red (Health).
+      local pr = v.priority
+      if pr ~= 1 and pr ~= 2 then pr = 1 end
+      helperConfig.potions[k].priority = pr
+      local priorityButton = healingPanel:recursiveGetChildById("priority" .. k - 1)
+      if priorityButton then
+        priorityButton:setImageSource(pr == 2 and "/images/skin/show-gui-help-blue" or "/images/skin/show-gui-help-red")
+        priorityButton:setTooltip(pr == 2 and "This potion is healing mana..." or "This potion is healing health...")
+        priorityButton:setActionId(pr)
       end
     end
 
@@ -3684,6 +3799,191 @@ function loadSettings()
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Auto-training: pick the best reachable dummy and START on the highest one.
+-- Ranking: dummy LEVEL (desc) > rate tier (premium 150 > house 120/130 > public
+-- 100) > distance. The level is server-only (a custom attribute) and does NOT come
+-- in the normal item data, so we ask the server for it via a custom extended opcode
+-- (202): one request returns every nearby dummy's level ("x,y,z,level;..."), which
+-- we cache per tile. Training is sticky server-side ("You are already training!"),
+-- so we resolve levels and commit to one target before casting. On a server
+-- rejection (busy / decoration / wrong house) we blacklist that tile and fall to
+-- the next-best, so training never stalls on a full dummy.
+-- ---------------------------------------------------------------------------
+local DUMMY_LEVELS_OPCODE = 202   -- mirror of data/scripts/.../#extended_opcode.lua on the server
+local LEVEL_CACHE_TTL   = 600000  -- dummy levels change very rarely; refresh every 10 min
+local MAX_LEVEL_WAIT    = 3000    -- max ms to wait for the level reply before committing
+
+local dummyBlacklist    = {}    -- "x,y,z" -> expiry millis
+local lastTriedDummyPos = nil   -- dummy we last issued a train on (so a failure msg blacklists it)
+local dummyLevelCache   = {}    -- "x,y,z" -> { level = N, ts = millis } (from the server reply)
+local lastLevelRequest  = 0     -- throttle for the dummy-levels request
+local currentTrainTarget = nil  -- position we've committed to training on (sticky)
+local trainSelectStart   = 0    -- when the current (re)selection began, for the level wait
+
+local function dummyPosKey(pos) return pos.x .. ',' .. pos.y .. ',' .. pos.z end
+
+local function reachFor(weaponId)
+  return (weaponId and farUseExercises[weaponId]) and 5 or 1
+end
+
+local function isDummyBlacklisted(pos)
+  local key = dummyPosKey(pos)
+  local expiry = dummyBlacklist[key]
+  if not expiry then return false end
+  if g_clock.millis() >= expiry then dummyBlacklist[key] = nil; return false end
+  return true
+end
+
+local function blacklistDummy(pos, ms)
+  if not pos then return end
+  dummyBlacklist[dummyPosKey(pos)] = g_clock.millis() + (ms or 20000)
+end
+
+-- Find the dummy item currently on a tile (positions are stable; item ptrs are not).
+local function findDummyOnTile(pos)
+  local tile = g_map.getTile(pos)
+  if not tile then return nil end
+  for _, thing in ipairs(tile:getThings()) do
+    if thing:isItem() and dummyRates[thing:getId()] then return thing end
+  end
+  return nil
+end
+
+-- Ask the server (extended opcode 202) for the levels of dummies around us. One
+-- round-trip resolves them all (no per-dummy looks, no look-text spam). Throttled;
+-- the reply arrives asynchronously in onDummyLevels and fills dummyLevelCache.
+local function requestDummyLevels()
+  local now = g_clock.millis()
+  if now - lastLevelRequest < 800 then return end
+  local proto = g_game.getProtocolGame()
+  if not proto then return end
+  lastLevelRequest = now
+  pcall(function() proto:sendExtendedOpcode(DUMMY_LEVELS_OPCODE, "") end)
+end
+
+-- Best reachable dummy for the given weapon: highest level, then rate, then nearest.
+-- Melee weapons (not far-use) only consider adjacent dummies. The level is resolved
+-- via the server (extended opcode) only when there is more than one premium to choose
+-- between. Returns (item, position, levelsPending).
+function getExerciseDummy(weaponId)
+  local playerPos = player:getPosition()
+  local reach = reachFor(weaponId)
+  local now = g_clock.millis()
+  local list, premiums = {}, {}
+  -- Scan only the tiles within reach on the player's floor. (g_map.findItemsById would
+  -- instead scan the WHOLE loaded map -- all 16 floors -- once PER dummy id; this is a
+  -- handful of cheap tile lookups instead.)
+  for dx = -reach, reach do
+    for dy = -reach, reach do
+      local pos = { x = playerPos.x + dx, y = playerPos.y + dy, z = playerPos.z }
+      if not isDummyBlacklisted(pos) then
+        local tile = g_map.getTile(pos)
+        if tile then
+          for _, thing in ipairs(tile:getThings()) do
+            if thing:isItem() then
+              local rate = dummyRates[thing:getId()]
+              if rate then
+                local entry = { position = pos, item = thing, rate = rate,
+                                dist = getDistanceBetween(playerPos, pos), level = 0 }
+                list[#list + 1] = entry
+                if rate >= 150 then premiums[#premiums + 1] = entry end
+                break  -- at most one dummy per tile
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- Only resolve levels when there is a real choice between premium dummies.
+  local pending = false
+  if #premiums >= 2 then
+    for _, e in ipairs(premiums) do
+      local c = dummyLevelCache[dummyPosKey(e.position)]
+      if c and (now - c.ts) < LEVEL_CACHE_TTL then
+        e.level = c.level
+      else
+        pending = true
+      end
+    end
+    if pending then requestDummyLevels() end  -- server reply fills the cache (onDummyLevels)
+  end
+
+  table.sort(list, function(a, b)
+    if a.level ~= b.level then return a.level > b.level end
+    if a.rate ~= b.rate then return a.rate > b.rate end
+    return a.dist < b.dist
+  end)
+  for _, data in ipairs(list) do
+    if g_map.isSightClear(data.position, playerPos) then
+      return data.item, data.position, pending
+    end
+  end
+  return nil, nil, pending
+end
+
+-- Issue one training attempt on the committed (or best) dummy. Returns true if a
+-- dummy was used. Because training is sticky we keep hitting the same committed
+-- target; we only (re)select when it is lost, and we wait briefly for look results
+-- so we commit to the HIGHEST-level dummy rather than locking onto a weaker one.
+local function issueExerciseTrain(itemId)
+  if not player then return false end
+  -- Training only works inside a protection zone; skip the whole scan/request/use
+  -- (and the server round-trip) entirely while we're outside one.
+  if not player:isInProtectionZone() then return false end
+  local reach = reachFor(itemId)
+
+  -- 1. Committed target still valid? Re-issue on it (resumes after a weapon swap).
+  if currentTrainTarget then
+    if not isDummyBlacklisted(currentTrainTarget)
+        and getDistanceBetween(player:getPosition(), currentTrainTarget) <= reach then
+      local item = findDummyOnTile(currentTrainTarget)
+      if item then
+        lastTriedDummyPos = currentTrainTarget
+        g_game.doThing(false)
+        g_game.useInventoryItemWith(itemId, item)
+        g_game.doThing(true)
+        return true
+      end
+    end
+    currentTrainTarget = nil  -- lost it; reselect
+    trainSelectStart = 0
+  end
+
+  -- 2. Fresh selection.
+  if trainSelectStart == 0 then trainSelectStart = g_clock.millis() end
+  local item, pos, pending = getExerciseDummy(itemId)
+  if not item then
+    lastTriedDummyPos = nil
+    trainSelectStart = 0
+    return false
+  end
+
+  -- 3. Premium levels still resolving: hold off committing (briefly) so we don't
+  --    lock onto a lower-level dummy. Retry once the looks come back.
+  if pending and (g_clock.millis() - trainSelectStart) < MAX_LEVEL_WAIT then
+    scheduleEvent(function()
+      local cb = toolsPanel and toolsPanel:recursiveGetChildById("autoTrainingCheck")
+      if cb and cb:isChecked() and g_game.isOnline() and player
+          and player:getInventoryCount(itemId, 0) > 0 then
+        issueExerciseTrain(itemId)
+      end
+    end, 600)
+    return false
+  end
+
+  -- 4. Commit to this dummy and train.
+  currentTrainTarget = pos
+  trainSelectStart = 0
+  lastTriedDummyPos = pos
+  g_game.doThing(false)
+  g_game.useInventoryItemWith(itemId, item)
+  g_game.doThing(true)
+  return true
+end
+
 function checkExerciseEvent()
   local checkBox = toolsPanel:recursiveGetChildById("autoTrainingCheck")
   if not checkBox:isChecked() then
@@ -3696,51 +3996,65 @@ function checkExerciseEvent()
   end
 
   local itemId = itemBox:getItemId()
-  if itemId == 0 then
-    return checkBox:setChecked(false)
-  end
-
   if player:getInventoryCount(itemId, 0) == 0 then
     return checkBox:setChecked(false)
   end
 
-  local dummy = getExerciseDummy()
-  if not dummy then
-    modules.game_textmessage.displayGameMessage("No exercise dummy found.")
-    checkBox:setChecked(false)
+  -- No reachable dummy this tick: keep training enabled and just retry next cycle
+  -- (the player may walk back into range, or a busy dummy may free up).
+  issueExerciseTrain(itemId)
+end
+
+-- onTextMessage listener for training rejections: blacklist the tile we just tried
+-- and retry the next-best. "Already training!" / "Get closer" / "protection zone"
+-- are about the player (not the dummy) and are intentionally ignored.
+function onExerciseTextMessage(messageMode, message)
+  if not message or not lastTriedDummyPos then return end
+  local checkBox = toolsPanel and toolsPanel:recursiveGetChildById("autoTrainingCheck")
+  if not checkBox or not checkBox:isChecked() then return end
+  local lt = message:lower()
+  local ms
+  if lt:find('exercise dummy is busy', 1, true) then
+    ms = 20000                 -- full: a slot should free up fairly soon
+  elseif lt:find('just a decoration', 1, true) then
+    ms = 600000                -- decoration dummy: never trainable
+  elseif lt:find('inside the house to use this dummy', 1, true) then
+    ms = 60000                 -- can't reach it from outside the house
+  else
     return
   end
-
-  g_game.doThing(false)
-  g_game.useInventoryItemWith(itemId, dummy)
-  g_game.doThing(true)
+  blacklistDummy(lastTriedDummyPos, ms)
+  if currentTrainTarget and dummyPosKey(currentTrainTarget) == dummyPosKey(lastTriedDummyPos) then
+    currentTrainTarget = nil   -- our committed dummy went bad; reselect
+    trainSelectStart = 0
+  end
+  lastTriedDummyPos = nil
+  -- Try the next-best dummy right away instead of waiting the full 10s cycle.
+  local itemBox = toolsPanel:recursiveGetChildById("autoTrainingItem")
+  itemBox = itemBox and itemBox.potionItem
+  local itemId = itemBox and itemBox:getItemId() or 0
+  if itemId > 0 and player and g_game.isOnline() and player:getInventoryCount(itemId, 0) > 0 then
+    scheduleEvent(function() issueExerciseTrain(itemId) end, 150)
+  end
 end
 
-function getExerciseDummy()
-  local playerPos = player:getPosition()
-  local itemList = {}
-  for _, id in pairs(exerciseDummies) do
-    local items = g_map.findItemsById(id, 5)
-    if items then
-      for pos, ptr in pairs(items) do
-        if pos.z == playerPos.z then
-          itemList[#itemList + 1] = { position = pos, item = ptr }
-        end
-      end
+-- Server reply (extended opcode 202) with nearby dummy levels: "x,y,z,level;...".
+-- Caches each so the auto-trainer can rank dummies by level. See the server's
+-- data/scripts/creaturescripts/others/#extended_opcode.lua.
+function onDummyLevels(protocol, opcode, buffer)
+  if not buffer then return end
+  local now = g_clock.millis()
+  for entry in buffer:gmatch('[^;]+') do
+    local x, y, z, lvl = entry:match('(%-?%d+),(%-?%d+),(%-?%d+),(%-?%d+)')
+    if x then
+      dummyLevelCache[x .. ',' .. y .. ',' .. z] = { level = tonumber(lvl) or 0, ts = now }
     end
   end
-
-  table.sort(itemList, function(a, b)
-    return getDistanceBetween(playerPos, a.position) < getDistanceBetween(playerPos, b.position)
-  end)
-
-  for _, data in pairs(itemList) do
-    if g_map.isSightClear(data.position, playerPos) then
-      return data.item
-    end
-  end
-  return nil
 end
+
+-- Register the dummy-levels opcode once (re-register cleanly on a module reload).
+pcall(function() ProtocolGame.unregisterExtendedOpcode(DUMMY_LEVELS_OPCODE) end)
+pcall(function() ProtocolGame.registerExtendedOpcode(DUMMY_LEVELS_OPCODE, onDummyLevels) end)
 
 eventTable.checkExerciseEvent.action = checkExerciseEvent
 
@@ -3798,20 +4112,40 @@ end
 
 function onCheckPotionPriority(button)
   local index = tonumber(button:getId():match("%d+"))
-  if helperConfig.potions[index + 1].priority == 0 then
-    return true
-  end
+  local cfg = helperConfig.potions[index + 1]
+  if not cfg or (cfg.id or 0) == 0 then return true end -- empty slot: nothing to toggle
 
-  if button:getActionId() == 1 then
+  if button:getActionId() == 1 then -- currently red (Health) -> switch to blue (Mana)
     button:setActionId(2)
     button:setImageSource("/images/skin/show-gui-help-blue")
     button:setTooltip("This potion is healing mana...")
-    helperConfig.potions[index + 1].priority = 2
-  else
+    cfg.priority = 2
+  else -- currently blue/unset -> switch to red (Health)
     button:setActionId(1)
     button:setImageSource("/images/skin/show-gui-help-red")
     button:setTooltip("This potion is healing health...")
-    helperConfig.potions[index + 1].priority = 1
+    cfg.priority = 1
+  end
+end
+
+-- Reflect each potion row's "I" from the saved priority (red = Health threshold, blue =
+-- Mana, grey = empty). Re-applied after the healing menu sets its generic tooltips so the
+-- icon + tooltip always match the configured Health/Mana mode.
+function applyPotionPriorityButtons()
+  if not healingPanel then return end
+  for k, v in pairs(helperConfig.potions) do
+    local btn = healingPanel:recursiveGetChildById("priority" .. (k - 1))
+    if btn then
+      if (v.id or 0) == 0 then
+        btn:setImageSource("/images/skin/show-gui-help-grey")
+        btn:setActionId(0)
+      else
+        local pr = (v.priority == 2) and 2 or 1
+        btn:setImageSource(pr == 2 and "/images/skin/show-gui-help-blue" or "/images/skin/show-gui-help-red")
+        btn:setTooltip(pr == 2 and "This potion is healing mana..." or "This potion is healing health...")
+        btn:setActionId(pr)
+      end
+    end
   end
 end
 

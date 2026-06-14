@@ -1,6 +1,7 @@
 // Scripting tab UI (imported by scripting.lua via g_ui.importStyle('styles/scripting')).
-// The tab itself is just two lists (available / running) + management buttons. The code
-// editor and the debug console live in their own windows (ScriptEditorWindow / ScriptDebugWindow).
+// Scripts are plain .lua files dropped in the bot scripts folder (Open Folder button).
+// The tab is two lists (Available / Running) + Load/Unload + Open Folder + Debug.
+// The debug console (script print()s + errors) lives in its own window (ScriptDebugWindow).
 
 // One selectable row in the script lists.
 ScriptListRow < Label
@@ -24,7 +25,10 @@ ScriptDebugRow < Label
   color: #d8d8d8
 
 ScriptingPanel < Panel
-  anchors.fill: parent
+  // Fixed height (the Lua mount anchors top/left/right); matches the cavebot panel's
+  // content height so the bottom buttons stop ABOVE the helper's footer (Enabled/Set Key)
+  // instead of filling to parent.bottom and overlapping it.
+  height: 360
 
   Label
     id: availHeader
@@ -45,14 +49,63 @@ ScriptingPanel < Panel
     color: #44ad25
     font: $var-cip-font
 
+  // --- bottom button stack (anchored to the panel bottom, defined first so the
+  //     lists below can anchor against them) ---
+  Button
+    id: debugBtn
+    height: 20
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    !text: tr('Debug')
+    !tooltip: tr('Open the debug console (script prints and errors)')
+    @onClick: Scripting.openDebug()
+
+  Button
+    id: openFolderBtn
+    height: 20
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: debugBtn.top
+    margin-bottom: 4
+    !text: tr('Open Scripts Folder')
+    !tooltip: tr('Open the folder where you drop your .lua scripts')
+    @onClick: Scripting.openFolder()
+
+  Button
+    id: loadBtn
+    height: 20
+    anchors.left: parent.left
+    anchors.right: parent.horizontalCenter
+    anchors.bottom: openFolderBtn.top
+    margin-right: 2
+    margin-bottom: 5
+    !text: tr('Load >')
+    !tooltip: tr('Enable the selected available script (it starts running)')
+    @onClick: Scripting.loadSelected()
+
+  Button
+    id: unloadBtn
+    height: 20
+    anchors.left: parent.horizontalCenter
+    anchors.right: parent.right
+    anchors.bottom: openFolderBtn.top
+    margin-left: 2
+    margin-bottom: 5
+    !text: tr('< Unload')
+    !tooltip: tr('Disable the selected running script (it stops)')
+    @onClick: Scripting.unloadSelected()
+
+  // --- the two lists fill everything between the headers and the buttons ---
   TextList
     id: disabledList
     anchors.top: availHeader.bottom
     anchors.left: parent.left
     anchors.right: parent.horizontalCenter
+    anchors.bottom: loadBtn.top
     margin-top: 3
     margin-right: 3
-    height: 150
+    margin-bottom: 5
     padding: 1
     vertical-scrollbar: disabledScroll
     background-color: #1e1e1e
@@ -70,9 +123,10 @@ ScriptingPanel < Panel
     anchors.top: runHeader.bottom
     anchors.left: parent.horizontalCenter
     anchors.right: parent.right
+    anchors.bottom: loadBtn.top
     margin-top: 3
     margin-left: 3
-    height: 150
+    margin-bottom: 5
     padding: 1
     vertical-scrollbar: enabledScroll
     background-color: #1e1e1e
@@ -84,151 +138,6 @@ ScriptingPanel < Panel
     margin: 1 1 1 0
     step: 14
     pixels-scroll: true
-
-  Button
-    id: loadBtn
-    anchors.top: disabledList.bottom
-    anchors.left: parent.left
-    margin-top: 5
-    size: 92 20
-    !text: tr('Load >')
-    !tooltip: tr('Enable the selected available script (it starts running)')
-    @onClick: Scripting.loadSelected()
-
-  Button
-    id: unloadBtn
-    anchors.top: prev.top
-    anchors.right: parent.right
-    size: 92 20
-    !text: tr('< Unload')
-    !tooltip: tr('Disable the selected running script (it stops)')
-    @onClick: Scripting.unloadSelected()
-
-  Button
-    id: newBtn
-    anchors.top: loadBtn.bottom
-    anchors.left: parent.left
-    margin-top: 6
-    size: 58 20
-    !text: tr('New')
-    !tooltip: tr('Create a new script and open the editor')
-    @onClick: Scripting.newScript()
-
-  Button
-    id: editBtn
-    anchors.top: prev.top
-    anchors.left: prev.right
-    margin-left: 3
-    size: 58 20
-    !text: tr('Edit')
-    !tooltip: tr('Open the selected script in the editor')
-    @onClick: Scripting.editSelected()
-
-  Button
-    id: delBtn
-    anchors.top: prev.top
-    anchors.left: prev.right
-    margin-left: 3
-    size: 58 20
-    !text: tr('Delete')
-    !tooltip: tr('Delete the selected script')
-    @onClick: Scripting.deleteSelected()
-
-  Button
-    id: debugBtn
-    anchors.top: prev.top
-    anchors.right: parent.right
-    size: 70 20
-    !text: tr('Debug')
-    !tooltip: tr('Open the debug console (script prints and errors)')
-    @onClick: Scripting.openDebug()
-
-  Label
-    id: scriptingStatus
-    height: 14
-    anchors.top: newBtn.bottom
-    anchors.left: parent.left
-    anchors.right: parent.right
-    margin-top: 6
-    text-align: left
-    !text: tr('Ready')
-    font: $var-cip-font
-    color: #c0c0c0
-
-// Code editor window (opened by New / Edit). Save recompiles a running script.
-ScriptEditorWindow < MainWindow
-  id: scriptEditor
-  size: 470 430
-  !text: tr('Script Editor')
-  font: $var-cip-font
-
-  TextEdit
-    id: codeEdit
-    anchors.top: parent.top
-    anchors.left: parent.left
-    anchors.right: parent.right
-    anchors.bottom: editorButtons.top
-    margin-top: 2
-    margin-bottom: 6
-    multiline: true
-    text-wrap: false
-    text-align: left
-    font: $var-cip-font
-    color: #d8d8d8
-    padding: 3
-    background-color: #141414
-    selection-color: #111111
-    selection-background-color: #ffcc00
-    vertical-scrollbar: editorScroll
-  VerticalScrollBar
-    id: editorScroll
-    anchors.top: codeEdit.top
-    anchors.bottom: codeEdit.bottom
-    anchors.right: codeEdit.right
-    margin: 1 1 1 0
-    step: 14
-    pixels-scroll: true
-
-  Panel
-    id: editorButtons
-    height: 22
-    anchors.left: parent.left
-    anchors.right: parent.right
-    anchors.bottom: parent.bottom
-
-    Button
-      id: closeBtn
-      anchors.right: parent.right
-      anchors.top: parent.top
-      size: 60 22
-      !text: tr('Close')
-
-    Button
-      id: runBtn
-      anchors.right: prev.left
-      anchors.top: parent.top
-      margin-right: 6
-      size: 72 22
-      !text: tr('Run Once')
-
-    Button
-      id: saveBtn
-      anchors.right: prev.left
-      anchors.top: parent.top
-      margin-right: 6
-      size: 60 22
-      !text: tr('Save')
-
-    Label
-      id: editorStatus
-      anchors.left: parent.left
-      anchors.verticalCenter: saveBtn.verticalCenter
-      anchors.right: saveBtn.left
-      margin-right: 6
-      text-align: left
-      !text: ''
-      font: $var-cip-font
-      color: #c0c0c0
 
 // Debug console window: timestamped prints + errors from scripts.
 ScriptDebugWindow < MainWindow

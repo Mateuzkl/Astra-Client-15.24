@@ -1185,6 +1185,58 @@ HealingPanel < Panel
         image-source: /images/skin/show-gui-help-grey
         !tooltip: tr('')
 
+// Reusable +/- percent selector matching the Auto-Healing one. Driven from Lua via
+// initPercentSelector(widget, value, min, max, step, suffix, onChange) + onPercentStep.
+PercentSelector < UIWidget
+  size: 66 24
+  focusable: false
+  phantom: false
+
+  UIButton
+    id: rmv
+    size: 10 24
+    anchors.left: parent.left
+    anchors.top: parent.top
+    image-source: /images/ui/percent-buttons
+    image-clip: 0 0 10 24
+    @onSetup: |
+      g_mouse.bindAutoPress(self, function() modules.game_helper.onPercentStep(self:getParent(), -1) end, 150)
+    $pressed:
+      image-clip: 0 24 10 24
+    $disabled:
+      image-clip: 0 48 10 24
+
+  FlatPanel
+    id: bg
+    size: 42 24
+    image-source: /images/ui/percentBg
+    anchors.left: rmv.right
+    anchors.top: parent.top
+    margin-left: 2
+    Label
+      id: label
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.verticalCenter: parent.verticalCenter
+      !text: '0'
+      font: $var-cip-font
+      color: $var-text-cip-color
+      text-auto-resize: true
+
+  UIButton
+    id: add
+    size: 10 24
+    anchors.left: bg.right
+    anchors.top: parent.top
+    margin-left: 2
+    image-source: /images/ui/percent-buttons
+    image-clip: 10 0 10 24
+    @onSetup: |
+      g_mouse.bindAutoPress(self, function() modules.game_helper.onPercentStep(self:getParent(), 1) end, 150)
+    $pressed:
+      image-clip: 10 24 10 24
+    $disabled:
+      image-clip: 10 48 10 24
+
 ToolsPanel < Panel
   anchors.fill: parent
   Panel
@@ -1461,7 +1513,7 @@ ToolsPanel < Panel
   // Hidden by default; setupMageShield() shows it for sorcerers & druids.
   Panel
     id: mageShieldPanel
-    height: 100
+    height: 138
     anchors.top: toolsPanel.bottom
     anchors.left: parent.left
     anchors.right: parent.right
@@ -1474,7 +1526,7 @@ ToolsPanel < Panel
       id: mageShieldTitle
       anchors.top: parent.top
       anchors.horizontalCenter: parent.horizontalCenter
-      margin-top: 1
+      margin-top: 4
       !text: tr('Magic Shield (Mage)')
       font: $var-cip-font
       color: $var-text-cip-color-grey
@@ -1482,96 +1534,98 @@ ToolsPanel < Panel
 
     CheckBox
       id: msUtamoEnable
-      width: 92
+      width: 88
       anchors.top: mageShieldTitle.bottom
       anchors.left: parent.left
-      margin-top: 6
-      margin-left: 6
+      margin-top: 14
+      margin-left: 10
       !text: tr('Utamo Vita')
       font: $var-cip-font
       color: $var-text-cip-color
       text-offset: 13 -3
       change-cursor-image: false
       @onCheckChange: mageShieldOnCheck('utamo', self:isChecked())
-    SpinBox
+    PercentSelector
       id: msUtamoLife
-      size: 50 20
       anchors.verticalCenter: prev.verticalCenter
       anchors.left: prev.right
-      margin-left: 4
-      minimum: 0
-      maximum: 99
+      margin-left: 10
       !tooltip: tr('Cast utamo vita when your life is at or below this %%')
-      @onValueChange: mageShieldOnLife('utamo', self:getValue())
+    UIButton
+      id: msUtamoSettings
+      size: 20 20
+      anchors.verticalCenter: prev.verticalCenter
+      anchors.left: prev.right
+      margin-left: 10
+      image-source: /images/ui/options-up
+      image-clip: 0 0 20 20
+      !tooltip: tr('Utamo Vita settings (renew shield)')
+      $pressed:
+        image-source: /images/ui/options-down
+        image-clip: 0 0 20 20
+      @onClick: openUtamoSettings()
     Button
       id: msUtamoKey
-      size: 80 20
+      size: 41 15
       anchors.verticalCenter: prev.verticalCenter
       anchors.left: prev.right
-      margin-left: 4
+      margin-left: 10
       !text: tr('Set Key')
       @onClick: mageSetKey('utamo')
-    Button
-      id: msUtamoSettings
-      size: 64 20
-      anchors.verticalCenter: prev.verticalCenter
-      anchors.left: prev.right
-      margin-left: 4
-      !text: tr('Settings')
-      @onClick: openUtamoSettings()
 
     CheckBox
       id: msExanaEnable
-      width: 92
+      width: 88
       anchors.top: msUtamoEnable.bottom
       anchors.left: parent.left
-      margin-top: 8
-      margin-left: 6
+      margin-top: 18
+      margin-left: 10
       !text: tr('Exana Vita')
       font: $var-cip-font
       color: $var-text-cip-color
       text-offset: 13 -3
       change-cursor-image: false
       @onCheckChange: mageShieldOnCheck('exana', self:isChecked())
-    SpinBox
+    PercentSelector
       id: msExanaLife
-      size: 50 20
       anchors.verticalCenter: prev.verticalCenter
       anchors.left: prev.right
-      margin-left: 4
-      minimum: 0
-      maximum: 99
+      margin-left: 10
       !tooltip: tr('Cast exana vita when your life is above this %% (and shield is up)')
-      @onValueChange: mageShieldOnLife('exana', self:getValue())
     Button
       id: msExanaKey
-      size: 80 20
+      size: 41 15
       anchors.verticalCenter: prev.verticalCenter
       anchors.left: prev.right
-      margin-left: 4
+      margin-left: 10
       !text: tr('Set Key')
       @onClick: mageSetKey('exana')
 
     CheckBox
       id: msPotionEnable
-      width: 110
+      width: 100
       anchors.top: msExanaEnable.bottom
       anchors.left: parent.left
-      margin-top: 8
-      margin-left: 6
+      margin-top: 18
+      margin-left: 10
       !text: tr('Shield Potion')
       font: $var-cip-font
       color: $var-text-cip-color
       text-offset: 13 -3
       change-cursor-image: false
       @onCheckChange: mageShieldOnCheck('potion', self:isChecked())
-    Button
+    UIButton
       id: msPotionSettings
-      size: 64 20
+      size: 20 20
       anchors.verticalCenter: prev.verticalCenter
       anchors.left: prev.right
-      margin-left: 4
-      !text: tr('Settings')
+      margin-left: 10
+      image-source: /images/ui/options-up
+      image-clip: 0 0 20 20
+      !tooltip: tr('Magic shield potion settings')
+      $pressed:
+        image-source: /images/ui/options-down
+        image-clip: 0 0 20 20
       @onClick: openPotionSettings()
 
 // Utamo Vita settings: renew-shield threshold.
@@ -1591,19 +1645,16 @@ MageShieldSettings < MainWindow
     !text: tr('Renew the shield when its capacity is low')
     font: $var-cip-font
 
-  SpinBox
+  PercentSelector
     id: renewBox
     anchors.top: renewCheck.bottom
     anchors.left: parent.left
     margin-top: 10
-    width: 70
-    minimum: 1
-    maximum: 99
   Label
     anchors.left: renewBox.right
     anchors.verticalCenter: renewBox.verticalCenter
     margin-left: 6
-    !text: tr('%% of max shield capacity (recast below this)')
+    !text: tr('Capacity threshold')
     font: $var-cip-font
 
   Button
@@ -1623,46 +1674,26 @@ MageShieldSettings < MainWindow
 // Magic Shield Potion settings: use conditions.
 MageShieldPotionSettings < MainWindow
   id: mageShieldPotionSettings
-  size: 340 248
+  size: 340 200
   !text: tr('Magic Shield Potion Settings')
   font: $var-cip-font
 
-  SpinBox
-    id: itemBox
+  PercentSelector
+    id: lifeBox
     anchors.top: parent.top
     anchors.right: parent.right
-    margin-top: 4
-    width: 90
-    minimum: 0
-    maximum: 99999
-  Label
-    anchors.left: parent.left
-    anchors.verticalCenter: itemBox.verticalCenter
-    !text: tr('Potion item id')
-    font: $var-cip-font
-
-  SpinBox
-    id: lifeBox
-    anchors.top: itemBox.bottom
-    anchors.right: parent.right
     margin-top: 6
-    width: 70
-    minimum: 0
-    maximum: 99
   Label
     anchors.left: parent.left
     anchors.verticalCenter: lifeBox.verticalCenter
     !text: tr('Use if life below (%%, 0 = off)')
     font: $var-cip-font
 
-  SpinBox
+  PercentSelector
     id: shieldBox
     anchors.top: lifeBox.bottom
     anchors.right: parent.right
     margin-top: 6
-    width: 70
-    minimum: 0
-    maximum: 99
   Label
     anchors.left: parent.left
     anchors.verticalCenter: shieldBox.verticalCenter
