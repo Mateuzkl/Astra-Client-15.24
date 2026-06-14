@@ -4820,7 +4820,7 @@ CreaturePtr ProtocolGame::getCreature(const InputMessagePtr& msg, int type)
         if (creatureType2 == Proto::CreatureTypePlayer)
             msg->getU8();  // vocation client id
 
-        msg->getU8();      // speech bubble
+        const int speechBubble = msg->getU8(); // NPC name icon (speech bubble: chat/trade/quest)
         uint8 mark = msg->getU8(); // 0xFF = unmarked
         // crystalserver AddCreature: modern protocol sends a single "inspection type"
         // byte here. The 2-byte "helpers" field is ONLY emitted on oldProtocol (and is
@@ -4841,6 +4841,7 @@ CreaturePtr ProtocolGame::getCreature(const InputMessagePtr& msg, int type)
             if (emblem != -1)
                 creature->setEmblem(emblem);
             creature->setType(creatureType2);
+            creature->setIcon(speechBubble); // show the NPC's default name icon (was parsed but dropped)
             creature->setPassable(!unpass);
             if (mark == 0xff)
                 creature->hideStaticSquare();
