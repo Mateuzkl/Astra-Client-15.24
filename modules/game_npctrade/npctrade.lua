@@ -7,6 +7,12 @@ WEIGHT_UNIT = 'oz'
 LAST_INVENTORY = 10
 SORT_BY = 'name'
 
+-- Quick-sell "Sell All" sends the whole selected item-id list in ONE extended-opcode
+-- packet so the server can batch-sell it. Selling item-by-item floods the server's
+-- maxPacketsPerSecond limit and kicks the client. The server intercepts this sub-opcode
+-- in Game::parsePlayerExtendedOpcode and runs Npc::onPlayerSellAllItems.
+NPC_SELL_ALL_OPCODE = 203
+
 npcWindow = nil
 itemsPanel = nil
 radioTabs = nil
@@ -1006,6 +1012,7 @@ function SellItemList(items, window)
 
   local total = 0
   local sold = 0
+  local sellIds = {}
   local maxItems = math.min(#items, 300)
 
   for i = 1, maxItems do
@@ -1015,23 +1022,32 @@ function SellItemList(items, window)
       if quantity > 0 then
         total = total + (quantity * widget.item.price)
         sold = sold + 1
-        -- g_game.sellAllItems was a no-op stub (globals.lua), so the Sell button did
-        -- nothing. Sell each checked item via the real per-item sell (sendSellItem).
-        -- The sell amount is sent as a U8 and the server rejects amount > 100, so
-        -- send the full quantity in capped chunks (getMaxAmount() == 100 for SELL).
-        local remaining = quantity
-        while remaining > 0 do
-          local chunk = math.min(remaining, getMaxAmount(widget.item))
-          g_game.sellItem(widget.item.ptr, chunk, ignoreEquipped)
-          remaining = remaining - chunk
-        end
+        table.insert(sellIds, widget.item.ptr:getId())
       end
+    end
+  end
+
+  -- Selling each item with its own packet floods the server's maxPacketsPerSecond
+  -- limit and gets the client kicked (g_game.sellAllItems is just a no-op stub).
+  -- Send the whole selection in a single extended-opcode packet instead; the server
+  -- sells every eligible unit of each id in one batch (mirrors the loot-pouch sell-all).
+  -- Payload: byte 0 = ignoreEquipped flag, then each item id as a little-endian U16.
+  if #sellIds > 0 then
+    local proto = g_game.getProtocolGame and g_game.getProtocolGame()
+    if proto then
+      local payload = string.char(ignoreEquipped and 1 or 0)
+      for _, id in ipairs(sellIds) do
+        payload = payload .. string.char(id % 256, math.floor(id / 256) % 256)
+      end
+      pcall(function() proto:sendExtendedOpcode(NPC_SELL_ALL_OPCODE, payload) end)
     end
   end
 
   g_client.setInputLockWidget(nil)
   window:destroy()
-  displayInfoBox("Quick Sell", string.format("You have sold %d items for %d gold.", sold, total))
+  if sold > 0 then
+    displayInfoBox("Quick Sell", string.format("You have sold %d items for %d gold.", sold, total))
+  end
 end
 
 local function updateBlacklist(window)
