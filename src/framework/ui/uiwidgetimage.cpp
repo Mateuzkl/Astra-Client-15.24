@@ -89,6 +89,15 @@ void UIWidget::drawImage(const Rect& screenCoords)
     if(!m_imageTexture || !screenCoords.isValid())
         return;
 
+    // An explicitly COLLAPSED image rect (one dimension 0, the other > 0) means
+    // "draw nothing" -- e.g. a progress bar at 0% fill (setImageRect with width 0).
+    // Without this, such a rect is invalid -> ignored below -> the FULL image is
+    // drawn, so an empty bar rendered completely full. A fully-zero/default rect
+    // (never set via setImageRect) still falls through to "use the full image".
+    if((m_imageRect.width() == 0 && m_imageRect.height() > 0) ||
+       (m_imageRect.height() == 0 && m_imageRect.width() > 0))
+        return;
+
     // cache vertex buffers
     if(m_imageCachedScreenCoords != screenCoords || m_imageMustRecache) {
         m_imageCoordsBuffer.clear();
