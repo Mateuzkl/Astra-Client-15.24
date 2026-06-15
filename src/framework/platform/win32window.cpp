@@ -30,6 +30,13 @@
 #include <framework/util/stats.h>
 #include <framework/util/extras.h>
 
+#ifdef OPENGL_ES
+#include <physfs.h>
+#include <fstream>
+#include <cctype>
+#include <cstdlib>
+#endif
+
 #define HSB_BIT_SET(p, n) (p[(n)/8] |= (128 >>((n)%8)))
 
 WIN32Window::WIN32Window()
@@ -325,56 +332,123 @@ void WIN32Window::internalCreateWindow()
         g_logger.fatal("GetDC failed");
 }
 
+#ifdef OPENGL_ES
+// Reads the persisted "Graphics Engine" choice early in boot, so ANGLE can be
+// pointed at the right backend when the GL context is created. The context is
+// built (GraphicalApplication::init -> g_window.init) BEFORE Lua runs init.lua
+// and loads the settings, so g_configs is still empty here -- we read config.otml
+// straight from the pref dir instead. Returns the combo index from
+// mods/client_settings/options/graphics.otui (1=Vulkan .. 5=OpenGL), or -1 for
+// automatic selection.
+static int getPreferredGraphicsBackend()
+{
+    // 1) command-line override (handy for debugging a specific backend)
+    const std::string args(GetCommandLineA());
+    if (args.find("-vulkan")  != std::string::npos) return 1;
+    if (args.find("-dx11")    != std::string::npos) return 2;
+    if (args.find("-warp")    != std::string::npos) return 3;
+    if (args.find("-dx9")     != std::string::npos) return 4;
+    if (args.find("-glangle") != std::string::npos) return 5;
+
+    // 2) persisted "engine: N" from config.otml (flat root key: value OTML)
+    const char* prefDir = PHYSFS_getPrefDir(g_app.getName().c_str(), g_app.getCompactName().c_str());
+    if (!prefDir)
+        return -1;
+    std::ifstream file(std::string(prefDir) + "config.otml");
+    if (!file.is_open())
+        return -1;
+    std::string line;
+    while (std::getline(file, line)) {
+        const auto pos = line.find("engine:");
+        if (pos == std::string::npos)
+            continue;
+        // only accept it as the root key, i.e. nothing but whitespace before it
+        bool rootKey = true;
+        for (size_t i = 0; i < pos; ++i) {
+            if (!std::isspace((unsigned char)line[i])) { rootKey = false; break; }
+        }
+        if (rootKey)
+            return std::atoi(line.c_str() + pos + 7);
+    }
+    return -1;
+}
+#endif
+
 void WIN32Window::internalCreateGLContext()
 {
 #ifdef OPENGL_ES
     PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(eglGetProcAddress("eglGetPlatformDisplayEXT"));
 
-    EGLint displayAttributes[3][5] =
-    { 
-        {
-            EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
-            EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE,
-            EGL_NONE,
-        },
-        {
-            EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE,
-            EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE,
-            EGL_NONE,
-        },
-        {
-            EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
-            EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE,
-            EGL_NONE,
-        },
+    // ANGLE translates our GLES2 calls to one of these backends at runtime, so the
+    // engine choice is data (a config index), not a compile-time switch. Indices
+    // match the "Graphics Engine" combo in client_settings/options/graphics.otui.
+    static const EGLint attribsVulkan[] = {
+        EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE,
+        EGL_NONE,
+    };
+    static const EGLint attribsD3D11[] = {
+        EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
+        EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE,
+        EGL_NONE,
+    };
+    static const EGLint attribsWarp[] = {
+        EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
+        EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE,
+        EGL_NONE,
+    };
+    static const EGLint attribsD3D9[] = {
+        EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE,
+        EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE,
+        EGL_NONE,
+    };
+    static const EGLint attribsOpenGL[] = {
+        EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE,
+        EGL_NONE,
     };
 
-    auto setupDisplay = [&](EGLDisplay display) -> bool {
-        if (!display) return false;
-        if (eglInitialize(display, NULL, NULL)) {
+    auto tryDisplay = [&](const EGLint* attributes) -> bool {
+        if (!eglGetPlatformDisplayEXT || !attributes) return false;
+        EGLDisplay display = eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, attributes);
+        if (display && eglInitialize(display, NULL, NULL)) {
             m_eglDisplay = display;
             return true;
         }
         return false;
     };
 
-    if (eglGetPlatformDisplayEXT) {
-        std::string args(GetCommandLineA());
-        if (args.find("-dx11") != std::string::npos) {
-            setupDisplay(eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, displayAttributes[0]));
-        } else if (args.find("-dx9") != std::string::npos) {
-            setupDisplay(eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, displayAttributes[1]));
-        } else if (args.find("-warp") != std::string::npos) {
-            setupDisplay(eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, displayAttributes[2]));
-        } else {
-            for (EGLint* attributes : displayAttributes) {
-                if (setupDisplay(eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, attributes)))
-                    break;
-            }
+    const int requested = getPreferredGraphicsBackend();
+    const EGLint* requestedAttribs = nullptr;
+    const char* requestedName = "auto";
+    switch (requested) {
+        case 1: requestedAttribs = attribsVulkan; requestedName = "Vulkan"; break;
+        case 2: requestedAttribs = attribsD3D11;  requestedName = "Direct3D 11"; break;
+        case 3: requestedAttribs = attribsWarp;   requestedName = "Direct3D 11 (WARP)"; break;
+        case 4: requestedAttribs = attribsD3D9;   requestedName = "Direct3D 9"; break;
+        case 5: requestedAttribs = attribsOpenGL; requestedName = "OpenGL (ANGLE)"; break;
+        default: break;
+    }
+
+    if (requestedAttribs && tryDisplay(requestedAttribs)) {
+        g_logger.info(stdext::format("Graphics backend: %s (ANGLE)", requestedName));
+    } else {
+        if (requestedAttribs)
+            g_logger.warning(stdext::format("Graphics backend '%s' is unavailable in this build; using automatic fallback.", requestedName));
+        // Automatic fallback: hardware D3D11 -> hardware D3D9 -> software WARP.
+        const EGLint* fallbackChain[] = { attribsD3D11, attribsD3D9, attribsWarp };
+        for (const EGLint* attribs : fallbackChain) {
+            if (tryDisplay(attribs))
+                break;
         }
-    }        
-    
-    if (!m_eglDisplay && !setupDisplay(eglGetDisplay(m_deviceContext))) {
+    }
+
+    // Last resort: let ANGLE pick a display straight from the device context.
+    if (!m_eglDisplay) {
+        EGLDisplay raw = eglGetDisplay(m_deviceContext);
+        if (raw && eglInitialize(raw, NULL, NULL))
+            m_eglDisplay = raw;
+    }
+
+    if (!m_eglDisplay) {
         g_logger.fatal("DirectX is not supported, try to use OpenGL version or install latest directx drivers. Also, make sure that your folder contains libEGL.dll, libGLESv2.dll and d3dcompiler_47.dll.");
     }
 

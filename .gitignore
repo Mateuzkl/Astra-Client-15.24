@@ -132,6 +132,24 @@ tags
 Thumbs.db
 .directory
 
+# --- Vendored Google ANGLE (third_party/angle) -------------------------------
+# Keep the prebuilt ANGLE import libs and DLLs tracked despite the generic
+# *.lib / x64/ / bin/ rules above. Parent dirs must be re-included before files.
+!third_party/angle/lib/
+!third_party/angle/lib/x64/
+!third_party/angle/lib/x64/*.lib
+!third_party/angle/lib/x64/*.def
+!third_party/angle/bin/
+!third_party/angle/bin/x64/
+!third_party/angle/bin/x64/*.dll
+
+# Deployed ANGLE/Vulkan runtime DLLs copied next to the (ignored) exe by the
+# build's post-build step. Reproducible from third_party/angle, so don't track.
+/libEGL.dll
+/libGLESv2.dll
+/d3dcompiler_47.dll
+/vulkan-1.dll
+
 # --- Archives that shouldn't be committed (allowlist 860.rar) ----------------
 *.zip
 *.7z

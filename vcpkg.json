@@ -28,10 +28,6 @@
         {
             "name": "opengl",
             "platform": "windows | linux"
-        },
-        {
-            "name": "angle",
-            "platform": "windows"
         }
     ],
 "builtin-baseline": "a97cd63dbb870f107c557fa13b2bc2ce7e4e2188"

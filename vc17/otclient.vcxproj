@@ -319,7 +319,9 @@
       <StringPooling>true</StringPooling>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ControlFlowGuard>Guard</ControlFlowGuard>
-      <AdditionalIncludeDirectories>$(IntDir)proto;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- Vendored Google ANGLE headers (third_party/angle): its prebuilt DLLs ship the
+           Vulkan backend, which the vcpkg ANGLE port does not build. -->
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\angle\include;$(IntDir)proto;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <FloatingPointExceptions>false</FloatingPointExceptions>
       <WholeProgramOptimization>true</WholeProgramOptimization>
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
@@ -333,14 +335,20 @@
       <OptimizeReferences>true</OptimizeReferences>
       <ShowProgress>NotSet</ShowProgress>
       <LinkStatus>false</LinkStatus>
-      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <!-- Import libs generated from the vendored ANGLE DLLs; angle was removed from
+           vcpkg.json so the static ANGLE is no longer auto-linked. -->
+      <AdditionalLibraryDirectories>$(ProjectDir)..\third_party\angle\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <PreventDllBinding>true</PreventDllBinding>
-      <AdditionalDependencies>dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libEGL.lib;libGLESv2.lib;dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/ignore:4286 %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <ResourceCompile>
       <PreprocessorDefinitions>OPENGL_ES</PreprocessorDefinitions>
     </ResourceCompile>
+    <PostBuildEvent>
+      <Message>Deploying vendored ANGLE runtime DLLs (libEGL, libGLESv2, d3dcompiler_47)</Message>
+      <Command>xcopy /Y /D /I "$(ProjectDir)..\third_party\angle\bin\x64\*.dll" "$(TargetDir.TrimEnd('\'))"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -418,7 +426,9 @@
       <StringPooling>true</StringPooling>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <ControlFlowGuard>Guard</ControlFlowGuard>
-      <AdditionalIncludeDirectories>$(IntDir)proto;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- Vendored Google ANGLE headers (third_party/angle) — same as DirectX|x64;
+           this Debug config is also an OPENGL_ES/ANGLE build. -->
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\angle\include;$(IntDir)proto;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <FloatingPointExceptions>false</FloatingPointExceptions>
       <WholeProgramOptimization>false</WholeProgramOptimization>
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
@@ -436,9 +446,9 @@
       <OptimizeReferences>true</OptimizeReferences>
       <ShowProgress>NotSet</ShowProgress>
       <LinkStatus>false</LinkStatus>
-      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\third_party\angle\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <PreventDllBinding>true</PreventDllBinding>
-      <AdditionalDependencies>dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libEGL.lib;libGLESv2.lib;dxgi.lib;d3d9.lib;d3d11.lib;dxguid.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>
       </IgnoreAllDefaultLibraries>
       <AdditionalOptions>/VERBOSE:LIB /ignore:4286 %(AdditionalOptions)</AdditionalOptions>
@@ -449,6 +459,10 @@
     <Lib>
       <LinkTimeCodeGeneration>false</LinkTimeCodeGeneration>
     </Lib>
+    <PostBuildEvent>
+      <Message>Deploying vendored ANGLE runtime DLLs (libEGL, libGLESv2, d3dcompiler_47, vulkan-1)</Message>
+      <Command>xcopy /Y /D /I "$(ProjectDir)..\third_party\angle\bin\x64\*.dll" "$(TargetDir.TrimEnd('\'))"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\src\client\animatedtext.cpp" />

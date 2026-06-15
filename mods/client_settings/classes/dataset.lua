@@ -781,11 +781,41 @@ return {
 	},
 
   engine = {
-		value = -1,
+		-- Default to DirectX 11 (combo index 2) so a fresh install shows and runs the
+		-- same backend instead of displaying "Vulkan" (index 1) while auto-selecting
+		-- D3D11. The player opts into Vulkan/others from the Graphics Engine combo.
+		value = 2,
         apply = function(value)
-            if getOption("engine") ~= -1 and value ~= getOption("engine") then
-              displayInfoBox("Info", "You have selected a different graphics engine. Restart RTC for this change to take effect.")
+            -- value is the combo index from graphics.otui (1=Vulkan .. 5=OpenGL);
+            -- win32window.cpp::getPreferredGraphicsBackend reads it from config.otml
+            -- at boot to pick the ANGLE backend. Only react to a real in-session
+            -- change by the player: stay silent while settings are still loading at
+            -- boot (loadSettings calls apply() with the stored value), and when the
+            -- value did not actually change. This also makes the player's FIRST
+            -- choice (from the -1 "auto" default) prompt for a restart.
+            if not isEngineSelectorReady() or value == getOption("engine") then
+                return true
             end
+
+            -- Persist now: g_app.restart() uses quick_exit and skips the normal
+            -- save-on-terminate, so the new value must reach config.otml up front.
+            g_settings.set("engine", value)
+            g_settings.save()
+
+            local restartBox
+            local function doRestart()
+                if restartBox then restartBox:destroy() restartBox = nil end
+                g_app.restart()
+            end
+            local function dismiss()
+                if restartBox then restartBox:destroy() restartBox = nil end
+            end
+            restartBox = displayGeneralBox(tr("Graphics Engine"),
+                tr("The graphics engine will change the next time the client starts.\nDo you want to restart now?"),
+                {
+                    { text = tr("Restart Now"), callback = doRestart },
+                    { text = tr("Later"), callback = dismiss },
+                }, doRestart, dismiss)
             return true
         end,
 	},

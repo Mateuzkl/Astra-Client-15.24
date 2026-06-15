@@ -86,6 +86,12 @@ HotKeys = {}
 local boundCombosCallback = {}
 local boundCombosHelper = {}
 
+-- Becomes true once setup()/loadSettings has applied the persisted options. Until
+-- then, dataset.lua's engine.apply must NOT pop the "restart to apply" dialog, since
+-- loadSettings calls apply() with the stored value at boot. Gating on this (instead of
+-- the old engine==-1 sentinel) also lets the player's FIRST engine choice prompt.
+local engineSelectorReady = false
+
 local keybindOptions = KeyBind:getKeyBind("Dialogs", "Open Options")
 local keybindCreatureNameBars = KeyBind:getKeyBind("UI", "Show/hide Creature Names and Bars")
 local keybindFullScreen = KeyBind:getKeyBind("UI", "Toggle Fullscreen")
@@ -382,6 +388,9 @@ function setup()
   -- load options
   GameOptions:loadSettings()
   TempOptions:resetAllOptions()
+  -- loadSettings above applied the stored engine value; from here on a change to
+  -- the engine combo is a genuine player action and may prompt for a restart.
+  engineSelectorReady = true
   syncActionBarCheckboxes()
   disableUnsupportedOptions()
 
@@ -595,6 +604,9 @@ function getOption(key)
 end
 function getTmpOption(key)
   return TempOptions:getOption(key)
+end
+function isEngineSelectorReady()
+  return engineSelectorReady
 end
 
 -- ===========================================================================
