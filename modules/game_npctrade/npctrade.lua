@@ -1017,7 +1017,14 @@ function SellItemList(items, window)
         sold = sold + 1
         -- g_game.sellAllItems was a no-op stub (globals.lua), so the Sell button did
         -- nothing. Sell each checked item via the real per-item sell (sendSellItem).
-        g_game.sellItem(widget.item.ptr, quantity, ignoreEquipped)
+        -- The sell amount is sent as a U8 and the server rejects amount > 100, so
+        -- send the full quantity in capped chunks (getMaxAmount() == 100 for SELL).
+        local remaining = quantity
+        while remaining > 0 do
+          local chunk = math.min(remaining, getMaxAmount(widget.item))
+          g_game.sellItem(widget.item.ptr, chunk, ignoreEquipped)
+          remaining = remaining - chunk
+        end
       end
     end
   end
