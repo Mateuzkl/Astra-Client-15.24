@@ -131,7 +131,10 @@ void StaticText::compose()
     //TODO: this could be moved to lua
     std::vector<std::string> texts;
 
-    if(m_mode == Otc::MessageSay) {
+    if(m_mode == Otc::MessageSay || m_mode == Otc::MessageSpell) {
+        // Spell utterances (TALKTYPE_SPELL_USE) render exactly like a normal say above
+        // the head -- yellow "<name> says:". They were grouped with monster/bark/potion
+        // below and came out orange (emote) regardless of the "Display Spells" options.
         texts.push_back(m_name + " says:\n");
         texts.push_back("#EFEF00");
         m_color = Color(239, 239, 0);
@@ -143,8 +146,11 @@ void StaticText::compose()
         texts.push_back(m_name + " yells:\n");
         texts.push_back("#EFEF00");
         m_color = Color(239, 239, 0);
-    } else if(m_mode == Otc::MessageMonsterSay || m_mode == Otc::MessageMonsterYell || m_mode == Otc::MessageSpell
-              || m_mode == Otc::MessageBarkLow || m_mode == Otc::MessageBarkLoud) {
+    } else if(m_mode == Otc::MessageMonsterSay || m_mode == Otc::MessageMonsterYell
+              || m_mode == Otc::MessageBarkLow || m_mode == Otc::MessageBarkLoud || m_mode == Otc::MessagePotion) {
+        // MessagePotion (server speak type 52) is potion-drinking text sent via
+        // sendCreatureSay -- render it like the other creature/monster says (orange)
+        // instead of falling through to the "Unknown speak type" warning.
         m_color = Color(254, 101, 0);
     } else if(m_mode == Otc::MessageNpcFrom || m_mode == Otc::MessageNpcFromStartBlock) {
         texts.push_back(m_name + " says:\n");
