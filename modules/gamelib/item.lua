@@ -22,7 +22,13 @@ function getItemServerName(itemId)
       return string.capitalize(moneyNames[itemId])
     end
 
-    return string.capitalize(thing:getMarketData().name) or ""
+    -- getMarketData() can be nil for items with no market entry; indexing .name on
+    -- it threw "attempt to index a nil value". Guard it.
+    local marketData = thing:getMarketData()
+    if marketData and marketData.name and marketData.name ~= '' then
+      return string.capitalize(marketData.name)
+    end
+    return ""
 end
 
 function getItemCategory(itemId)
