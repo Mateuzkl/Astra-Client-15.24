@@ -320,8 +320,10 @@ public:
     int getLastAwareFloor();
     const std::vector<MissilePtr>& getFloorMissiles(int z) { return m_floorMissiles[z]; }
 
-    std::vector<AnimatedTextPtr> getAnimatedTexts() { return m_animatedTexts; }
-    std::vector<StaticTextPtr> getStaticTexts() { return m_staticTexts; }
+    // Const refs: iterated read-only every frame in MapView::drawMapForeground;
+    // returning by value copied the whole vector each frame (not bound to Lua).
+    const std::vector<AnimatedTextPtr>& getAnimatedTexts() { return m_animatedTexts; }
+    const std::vector<StaticTextPtr>& getStaticTexts() { return m_staticTexts; }
 
     // Cavebot waypoint overlay: tile-anchored markers drawn in MapView::drawMapForeground
     // (on top of the map tiles/borders, under the UI). Fed from Lua by the cavebot HUD.
