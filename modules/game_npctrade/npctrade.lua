@@ -1045,9 +1045,9 @@ function SellItemList(items, window)
 
   g_client.setInputLockWidget(nil)
   window:destroy()
-  if sold > 0 then
-    displayInfoBox("Quick Sell", string.format("You have sold %d items for %d gold.", sold, total))
-  end
+  -- Don't claim success here. The server is authoritative and reports the real
+  -- outcome via a text message (gold earned, or "couldn't sell any ..."), so the
+  -- client no longer shows an optimistic "you sold X" box that was always green.
 end
 
 local function updateBlacklist(window)
