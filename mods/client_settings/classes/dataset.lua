@@ -700,7 +700,11 @@ return {
               noFrame = wid and wid:isChecked()
             end
             if noFrame then
-              return false
+              -- "No frame limit" is active so the fps cap isn't shown/applied now; this
+              -- is not a failure. Returning false made TempOptions log a misleading
+              -- "Failed to apply tmp option" every boot. Return true (apply() re-checks
+              -- noFrameCheckBox before using the value, so nothing wrong gets applied).
+              return true
             end
 
             local wid = graphics:recursiveGetChildById('frameRateLabel')
@@ -905,18 +909,24 @@ return {
 
 	highlightThingsUnderCursor = {
 		value = true,
+        -- Render the blue tile marker on the tile under the mouse (mehah-style
+        -- "Highlight Mouse Target"). The C++ MapView draws m_crosshair on the hovered
+        -- tile. m_interface.getMapPanel is nil while the options window is built at
+        -- boot (game_interface not loaded yet), so guard it; the in-game apply sets it.
         apply = function(value)
-            -- Render the blue tile marker on the tile under the mouse (mehah-style
-            -- "Highlight Mouse Target"). The C++ MapView draws m_crosshair on the
-            -- hovered tile; setCrosshairVisible was a no-op stub that never set a
-            -- texture, so nothing showed. '' clears it.
-            local gameMapPanel = m_interface.getMapPanel()
-            gameMapPanel:setCrosshair(value and '/images/crosshair/cip-default' or '')
+            local getPanel = m_interface and m_interface.getMapPanel
+            local gameMapPanel = getPanel and getPanel()
+            if gameMapPanel then
+                gameMapPanel:setCrosshair(value and '/images/crosshair/cip-default' or '')
+            end
             return true
         end,
         tempApply = function(value)
-            local gameMapPanel = m_interface.getMapPanel()
-            gameMapPanel:setCrosshair(value and '/images/crosshair/cip-default' or '')
+            local getPanel = m_interface and m_interface.getMapPanel
+            local gameMapPanel = getPanel and getPanel()
+            if gameMapPanel then
+                gameMapPanel:setCrosshair(value and '/images/crosshair/cip-default' or '')
+            end
             return true
         end,
 	},
