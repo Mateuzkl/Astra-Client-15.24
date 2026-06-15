@@ -63,15 +63,13 @@ end
 
 function UIVerticalProgressBarSDInverted:updateBackground()
   if self:isOn() then
-    local height = math.round(math.max((self:getProgress() * (self:getHeight() - self.bgBorderTop - self.bgBorderBottom)), 1))
+    -- Real fill height, 0 when empty (see UIProgressBarSD): the old math.max(...,1)
+    -- left a 1px golden sliver on empty segments.
+    local height = math.round(self:getProgress() * (self:getHeight() - self.bgBorderTop - self.bgBorderBottom))
     local width = self:getWidth() - self.bgBorderLeft - self.bgBorderRight
     local rect = { x = self.bgBorderLeft, y = self.bgBorderTop, width = width, height = height }
     self:setImageRect(rect)
-    if height == 1 then
-      self:setImageVisible(false)
-    else
-      self:setImageVisible(true)
-    end
+    self:setImageVisible(height > 0)
   end
 end
 
