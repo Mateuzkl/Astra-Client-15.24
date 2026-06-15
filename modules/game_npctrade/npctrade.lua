@@ -48,6 +48,10 @@ tradeItems = {}
 playerItems = {}
 sellAllWhitelist = {}
 selectedItem = nil
+-- Chunked trade-list build state (see refreshTradeItems): id cancels stale/closed
+-- builds, event is the pending scheduleEvent.
+npcTradeBuildId = 0
+npcTradeBuildEvent = nil
 
 quickSellButton = nil
 
@@ -556,8 +560,15 @@ function refreshTradeItems()
     return
   end
 
-  local layout = itemsPanel:getLayout()
-  layout:disableUpdates()
+  -- Cancel any in-flight build and start a fresh one. Building every item box in one
+  -- pass froze the client for NPCs with very large lists (e.g. Test Server Dealer),
+  -- so create them in small batches across frames instead.
+  npcTradeBuildId = npcTradeBuildId + 1
+  local myBuildId = npcTradeBuildId
+  if npcTradeBuildEvent then
+    removeEvent(npcTradeBuildEvent)
+    npcTradeBuildEvent = nil
+  end
 
   clearSelectedItem()
 
@@ -569,44 +580,65 @@ function refreshTradeItems()
   end
   radioItems = UIRadioGroup.create()
 
-  local currentTradeItems = tradeItems[getCurrentTradeType()]
-  for key, item in ipairs(currentTradeItems) do
-    if getCurrentTradeType() == SELL and not canTradeItem(item) then
-      goto continue
-    end
-    local itemBox = g_ui.createWidget('NPCItemBox', itemsPanel)
-    itemBox:setId("itemBox_" .. item.name)
-    itemBox.item = item
-  
-    local price = formatCurrency(item.price)
-    local informationText = 'Price ' .. price
-  
-    if showWeight and item.weight > 0 then
-      local weight = string.format('%.2f', item.weight) .. ' ' .. WEIGHT_UNIT
-      informationText = informationText .. ', ' .. weight
+  local layout = itemsPanel:getLayout()
+  local currentType = getCurrentTradeType()
+  local list = tradeItems[currentType]
+  local count = #list
+  local index = 1
+  local BATCH = 100
+
+  local function buildChunk()
+    npcTradeBuildEvent = nil
+    -- A newer refresh (tab switch / reopen) or a window close superseded this build.
+    if myBuildId ~= npcTradeBuildId or not radioItems or not g_game.isOnline() then
+      return
     end
 
-    local description = string.format('%s\n%s', short_text(item.name, 15), short_text(informationText, 16))
-    itemBox.nameLabel:setText(description, true)
+    layout:disableUpdates()
+    local built = 0
+    while index <= count and built < BATCH do
+      local item = list[index]
+      index = index + 1
+      if not (currentType == SELL and not canTradeItem(item)) then
+        local itemBox = g_ui.createWidget('NPCItemBox', itemsPanel)
+        itemBox:setId("itemBox_" .. item.name)
+        itemBox.item = item
 
-    local itemWidget = itemBox:getChildById('item')
-    itemWidget:setItem(item.ptr)
-    itemBox.onMouseRelease = itemPopup
+        local price = formatCurrency(item.price)
+        local informationText = 'Price ' .. price
+        if showWeight and item.weight > 0 then
+          local weight = string.format('%.2f', item.weight) .. ' ' .. WEIGHT_UNIT
+          informationText = informationText .. ', ' .. weight
+        end
 
-    if (string.len(item.name) > 15) or (string.len(informationText) > 16) then
-      itemBox:setTooltip(string.format('%s\n%s', item.name, informationText))
+        local description = string.format('%s\n%s', short_text(item.name, 15), short_text(informationText, 16))
+        itemBox.nameLabel:setText(description, true)
+
+        local itemWidget = itemBox:getChildById('item')
+        itemWidget:setItem(item.ptr)
+        itemBox.onMouseRelease = itemPopup
+
+        if (string.len(item.name) > 15) or (string.len(informationText) > 16) then
+          itemBox:setTooltip(string.format('%s\n%s', item.name, informationText))
+        end
+
+        if not canTradeItem(item) then
+          itemBox.nameLabel:setColor('#707070')
+        end
+
+        radioItems:addWidget(itemBox)
+        built = built + 1
+      end
     end
+    layout:enableUpdates()
+    layout:update()
 
-    if not canTradeItem(item) then
-      itemBox.nameLabel:setColor('#707070')
+    if index <= count then
+      npcTradeBuildEvent = scheduleEvent(buildChunk, 1)
     end
-
-    radioItems:addWidget(itemBox)
-    ::continue::
   end
 
-  layout:enableUpdates()
-  layout:update()
+  buildChunk()
 end
 
 function refreshPlayerGoods()
@@ -745,12 +777,18 @@ end
 -- money comes from the server here but this module reads the player's balance from
 -- resources (getPlayerMoney), so the first arg is intentionally ignored.
 function onPlayerGoods(_money, items)
+  -- processPlayerGoods sends `items` as an array of {ItemPtr, count} tuples (the C++
+  -- pushes each std::tuple as a 2-field table). The old code did `for id, amount in
+  -- pairs(items)`, which keyed playerItems by the ARRAY INDEX instead of the item id,
+  -- so playerItems[itemId] was always nil -> canTradeItem(SELL) was always false ->
+  -- the Sell tab (what a buying NPC like Goldrick accepts) showed nothing.
   playerItems = {}
-  for id, amount in pairs(items) do
-    if not playerItems[id] then
-      playerItems[id] = amount
-    else
-      playerItems[id] = playerItems[id] + amount
+  for _, good in pairs(items) do
+    local ptr = good[1]
+    local amount = good[2]
+    if ptr and amount then
+      local id = ptr:getId()
+      playerItems[id] = (playerItems[id] or 0) + amount
     end
   end
 
