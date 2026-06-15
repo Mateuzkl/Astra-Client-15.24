@@ -229,6 +229,7 @@ private:
     void parseOpenNpcTrade(const InputMessagePtr& msg);
     void parsePlayerGoods(const InputMessagePtr& msg);
     void parseCloseNpcTrade(const InputMessagePtr&);
+    void parseNpcDialog(const InputMessagePtr& msg);
     void parseWorldLight(const InputMessagePtr& msg);
     void parseMagicEffect(const InputMessagePtr& msg);
     void parseAnimatedText(const InputMessagePtr& msg);

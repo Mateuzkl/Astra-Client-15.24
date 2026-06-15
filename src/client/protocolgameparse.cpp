@@ -216,6 +216,9 @@ void ProtocolGame::parseMessage(const InputMessagePtr& msg)
             case Proto::GameServerDeleteInventory:
                 parseRemoveInventoryItem(msg);
                 break;
+            case Proto::GameServerNpcDialog:
+                parseNpcDialog(msg);
+                break;
             case Proto::GameServerOpenNpcTrade:
                 parseOpenNpcTrade(msg);
                 break;
@@ -1538,22 +1541,22 @@ void ProtocolGame::parsePlayerGoods(const InputMessagePtr& msg)
 {
     std::vector<std::tuple<ItemPtr, int>> goods;
 
-    uint64_t money;
-    if (g_game.getFeature(Otc::GameDoublePlayerGoodsMoney))
-        money = msg->getU64();
-    else
-        money = msg->getU32();
+    // Modern protocol (Tibia 11+/12+/15.x) does NOT embed money in PlayerGoods -- the
+    // balance arrives via the resource-balance packet, and the list uses U16 count +
+    // U16 per-item amount. Only legacy (<=1100) protocols send money here with a U8
+    // count. Reading a phantom money field (GameDoublePlayerGoodsMoney was enabled)
+    // desynced the whole packet, breaking the trade list (garbage opcode 0x54).
+    // Mirror crystalserver ProtocolGame::sendSaleItemList (oldProtocol gating).
+    const bool modern = g_game.getProtocolVersion() > 1100;
 
-    int size = msg->getU8();
+    uint64_t money = 0;
+    if (!modern)
+        money = g_game.getFeature(Otc::GameDoublePlayerGoodsMoney) ? msg->getU64() : msg->getU32();
+
+    int size = modern ? msg->getU16() : msg->getU8();
     for (int i = 0; i < size; i++) {
         int itemId = msg->getU16();
-        int amount;
-
-        if (g_game.getFeature(Otc::GameDoubleShopSellAmount))
-            amount = msg->getU16();
-        else
-            amount = msg->getU8();
-
+        int amount = (modern || g_game.getFeature(Otc::GameDoubleShopSellAmount)) ? msg->getU16() : msg->getU8();
         goods.push_back(std::make_tuple(Item::create(itemId), amount));
     }
 
@@ -1563,6 +1566,27 @@ void ProtocolGame::parsePlayerGoods(const InputMessagePtr& msg)
 void ProtocolGame::parseCloseNpcTrade(const InputMessagePtr&)
 {
     g_game.processCloseNpcTrade();
+}
+
+// crystalserver ProtocolGame::sendNpcDialogOptions (0x1C): the modern NPC dialogue
+// (conversation options). There's no client UI for it yet, so just consume the bytes
+// exactly as the server writes them -- leaving it unhandled threw "unhandled opcode
+// 28" on every NPC talk and (because the read stopped) desynced the stream.
+void ProtocolGame::parseNpcDialog(const InputMessagePtr& msg)
+{
+    msg->getU8();                                 // unknown (0)
+    const uint8 conversationId = msg->getU8();
+    if (conversationId == 0) {
+        msg->getU8();                             // unknown (0)
+        return;
+    }
+
+    msg->getU32();                                // npc id
+    const int options = msg->getU8();
+    for (int i = 0; i < options; ++i) {
+        msg->getU8();                             // option id
+        msg->getString();                         // option text
+    }
 }
 
 void ProtocolGame::parseOwnTrade(const InputMessagePtr& msg)

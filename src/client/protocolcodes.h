@@ -52,6 +52,7 @@ namespace Proto {
         GameServerLoginSuccess              = 23,
         GameServerLoginToken                = 24,
         GameServerStoreButtonIndicators     = 25, // 1097
+        GameServerNpcDialog                 = 28, // crystalserver: 0x1C NPC dialog options
         GameServerPingBack                  = 29,
         GameServerPing                      = 30,
         GameServerChallenge                 = 31,
