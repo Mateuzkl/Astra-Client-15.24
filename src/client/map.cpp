@@ -139,7 +139,11 @@ void Map::addThing(const ThingPtr& thing, const Position& pos, int stackPos)
 			for (auto other : m_animatedTexts) {
 				if (other->getPosition() == pos) {
 					prevAnimatedText = other;
-					if (!g_game.getFeature(Otc::GameDontMergeAnimatedText)) {
+					// "Stack Effects" client option: when enabled, same-color damage/heal
+					// numbers at this tile merge (their values are summed by merge()).
+					// This is the player-facing override of the GameDontMergeAnimatedText
+					// version default, so toggling the option actually changes the behaviour.
+					if (m_stackEffects) {
 						if (other->merge(animatedText)) {
 							merged = true;
 							break;

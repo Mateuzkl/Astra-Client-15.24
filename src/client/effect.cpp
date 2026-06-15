@@ -57,7 +57,10 @@ void Effect::draw(const Point& dest, int offsetX, int offsetY, bool animate, Lig
 
     Color color = Color::white;
     const float alpha = g_map.getEffectAlpha();
-    if(alpha < 1.0f)
+    // "Ignore opacity on Special Effects": keep special effects (crit/fatal/ruse/...)
+    // at full opacity even when the Opacity Effects slider dims everything else.
+    const bool keepOpaque = g_map.isIgnoreSpecialEffects() && g_map.isSpecialEffect(m_id);
+    if(alpha < 1.0f && !keepOpaque)
         color.setAlpha(alpha);
 
     rawGetThingType()->draw(dest, 0, xPattern, yPattern, 0, m_animationPhase, color, lightView);

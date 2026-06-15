@@ -20,6 +20,23 @@ function updateFeatures(version)
     --g_game.enableFeature(GameOutfitShaders)
     g_game.enableFeature(GameDontMergeAnimatedText) -- do not stack damage/heal numbers in a short time window
 
+    -- "Ignore opacity on Special Effects" (client_settings > Effects) keeps these
+    -- magic-effect ids at full opacity, ignoring the Opacity Effects slider. Fill in
+    -- the effect id your server sends for each special effect. Edit freely - this is
+    -- read by g_map at runtime, no client recompile needed.
+    local specialEffects = {
+        -- Critical      = 0,
+        -- Fatal         = 0,
+        -- Ruse          = 0,
+        -- Momentum      = 0,
+        -- Transcendence = 0,
+    }
+    local specialEffectIds = {}
+    for _, id in pairs(specialEffects) do
+        if id and id > 0 then specialEffectIds[#specialEffectIds + 1] = id end
+    end
+    g_map.setSpecialEffectIds(specialEffectIds)
+
     if(version >= 770) then
         g_game.enableFeature(GameLooktypeU16)
         g_game.enableFeature(GameMessageStatements)

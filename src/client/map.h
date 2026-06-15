@@ -33,6 +33,8 @@
 
 #include <framework/core/clock.h>
 
+#include <unordered_set>
+
 enum OTBM_ItemAttr
 {
     OTBM_ATTR_DESCRIPTION = 1,
@@ -237,6 +239,18 @@ public:
     void enableStackEffects(bool enable) { m_stackEffects = enable; }
     bool isStackEffectsEnabled() { return m_stackEffects; }
 
+    // "Ignore opacity on Special Effects": when enabled, effects whose id is in the
+    // special-effects set (Critical/Fatal/Ruse/Momentum/Transcendence) are drawn at
+    // full opacity, ignoring the Opacity Effects slider. The id set is supplied from
+    // Lua (g_map.setSpecialEffectIds) so it can be tuned without recompiling.
+    void setIgnoreSpecialEffects(bool enable) { m_ignoreSpecialEffects = enable; }
+    bool isIgnoreSpecialEffects() { return m_ignoreSpecialEffects; }
+    void setSpecialEffectIds(const std::vector<int>& ids) {
+        m_specialEffectIds.clear();
+        for (int id : ids) m_specialEffectIds.insert((uint16)id);
+    }
+    bool isSpecialEffect(uint16 id) { return m_specialEffectIds.find(id) != m_specialEffectIds.end(); }
+
     // Player health/mana/utamo-vita arcs, driven by the HUD "Show Arcs" controls
     // (dataset.lua -> g_map.setArcStyle/setArcDistance/setArcOpacity). The actual
     // arcs are rendered by MapView::drawPlayerArcs.
@@ -349,6 +363,8 @@ private:
     float m_effectAlpha = 1.0f;
     float m_missileAlpha = 1.0f;
     bool m_stackEffects = false; // default: effects do NOT stack on a tile
+    bool m_ignoreSpecialEffects = false; // "Ignore opacity on Special Effects" toggle
+    std::unordered_set<uint16> m_specialEffectIds; // effect ids exempt from opacity
     bool m_showArcs = false;     // "Show Arcs" toggle (default off)
     bool m_harmonyLeftDraw = true; // health arc on the left, mana on the right
     bool m_drawHUDStatus = true; // "Show in HUD" master toggle
