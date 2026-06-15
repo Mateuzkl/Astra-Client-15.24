@@ -1005,29 +1005,26 @@ function SellItemList(items, window)
   window:hide()
 
   local total = 0
-
-  local itemsToSend = {}
+  local sold = 0
   local maxItems = math.min(#items, 300)
 
   for i = 1, maxItems do
     local widget = items[i]
     if widget and widget.sellCheckbox:isChecked() and widget.item.ptr and widget.item.ptr:getId() > 0 then
       local quantity = getSellQuantity(widget.item.ptr)
-      total = total + (quantity * widget.item.price)
-
-      table.insert(itemsToSend, {
-        itemId = widget.item.ptr:getId(),
-        count = widget.item.ptr:getCountOrSubType(),
-        amount = quantity,
-        ignoreEquipped = ignoreEquipped
-      })
+      if quantity > 0 then
+        total = total + (quantity * widget.item.price)
+        sold = sold + 1
+        -- g_game.sellAllItems was a no-op stub (globals.lua), so the Sell button did
+        -- nothing. Sell each checked item via the real per-item sell (sendSellItem).
+        g_game.sellItem(widget.item.ptr, quantity, ignoreEquipped)
+      end
     end
   end
 
-  g_game.sellAllItems(itemsToSend)
   g_client.setInputLockWidget(nil)
   window:destroy()
-  displayInfoBox("Quick Sell", string.format("You have sold %d items for %d gold.", #items, total))
+  displayInfoBox("Quick Sell", string.format("You have sold %d items for %d gold.", sold, total))
 end
 
 local function updateBlacklist(window)
