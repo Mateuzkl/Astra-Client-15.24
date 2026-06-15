@@ -339,7 +339,10 @@ return {
 	nativeMouseCursor = {
 		value = false,
         apply = function(value)
-            g_window.setUseNativeCursor(value)
+            -- Keep the OS native cursor and suppress the custom cursor graphics
+            -- (the old g_window.setUseNativeCursor was a no-op stub that did nothing,
+            -- so the cursor still turned into the 'target' image on item hover).
+            g_mouse.setNativeCursor(value)
             return true
         end,
 	},
@@ -903,8 +906,17 @@ return {
 	highlightThingsUnderCursor = {
 		value = true,
         apply = function(value)
+            -- Render the blue tile marker on the tile under the mouse (mehah-style
+            -- "Highlight Mouse Target"). The C++ MapView draws m_crosshair on the
+            -- hovered tile; setCrosshairVisible was a no-op stub that never set a
+            -- texture, so nothing showed. '' clears it.
             local gameMapPanel = m_interface.getMapPanel()
-            gameMapPanel:setCrosshairVisible(value)
+            gameMapPanel:setCrosshair(value and '/images/crosshair/cip-default' or '')
+            return true
+        end,
+        tempApply = function(value)
+            local gameMapPanel = m_interface.getMapPanel()
+            gameMapPanel:setCrosshair(value and '/images/crosshair/cip-default' or '')
             return true
         end,
 	},

@@ -38,10 +38,23 @@ public:
     bool isCursorChanged();
     bool isPressed(Fw::MouseButton mouseButton);
 
+    // "Use Native Mouse Cursor" option: when enabled, keep the OS native cursor and
+    // ignore every custom cursor swap (item hover 'target', text edit, splitters,
+    // resize borders, ...). The cursor stack is still tracked so toggling the option
+    // off restores the correct custom cursor.
+    void setNativeCursor(bool enable);
+    bool isNativeCursor() { return m_nativeCursor; }
+
 private:
+    // Apply the topmost stacked cursor that may show under the current mode.
+    void applyTopCursor();
+    // Whether a cursor id stays custom while "Use Native Mouse Cursor" is on.
+    bool isAllowedInNativeMode(int cursorId);
+
     std::map<std::string, int> m_cursors;
     std::deque<int> m_cursorStack;
     std::mutex m_mutex;
+    bool m_nativeCursor = false;
 };
 
 extern Mouse g_mouse;

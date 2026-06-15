@@ -67,6 +67,42 @@ void Mouse::addCursor(const std::string& name, const std::string& file, const Po
         g_logger.error(stdext::format("unable to load cursor %s", name));
 }
 
+// The "Use Native Mouse Cursor" option only swaps the DECORATIVE cursors to the OS
+// cursor; the functional ones stay custom: 'target' (the use-with-crosshair aim) and
+// 'horizontal'/'vertical' (the window/panel resize arrows). Keep this list in sync
+// with data/cursors/cursors.otml.
+bool Mouse::isAllowedInNativeMode(int cursorId)
+{
+    static const char* kKeep[] = { "target", "horizontal", "vertical" };
+    for(const char* name : kKeep) {
+        auto it = m_cursors.find(name);
+        if(it != m_cursors.end() && it->second == cursorId)
+            return true;
+    }
+    return false;
+}
+
+// Show the topmost stacked cursor that is allowed to display right now; if none is
+// (e.g. native mode with only suppressed cursors stacked), fall back to the OS cursor.
+void Mouse::applyTopCursor()
+{
+    int chosen = -1;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for(auto it = m_cursorStack.rbegin(); it != m_cursorStack.rend(); ++it) {
+            if(!m_nativeCursor || isAllowedInNativeMode(*it)) {
+                chosen = *it;
+                break;
+            }
+        }
+    }
+
+    if(chosen >= 0)
+        g_window.setMouseCursor(chosen);
+    else
+        g_window.restoreMouseCursor();
+}
+
 void Mouse::pushCursor(const std::string& name)
 {
     if (g_graphicsThreadId != std::this_thread::get_id()) {
@@ -78,11 +114,25 @@ void Mouse::pushCursor(const std::string& name)
     if(it == m_cursors.end())
         return;
 
-    int cursorId = it->second;
-    g_window.setMouseCursor(cursorId);
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_cursorStack.push_back(cursorId);
-    return;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_cursorStack.push_back(it->second);
+    }
+    applyTopCursor();
+}
+
+void Mouse::setNativeCursor(bool enable)
+{
+    if (g_graphicsThreadId != std::this_thread::get_id()) {
+        g_graphicsDispatcher.addEvent(std::bind(&Mouse::setNativeCursor, this, enable));
+        return;
+    }
+
+    if(m_nativeCursor == enable)
+        return;
+    m_nativeCursor = enable;
+    // Re-evaluate which stacked cursor (if any) may show under the new mode.
+    applyTopCursor();
 }
 
 void Mouse::popCursor(const std::string& name)
@@ -92,29 +142,28 @@ void Mouse::popCursor(const std::string& name)
         return;
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if(m_cursorStack.size() == 0)
-        return;
-
-    if(name.empty() || m_cursors.find(name) == m_cursors.end())
-        m_cursorStack.pop_back();
-    else {
-        int cursorId = m_cursors[name];
-        int index = -1;
-        for(uint i=0;i<m_cursorStack.size();++i) {
-            if(m_cursorStack[i] == cursorId)
-                index = i;
-        }
-        if(index >= 0)
-            m_cursorStack.erase(m_cursorStack.begin() + index);
-        else
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if(m_cursorStack.size() == 0)
             return;
+
+        if(name.empty() || m_cursors.find(name) == m_cursors.end())
+            m_cursorStack.pop_back();
+        else {
+            int cursorId = m_cursors[name];
+            int index = -1;
+            for(uint i=0;i<m_cursorStack.size();++i) {
+                if(m_cursorStack[i] == cursorId)
+                    index = i;
+            }
+            if(index >= 0)
+                m_cursorStack.erase(m_cursorStack.begin() + index);
+            else
+                return;
+        }
     }
 
-    if(m_cursorStack.size() > 0)
-        g_window.setMouseCursor(m_cursorStack.back());
-    else
-        g_window.restoreMouseCursor();
+    applyTopCursor();
 }
 
 bool Mouse::isCursorChanged()
