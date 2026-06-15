@@ -57,13 +57,17 @@ function UIProgressBar:getPercentPixels()
 end
 
 function UIProgressBar:getProgress()
-  if self.minimum == self.maximum then return 1 end
+  -- 0 (empty) for a degenerate/uninitialized range. Returning 1 here made an
+  -- empty/not-yet-populated bar render FULL (minimum/maximum are nil until the
+  -- first setValue/setPercent, since create() only sets the unused min/max fields).
+  if self.minimum == nil or self.maximum == nil or self.minimum == self.maximum then return 0 end
   return (self.value - self.minimum) / (self.maximum - self.minimum)
 end
 
 function UIProgressBar:updateBackground()
   if self:isOn() then
-    local width = math.round(math.max((self:getProgress() * (self:getWidth() - self.bgBorderLeft - self.bgBorderRight)), 1))
+    -- Real fill width, 0 when empty (no forced 1px sliver / gold tip).
+    local width = math.round(self:getProgress() * (self:getWidth() - self.bgBorderLeft - self.bgBorderRight))
     local height = self:getHeight() - self.bgBorderTop - self.bgBorderBottom
     local rect = { x = self.bgBorderLeft, y = self.bgBorderTop, width = width, height = height }
     if not self.usingImage then

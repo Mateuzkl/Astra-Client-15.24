@@ -57,7 +57,9 @@ function UIVerticalProgressBarSD:getPercentPixels()
 end
 
 function UIVerticalProgressBarSD:getProgress()
-  if self.minimum == self.maximum then return 1 end
+  -- 0 (empty) for a degenerate/uninitialized range; returning 1 made an empty bar
+  -- render FULL (minimum/maximum are nil until the first setValue/setPercent).
+  if self.minimum == nil or self.maximum == nil or self.minimum == self.maximum then return 0 end
   return (self.value - self.minimum) / (self.maximum - self.minimum)
 end
 
