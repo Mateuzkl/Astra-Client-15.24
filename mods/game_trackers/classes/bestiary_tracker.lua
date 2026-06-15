@@ -45,15 +45,20 @@ function BestiaryTracker.updateWidgetTracker(data, widget)
 	local firstPercent = math.min((currentKills * 100) / firstUnlock, 100)
 	widget.trackerContainer.killsBar:setPercent(firstPercent)
 
+	-- Always set the later-stage bars (0 when that stage isn't reached yet) so an
+	-- un-reached stage reads as EMPTY. Previously they were left untouched, so a
+	-- fresh/reused bar kept an uninitialized value and rendered FULL.
+	local secondPercent = 0
 	if currentKills > firstUnlock then
-		local secondPercent = math.min(((currentKills - firstUnlock) * 100) / (secondUnlock - firstUnlock), 100)
-		widget.trackerContainer1.killsBar1:setPercent(secondPercent)
+		secondPercent = math.min(((currentKills - firstUnlock) * 100) / (secondUnlock - firstUnlock), 100)
 	end
+	widget.trackerContainer1.killsBar1:setPercent(secondPercent)
 
+	local thirdPercent = 0
 	if currentKills > secondUnlock then
-		local thirdPercent = math.min(((currentKills - secondUnlock) * 100) / (thirdUnlock - secondUnlock), 100)
-		widget.trackerContainer2.killsBar2:setPercent(thirdPercent)
+		thirdPercent = math.min(((currentKills - secondUnlock) * 100) / (thirdUnlock - secondUnlock), 100)
 	end
+	widget.trackerContainer2.killsBar2:setPercent(thirdPercent)
 
 	if currentKills >= thirdUnlock then
 		widget.trackerContainer.killsBar:setImageSource('/game_cyclopedia/images/ui/monster-bar-green')
@@ -99,15 +104,20 @@ function BestiaryTracker.updateWidgetShowTracker(data, monsterList)
 	local firstPercent = math.min((currentKills * 100) / firstUnlock, 100)
 	widget.trackerContainer.killsBar:setPercent(firstPercent)
 
+	-- Always set the later-stage bars (0 when that stage isn't reached yet) so an
+	-- un-reached stage reads as EMPTY. Previously they were left untouched, so a
+	-- fresh/reused bar kept an uninitialized value and rendered FULL.
+	local secondPercent = 0
 	if currentKills > firstUnlock then
-		local secondPercent = math.min(((currentKills - firstUnlock) * 100) / (secondUnlock - firstUnlock), 100)
-		widget.trackerContainer1.killsBar1:setPercent(secondPercent)
+		secondPercent = math.min(((currentKills - firstUnlock) * 100) / (secondUnlock - firstUnlock), 100)
 	end
+	widget.trackerContainer1.killsBar1:setPercent(secondPercent)
 
+	local thirdPercent = 0
 	if currentKills > secondUnlock then
-		local thirdPercent = math.min(((currentKills - secondUnlock) * 100) / (thirdUnlock - secondUnlock), 100)
-		widget.trackerContainer2.killsBar2:setPercent(thirdPercent)
+		thirdPercent = math.min(((currentKills - secondUnlock) * 100) / (thirdUnlock - secondUnlock), 100)
 	end
+	widget.trackerContainer2.killsBar2:setPercent(thirdPercent)
 
 	if currentKills >= thirdUnlock then
 		widget.trackerContainer.killsBar:setImageSource('/game_cyclopedia/images/ui/monster-bar-green')

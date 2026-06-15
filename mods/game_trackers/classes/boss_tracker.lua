@@ -139,15 +139,19 @@ function BossTracker.showTrackerData()
 		local firstPercent = firstUnlock > 0 and math.min((currentKills * 100) / firstUnlock, 100) or 0
 		widget.trackerContainer.killsBar:setPercent(firstPercent)
 
+		-- Always set the later-stage bars (0 when that stage isn't reached) so an
+		-- un-reached stage reads as EMPTY instead of an uninitialized/stale FULL.
+		local secondPercent = 0
 		if currentKills > firstUnlock and secondUnlock > firstUnlock then
-			local secondPercent = math.min(((currentKills - firstUnlock) * 100) / (secondUnlock - firstUnlock), 100)
-			widget.trackerContainer1.killsBar1:setPercent(secondPercent)
+			secondPercent = math.min(((currentKills - firstUnlock) * 100) / (secondUnlock - firstUnlock), 100)
 		end
+		widget.trackerContainer1.killsBar1:setPercent(secondPercent)
 
+		local thirdPercent = 0
 		if currentKills > secondUnlock and thirdUnlock > secondUnlock then
-			local thirdPercent = math.min(((currentKills - secondUnlock) * 100) / (thirdUnlock - secondUnlock), 100)
-			widget.trackerContainer2.killsBar2:setPercent(thirdPercent)
+			thirdPercent = math.min(((currentKills - secondUnlock) * 100) / (thirdUnlock - secondUnlock), 100)
 		end
+		widget.trackerContainer2.killsBar2:setPercent(thirdPercent)
 
 		if currentKills >= thirdUnlock then
 			widget.trackerContainer.killsBar:setImageSource('/game_cyclopedia/images/ui/monster-bar-green')
