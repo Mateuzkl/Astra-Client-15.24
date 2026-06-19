@@ -55,6 +55,15 @@ local COLOR_ORANGE = '#d0902f'
 -- 10% -> 2700ms, 50% -> 1500ms, 100% -> 0 (no wait, sprint the route).
 local RUN_SPEED_MS = 30
 
+-- When the walk engine stops before reaching a waypoint the next tile is almost always
+-- a creature that stepped into the path (routine while a lured pack follows). Re-issue
+-- autoWalk on this cadence so the pathfinder routes AROUND the blocker (creatures are
+-- obstacles in findPath) instead of standing still until stuckMs. Box (luring) and Cait
+-- (kiting) must keep moving smoothly past blockers, so they re-path fast; Single only
+-- walks to the next creature, so a calmer cadence is enough.
+local LURE_REPATH_MS    = 250
+local BLOCKED_REPATH_MS = 600
+
 -- runtime walking state
 local rt = {
   index        = 1,
@@ -70,6 +79,8 @@ local rt = {
   recoveryTarget = false, -- is the current index a recovery jump (don't credit as progress)?
   crossFloorSince = 0,    -- dedicated timer for the cross-floor settle wait
   fighting     = false,   -- box/cait hysteresis: are we in the "kill/kite" phase right now?
+  repathSince  = 0,       -- timer for re-pathing around a creature blocking the route
+  onScreen     = 0,       -- reachable monsters on screen (cached by huntGate for walkTo)
 }
 
 local function defaultConfig()
@@ -590,7 +601,10 @@ local function updateHud()
   local p = g_game.getLocalPlayer()
   if not p then return end
   local pos = p:getPosition()
-  local key = pos.x .. ',' .. pos.y .. ',' .. pos.z .. '|' .. tostring(cfg.selected) .. '|' .. #currentList()
+  -- reach drives the on-map square size, so it's part of the dirty key (changing it in
+  -- Settings re-renders the marks). Walk uses radius reach-1; Stand/others = exact tile.
+  local reach = math.max(1, math.floor(cfg.settings.reachRadius or 2))
+  local key = pos.x .. ',' .. pos.y .. ',' .. pos.z .. '|' .. tostring(cfg.selected) .. '|' .. #currentList() .. '|' .. reach
   if key == hudKey then return end
   hudKey = key
   g_map.clearCavebotMarks()
@@ -599,9 +613,14 @@ local function updateHud()
     -- only positioned nodes on this floor AND near the view; the native overlay culls
     -- by floor, and bounding the list near-screen keeps a long route's draw cost low.
     if wp.x and wp.z == pz and chebyshev(pos, wp) <= 10 then
+      -- Walk draws the reach square (radius = reachRadius-1: 1->1x1, 2->3x3, 3->5x5);
+      -- Stand always demands the exact tile, and use/usewith aren't walked-to with a
+      -- tolerance, so both stay 1x1.
+      local radius = (wp.type == 'walk') and (reach - 1) or 0
       g_map.addCavebotMark({ x = wp.x, y = wp.y, z = wp.z },
         HUD_COLORS[wp.type] or '#ffffff',
-        string.format('%d. %s', i, TYPE_LABEL[wp.type] or tostring(wp.type)))
+        string.format('%d. %s', i, TYPE_LABEL[wp.type] or tostring(wp.type)),
+        radius)
     end
   end
   hudShown = true
@@ -669,7 +688,11 @@ function cavebotOpenSettings()
     s.huntStart = math.max(1, getPercentValue(w.huntStartBox))
     s.huntStop  = math.max(0, getPercentValue(w.huntStopBox))
     if s.huntStop >= s.huntStart then s.huntStop = s.huntStart - 1 end -- keep Stop < Start (hysteresis)
-    rt.fighting = false -- thresholds changed; re-evaluate the box/cait phase cleanly
+    -- Apply the new mode to the RUNNING bot right away: drop the fight/kite phase and
+    -- the walk state so the next tick re-evaluates under the new mode (and re-issues a
+    -- fresh autoWalk), instead of the change only taking effect after a disable/enable.
+    rt.fighting = false
+    resetWalkState()
     hudKey = nil        -- force the HUD list to rebuild (labels/colors may differ)
     save()
     close()
@@ -1122,6 +1145,7 @@ resetWalkState = function()
   rt.floorRetried   = 0
   rt.recoveryTarget = false
   rt.crossFloorSince= 0
+  rt.repathSince    = 0
 end
 
 advance = function()
@@ -1233,18 +1257,35 @@ local function runLua(wp)
     consoleln('[Cavebot] lua compile error: ' .. tostring(err))
     return
   end
-  -- A loadstring chunk defaults to the real _G, which does NOT contain our
-  -- module-scoped `bot` API. Bind the chunk to an env that exposes `bot` and
-  -- falls back to the module environment (g_game, g_map, math, ...), mirroring
-  -- the setfenv pattern used by modules/client_terminal/terminal.lua.
+  -- A loadstring chunk defaults to the real _G (file I/O, process launch, loadstring,
+  -- ...). Bind it to the SAME closed sandbox the Script tab uses (Scripting.makeEnv:
+  -- safe stdlib + g_game/g_map/g_clock only) plus this waypoint's `bot` API, so a
+  -- lua waypoint is locked down identically to a loaded script. Fall back to a small
+  -- closed env (never the real _G) if the scripting module isn't loaded.
   if setfenv then
-    local base = (type(getfenv) == 'function') and getfenv(1) or _G
-    setfenv(fn, setmetatable({ bot = bot }, { __index = base }))
+    local env
+    if Scripting and Scripting.makeEnv then
+      env = Scripting.makeEnv({ bot = bot })
+    else
+      env = setmetatable({ bot = bot }, { __index = {
+        g_game = g_game, g_map = g_map, g_clock = g_clock,
+        math = math, string = string, table = table, pairs = pairs, ipairs = ipairs,
+        tostring = tostring, tonumber = tonumber, pcall = pcall, type = type,
+      } })
+    end
+    setfenv(fn, env)
   end
   local ok, e = pcall(fn)
   if not ok then
     consoleln('[Cavebot] lua runtime error: ' .. tostring(e))
   end
+end
+
+-- Reach tolerance (chebyshev) a node accepts: 1 = the exact tile (tol 0), 2 = any adjacent
+-- tile (tol 1), ... Stand always demands the exact tile. Single source of truth so the
+-- arrival check, node-skip and pre-aim never drift. (reachRadius migrates from `tolerance`.)
+local function reachTol(node)
+  return (node.type == 'stand') and 0 or math.max(0, (cfg.settings.reachRadius or 2) - 1)
 end
 
 local function walkTo(wp, now)
@@ -1253,18 +1294,35 @@ local function walkTo(wp, now)
   local pos = p:getPosition()
   local dest = { x = wp.x, y = wp.y, z = wp.z }
   local isStand = (wp.type == 'stand')
-  -- Reach radius: 1 = the exact tile (chebyshev<=0), 2 = any adjacent tile, ... Stand
-  -- always demands the exact tile. (reachRadius migrates from the old `tolerance`.)
-  local tol = isStand and 0 or math.max(0, (cfg.settings.reachRadius or 2) - 1)
+  local tol = reachTol(wp)
 
   -- Arrived?
   if pos.z == dest.z and chebyshev(pos, dest) <= tol then
     if not rt.recoveryTarget then rt.recovered = 0 end -- real progress clears the bound
     advance()
-    -- Run speed: pause briefly at each reached Walk node so creatures lure/follow and
-    -- the bot doesn't outrun them (lost). 100% = no wait; lower % waits longer.
+    -- Run speed = LURE delay, and luring only makes sense with creatures around. With a
+    -- clear screen (0 reachable monsters) there is nothing to outrun, so sprint at 100%
+    -- (no per-node wait); the moment 1+ monsters are on screen, apply the configured
+    -- pause so the pack follows instead of getting lost. (rt.onScreen is set by huntGate
+    -- earlier this same tick.)
     local sp = cfg.settings.runSpeed or 100
-    if not isStand and sp < 100 then rt.waitUntil = now + (100 - sp) * RUN_SPEED_MS end
+    if not isStand and sp < 100 and (rt.onScreen or 0) > 0 then
+      rt.waitUntil = now + (100 - sp) * RUN_SPEED_MS
+      return
+    end
+    -- No lure pause: aim at the next positioned node THIS SAME tick instead of idling a
+    -- whole loop interval (~200ms) until walkTo re-issues -- that gap is the small stop
+    -- felt at each waypoint on a clear screen. Only chain into a same-floor walk/stand we
+    -- have not already reached; other node types (use/say/floor change) get handled next
+    -- tick, and advance() already reset the walk state (so set lastTarget to match).
+    local nwp = currentList()[rt.index]
+    if nwp and nwp.x and (nwp.type == 'walk' or nwp.type == 'stand') and nwp.z == pos.z then
+      local ntol = reachTol(nwp)
+      if chebyshev(pos, nwp) > ntol then
+        rt.lastTarget = { x = nwp.x, y = nwp.y, z = nwp.z }
+        p:autoWalk(rt.lastTarget)
+      end
+    end
     return
   end
 
@@ -1277,7 +1335,7 @@ local function walkTo(wp, now)
     local j = (rt.index % n) + 1
     local nx = currentList()[j]
     if nx and (nx.type == 'walk' or nx.type == 'stand') then
-      local ntol = (nx.type == 'stand') and 0 or tol
+      local ntol = reachTol(nx)
       if pos.z == nx.z and chebyshev(pos, nx) <= ntol then
         rt.index = j
         resetWalkState()
@@ -1308,8 +1366,11 @@ local function walkTo(wp, now)
   if rt.lastPos and Position.equals(rt.lastPos, pos) then
     if rt.stuckSince == 0 then rt.stuckSince = now end
   else
+    -- The player actually moved: clear both the genuine-stuck timer and the blocked
+    -- re-path debounce so a fresh block starts its own short clock.
     rt.lastPos = pos
     rt.stuckSince = 0
+    rt.repathSince = 0
   end
 
   -- (Re)issue auto-walk when the target changes
@@ -1318,20 +1379,39 @@ local function walkTo(wp, now)
     rt.lastTarget = dest
     rt.retries = 0
     rt.stuckSince = 0
+    rt.repathSince = 0
     p:autoWalk(dest)
     return
   end
 
-  -- If the engine stopped walking before arriving, treat it as a stall
-  if not p:isAutoWalking() and rt.stuckSince == 0 then
-    rt.stuckSince = now
+  -- Blocked re-path: the engine stopped before arriving, so the next tile is almost
+  -- always a creature that stepped into the path. Re-issue autoWalk on a short cadence
+  -- so the pathfinder routes AROUND it (findPath treats blocking creatures as obstacles)
+  -- instead of standing still until stuckMs. This keeps Box LURING and Cait KITING around
+  -- a monster/player in front instead of stopping (Box still stands to kill once its
+  -- threshold is hit -- huntGate handles that, so walkTo only runs while it should move).
+  -- If no detour exists (1-tile corridor) the player never moves, so the genuine-stuck
+  -- timer below still recovers.
+  if not p:isAutoWalking() then
+    local hm = cfg.settings.huntMode
+    local repathMs = (hm == 'cait' or hm == 'box') and LURE_REPATH_MS or BLOCKED_REPATH_MS
+    if rt.repathSince == 0 then rt.repathSince = now end
+    if (now - rt.repathSince) >= repathMs then
+      rt.repathSince = 0
+      p:autoWalk(dest) -- recomputed from the current tile, so it walks around the blocker
+      return
+    end
+  else
+    rt.repathSince = 0
   end
 
-  -- Stuck handling: retry a couple of times, then recover to the nearest
-  -- waypoint, and only skip forward if recovery is exhausted.
+  -- Genuine-stuck handling: the player's own position hasn't changed for stuckMs (walled
+  -- in, desynced, or a truly unreachable waypoint). Retry a couple of times, then recover
+  -- to the nearest waypoint, and only skip forward if recovery is exhausted.
   if rt.stuckSince > 0 and (now - rt.stuckSince) >= cfg.settings.stuckMs then
     rt.retries = rt.retries + 1
     rt.stuckSince = 0
+    rt.repathSince = 0
     p:stopAutoWalk()
     if rt.retries >= 3 then
       if recoverToNearest(p, pos, now) then return end
@@ -1396,6 +1476,7 @@ end
 local function huntGate(pos)
   local mode = cfg.settings.huntMode or 'single'
   local cnt = monstersOnScreen(pos)
+  rt.onScreen = cnt -- cached for walkTo's lure-delay decision (same tick, same pos)
   if mode == 'single' then
     if rt.fighting then
       if cnt == 0 then rt.fighting = false end

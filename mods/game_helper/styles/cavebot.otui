@@ -9,6 +9,8 @@ CavebotWaypoint < Label
   font: $var-cip-font
   color: $var-text-cip-color
   focusable: true
+  // explicit transparent base so a deselected row ($on off) reverts; see ScriptListRow in scripting.otui
+  background-color: #00000000
   $on:
     background-color: #585858
   $hover !on:

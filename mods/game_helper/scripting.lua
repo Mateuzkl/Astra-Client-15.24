@@ -28,10 +28,12 @@ local panel        = nil
 local disabledListW = nil   -- "Available" list (enabled == false)
 local enabledListW  = nil   -- "Running" list (enabled == true)
 local statusLabel   = nil
+local autoReloadW   = nil   -- "Auto-reload last session scripts" checkbox
 
 local debugWindow  = nil    -- transient debug console window
 local debugListW   = nil    -- the debug console's row list (nil while closed)
 local debugScrollW = nil    -- its scrollbar (for auto-scroll)
+local debugSelectW = nil    -- invisible selectable text overlay (drag-select + copy)
 
 local rescanEvent = nil    -- folder-watch timer (auto-pick-up of dropped files)
 local lastFolderSig = nil  -- last seen folder file-set (skip rebuilds when unchanged)
@@ -41,6 +43,14 @@ local selName    = nil     -- selected script (in either list)
 local runningScript = nil  -- the script currently executing (for Timer registration / log context)
 local MAX_ERRORS = 5       -- auto-disable a script after this many runtime errors
 
+-- Per-character "auto-reload last session scripts on login" toggle. autoLoadList is the
+-- persisted set of files to re-enable on login; it is updated only when scripts are
+-- actually loaded/unloaded (refreshAutoLoadList) so toggling the checkbox or just
+-- selecting a row never wipes it. Default ON (matches the prior always-reload behavior).
+local autoReload    = true
+local autoLoadList  = {}
+local suppressAutoReloadSave = false  -- guards setChecked() during load() from re-saving
+
 local debugLines = {}      -- ring buffer of { text, color } for the debug console
 local DEBUG_MAX  = 300
 
@@ -48,6 +58,16 @@ local DEBUG_MAX  = 300
 -- Debug console buffer (errors + script print()/bot.log). Survives the window
 -- being closed; opening it replays the buffer.
 -- ---------------------------------------------------------------------------
+-- Push the full plain log into the invisible selection overlay (so it always matches
+-- the visible rows). debugLines is the single source of truth; rebuilding from it is
+-- cheap (<= DEBUG_MAX lines) and stays in sync with the ring-buffer trimming.
+local function refreshDebugSelection()
+  if not debugSelectW then return end
+  local parts = {}
+  for i = 1, #debugLines do parts[i] = debugLines[i].text end
+  debugSelectW:setText(table.concat(parts, '\n'))
+end
+
 local function debugAppend(text, color)
   text = '[' .. os.date('%H:%M:%S') .. '] ' .. tostring(text)
   color = color or '#cfcfcf'
@@ -62,6 +82,9 @@ local function debugAppend(text, color)
       local first = debugListW:getChildByIndex(1)
       if first then first:destroy() end
     end
+    refreshDebugSelection()
+    -- setValue(max) scrolls to newest; it fires onScrollChange, which re-syncs the
+    -- overlay's text offset so the (invisible) selection stays aligned with the rows.
     pcall(function() if debugScrollW then debugScrollW:setValue(debugScrollW:getMaximum()) end end)
   end
 end
@@ -116,15 +139,22 @@ local function configPath()
   return '/characterdata/' .. LoadedPlayer:getId() .. '/scripts.json'
 end
 
--- We only persist WHICH files are running (per character); the code lives in the files.
+-- The "load on login" set (autoLoadList) tracks which files are running; refreshed only
+-- when a script is actually loaded/unloaded, so it survives checkbox/selection saves.
+local function refreshAutoLoadList()
+  autoLoadList = {}
+  for _, name in ipairs(order) do
+    if scripts[name] and scripts[name].enabled then autoLoadList[#autoLoadList + 1] = name end
+  end
+end
+
+-- We only persist WHICH files to auto-load + the toggle (per character); the code lives
+-- in the files. autoLoadList is written as-is so toggling auto-reload (or selecting a
+-- row) never erases the remembered last-session set.
 local function save()
   local p = configPath()
   if not p then return end
-  local enabled = {}
-  for _, name in ipairs(order) do
-    if scripts[name] and scripts[name].enabled then enabled[#enabled + 1] = name end
-  end
-  local out = { enabled = enabled, selected = selName }
+  local out = { enabled = autoLoadList, selected = selName, autoReload = autoReload }
   local ok, res = pcall(function() return json.encode(out, 2) end)
   if ok and res then g_resources.writeFileContents(p, res) end
 end
@@ -218,8 +248,14 @@ bot.cavebot = {
 }
 
 -- helper control (pcall-guarded against the helper's globals) ---------------
+-- The master on/off lives in helper.lua's local `hotkeyHelperStatus`; read it via
+-- the exported isHelperEnabled() and flip it via botStatus() (which updates the UI).
+local function helperIsOn() return type(isHelperEnabled) == 'function' and isHelperEnabled() == true end
 bot.helper = {
-  enabled = function() return hotkeyHelperStatus == true end,
+  enabled = function() return helperIsOn() end,
+  enable  = function() if not helperIsOn() then pcall(botStatus) end end,
+  disable = function() if helperIsOn() then pcall(botStatus) end end,
+  toggle  = function() pcall(botStatus) end,
   shooter = function() return helperConfig ~= nil and helperConfig.magicShooterEnabled == true end,
   target  = function() return helperConfig ~= nil and helperConfig.autoTargetEnabled == true end,
   setShooter = function(on)
@@ -236,15 +272,64 @@ bot.helper = {
   end,
 }
 
+-- forge control -------------------------------------------------------------
+-- The conversion ACTIONS are exactly the forge UI buttons (g_game.sendForgeConverter,
+-- attached to g_game by the game_forge module at boot). The SERVER validates them:
+-- each costs dust/slivers and the dust limit is capped, so they no-op server-side
+-- when you can't afford them (or aren't allowed to forge). The read getters report
+-- your current forge balances (0 until the forge data is known this session).
+local function forgeRes(resType)
+  local p = lp()
+  if not p or not resType then return 0 end
+  local ok, v = pcall(function() return p:getResourceValue(resType) end)
+  return (ok and v) or 0
+end
+bot.forge = {
+  increaseDustLimit = function() if g_game.sendForgeConverter then g_game.sendForgeConverter(4) end end,
+  dustToSlivers     = function() if g_game.sendForgeConverter then g_game.sendForgeConverter(2) end end,
+  sliversToCores    = function() if g_game.sendForgeConverter then g_game.sendForgeConverter(3) end end,
+  dust    = function() return forgeRes(ResourceForgeDust) end,
+  slivers = function() return forgeRes(ResourceForgeSlivers) end,
+  cores   = function() return forgeRes(ResourceForgeExaltedCore) end,
+  maxDust = function() return (ForgeSystem and (ForgeSystem.maxPlayerDust or ForgeSystem.maxDust)) or 0 end,
+}
+
 -- ---------------------------------------------------------------------------
 -- Compile / run
 --   A loaded script's FILE BODY runs exactly ONCE (on load). For recurring work
 --   the script registers callbacks with Timer(intervalMs, fn): each Timer is its
 --   own cycleEvent, tracked on the script and torn down when it unloads/relogs.
 -- ---------------------------------------------------------------------------
-local moduleEnv = (type(getfenv) == 'function') and getfenv(1) or _G
+-- Sandbox globals: a CLOSED table that does NOT chain to the real _G. Scripts get
+-- safe stdlib + game READ access (g_game/g_map/g_clock), but NOT file I/O
+-- (g_resources), process/URL launch (g_platform), os.execute/remove/exit, loadstring/
+-- dofile/require, package/modules/debug, or networking. This is what restricts a
+-- (possibly shared) script to game automation only.
+local SAFE_STRING = {}
+for k, v in pairs(string) do if k ~= 'dump' then SAFE_STRING[k] = v end end
+local SANDBOX_GLOBALS = {
+  math = math, string = SAFE_STRING, table = table,
+  select = select, pairs = pairs, ipairs = ipairs, next = next, type = type,
+  tostring = tostring, tonumber = tonumber, unpack = unpack, _VERSION = _VERSION,
+  pcall = pcall, xpcall = xpcall, error = error, assert = assert,
+  rawget = rawget, rawset = rawset, rawequal = rawequal,
+  setmetatable = setmetatable, getmetatable = getmetatable,
+  os = { time = os.time, date = os.date, clock = os.clock, difftime = os.difftime },
+  g_game = g_game, g_map = g_map, g_clock = g_clock,
+}
 
--- Cancel every recurring Timer a script registered.
+-- Build a fresh per-chunk environment: a writable top table (the script's own
+-- globals + storage/print/Timer/bot) whose reads fall through to the closed
+-- SANDBOX_GLOBALS. Shared by the Script tab and the cavebot `lua` waypoint so both
+-- are locked down identically.
+function Scripting.makeEnv(extra)
+  local t = {}
+  if extra then for k, v in pairs(extra) do t[k] = v end end
+  return setmetatable(t, { __index = SANDBOX_GLOBALS })
+end
+
+-- Cancel every recurring Timer a script registered, and destroy every HUD icon
+-- it created (both are torn down together when a script unloads/errors/relogs).
 local function stopScript(s)
   if s.events then
     for _, h in ipairs(s.events) do
@@ -252,6 +337,12 @@ local function stopScript(s)
     end
   end
   s.events = {}
+  if s.huds then
+    for _, w in pairs(s.huds) do
+      if w and (not w.isDestroyed or not w:isDestroyed()) then pcall(function() w:destroy() end) end
+    end
+    s.huds = {}
+  end
 end
 
 -- Count a runtime error against a script; auto-disable after MAX_ERRORS (which also
@@ -304,6 +395,240 @@ local function botTimer(interval, fn)
   return { stop = function() if h.ev then pcall(removeEvent, h.ev); h.ev = nil end end }
 end
 
+-- ---------------------------------------------------------------------------
+-- On-screen HUD (bot.hud.*)
+--   Scripts place draggable, clickable icons over the game map. Each icon is
+--   tracked on its script (torn down with it, like a Timer) and its position is
+--   saved per character so it returns where the player left it.
+-- ---------------------------------------------------------------------------
+local hudData = {}   -- per-character saved positions: scriptName -> elemId -> {x,y}
+
+local function hudPath()
+  if not LoadedPlayer or not LoadedPlayer:isLoaded() then return nil end
+  return '/characterdata/' .. LoadedPlayer:getId() .. '/hud.json'
+end
+
+local function loadHud()
+  hudData = {}
+  local p = hudPath()
+  if p and g_resources.fileExists(p) then
+    local ok, res = pcall(function() return json.decode(g_resources.readFileContents(p)) end)
+    if ok and type(res) == 'table' then hudData = res end
+  end
+end
+
+local function saveHud()
+  local p = hudPath()
+  if not p then return end
+  local ok, res = pcall(function() return json.encode(hudData) end)
+  if ok and res then pcall(function() g_resources.writeFileContents(p, res) end) end
+end
+
+-- The game map panel (overlay parent); nil when not in game.
+local function hudParent()
+  local gi = modules.game_interface
+  return (gi and gi.getMapPanel) and gi.getMapPanel() or nil
+end
+
+local function alive(w) return w ~= nil and (not w.isDestroyed or not w:isDestroyed()) end
+local function clampInt(v, d) v = tonumber(v); return v and math.floor(v) or d end
+
+-- Run a script-provided callback (a HUD onClick) with the same run-context and
+-- error accounting as a Timer tick.
+local function runScriptCallback(s, fn, ...)
+  if not s.enabled then return end
+  local prev = runningScript
+  runningScript = s
+  local ok, err = pcall(fn, ...)
+  runningScript = prev
+  if not ok then onScriptError(s, err) end
+end
+
+bot.hud = {}
+
+-- bot.hud.create{ id, image, item, text, color, x, y, width, height, on,
+--                 borderColor, borderColorOn, tooltip, draggable, locked, onClick }
+--   Creates an on-screen HUD element and returns a handle:
+--     :setText/:setImage/:setItem/:setColor/:setBorderColor/:setBorderColorOn
+--     :setTooltip/:setOn/:isOn/:show/:hide/:setVisible/:setPos(x,y)/:getPos()
+--     :setDraggable(on)/:setLocked(on)/:isLocked()/:destroy
+--   The icon is a script `image` OR a real game-item sprite (`item` = item id),
+--   with `text` drawn as a caption directly BELOW it. `borderColor`/`borderColorOn`
+--   are the element's border in the off/on state. `id` is a stable key used to
+--   remember the element's dragged position (and lock) per character; right-clicking
+--   it lets the player Lock/Unlock its position.
+function bot.hud.create(opts)
+  opts = opts or {}
+  local s = runningScript
+  if not s then error('bot.hud.create can only be called from a script', 2) end
+  local parent = hudParent()
+  if not parent then error('bot.hud.create: the game map is not available yet', 2) end
+
+  s.huds = s.huds or {}
+  s.hudSeq = (s.hudSeq or 0) + 1
+  local elemId = tostring(opts.id or ('hud' .. s.hudSeq))
+  -- Recreating an element with the same id replaces the old one.
+  if alive(s.huds[elemId]) then pcall(function() s.huds[elemId]:destroy() end) end
+  s.huds[elemId] = nil
+
+  local w = g_ui.createWidget('ScriptHudIcon', parent)
+  w.scriptName, w.elemId = s.name, elemId
+  s.huds[elemId] = w
+
+  local iconImage = w:getChildById('iconImage')
+  local iconItem  = w:getChildById('iconItem')
+  local caption   = w:getChildById('caption')
+
+  -- Caption sits BELOW the icon when there is one, but fills the whole widget (centered)
+  -- when the HUD is text-only -- otherwise a text-only HUD would waste the icon's slot.
+  local function layoutCaption(hasIcon)
+    if not caption then return end
+    if hasIcon then
+      caption:addAnchor(AnchorTop, 'iconImage', AnchorBottom)
+      caption:setMarginTop(1)
+    else
+      caption:addAnchor(AnchorTop, 'parent', AnchorTop)
+      caption:setMarginTop(0)
+    end
+  end
+
+  -- Icon: a real game item (by id) and a plain image path are mutually exclusive.
+  local function showItem(id)
+    id = tonumber(id) or 0
+    if iconItem then pcall(function() iconItem:setItemId(id) end); iconItem:setVisible(id ~= 0) end
+    if iconImage then iconImage:setVisible(false) end
+    layoutCaption(id ~= 0)
+  end
+  local function showImage(img)
+    if iconImage then iconImage:setImageSource(tostring(img)); iconImage:setVisible(true) end
+    if iconItem then iconItem:setVisible(false) end
+    layoutCaption(true)
+  end
+
+  w:setSize({ width = clampInt(opts.width, 40), height = clampInt(opts.height, 52) })
+  if opts.item then showItem(opts.item)
+  elseif opts.image then showImage(opts.image)
+  else layoutCaption(false) end
+  if opts.text and caption then caption:setText(tostring(opts.text)) end
+  if opts.color and caption then pcall(function() caption:setColor(opts.color) end) end
+  if opts.tooltip then w:setTooltip(tostring(opts.tooltip)) end
+
+  -- Border colors are driven from Lua (see the ScriptHudIcon style note): off/on
+  -- state pick borderOff/borderOn so a script can theme each HUD independently.
+  local borderOff = opts.borderColor or '#00000000'
+  local borderOn  = opts.borderColorOn or '#44ad25'
+  local function applyBorder() if alive(w) then pcall(function() w:setBorderColor(w:isOn() and borderOn or borderOff) end) end end
+  w:setOn(opts.on and true or false)
+  applyBorder()
+
+  -- Position: a saved (per-character) position overrides the script's default.
+  -- Positions are stored relative to the map panel; setPosition uses absolute coords.
+  local saved = hudData[s.name] and hudData[s.name][elemId]
+  local rx = saved and clampInt(saved.x, 100) or clampInt(opts.x, 100)
+  local ry = saved and clampInt(saved.y, 100) or clampInt(opts.y, 100)
+  w:setPosition({ x = parent:getX() + rx, y = parent:getY() + ry })
+  pcall(function() w:bindRectToParent() end)
+
+  -- Persist this element's per-character position / lock state by MERGING into its
+  -- saved entry, so writing one field never wipes the other.
+  local function persistField(k, v)
+    local pr = hudParent()
+    if not pr then return end
+    hudData[s.name] = hudData[s.name] or {}
+    local e = hudData[s.name][elemId] or {}
+    if k then e[k] = v end
+    if alive(w) then e.x = w:getX() - pr:getX(); e.y = w:getY() - pr:getY() end
+    hudData[s.name][elemId] = e
+    saveHud()
+  end
+
+  -- Lock = the player froze this element in place (drag disabled). It is persisted
+  -- and toggleable from a right-click menu, so the player can lock a HUD where they
+  -- want it without touching the script. `draggable` is the script's own default.
+  local wantDrag = (opts.draggable ~= false)
+  local locked = (saved and saved.locked == true) or (opts.locked == true)
+  local function applyDraggable() if alive(w) then w:setDraggable(wantDrag and not locked) end end
+  applyDraggable()
+
+  -- Drag to reposition (saved on drop). A drag never also fires onClick, so
+  -- dragging the icon won't accidentally trigger its toggle.
+  w.onDragEnter = function(self, mousePos)
+    self.movingReference = { x = mousePos.x - self:getX(), y = mousePos.y - self:getY() }
+    return true
+  end
+  w.onDragMove = function(self, mousePos)
+    if not self.movingReference then return end
+    self:setPosition({ x = mousePos.x - self.movingReference.x, y = mousePos.y - self.movingReference.y })
+    self:bindRectToParent()
+  end
+  w.onDragLeave = function(self)
+    persistField()
+    self.movingReference = nil
+    return true
+  end
+
+  -- Right-click: let the player lock/unlock this element's position.
+  w.onMousePress = function(_, mp, btn)
+    if btn == MouseRightButton then
+      local menu = g_ui.createWidget('PopupMenu')
+      menu:setGameMenu(true)
+      menu:addOption(locked and tr('Unlock position') or tr('Lock position'), function()
+        locked = not locked
+        applyDraggable()
+        persistField('locked', locked)
+      end)
+      menu:display(mp)
+      return true
+    end
+    return false
+  end
+
+  -- The handle the script keeps. Every method is safe to call after the icon
+  -- (or the whole game UI) was destroyed.
+  local handle = { id = elemId }
+  function handle:setText(t) if caption and alive(w) then caption:setText(tostring(t)) end return self end
+  function handle:setImage(img) if alive(w) then showImage(img) end return self end
+  function handle:setItem(id) if alive(w) then showItem(id) end return self end
+  function handle:setColor(c) if caption and alive(w) then pcall(function() caption:setColor(c) end) end return self end
+  function handle:setBorderColor(c) borderOff = c or borderOff; applyBorder() return self end
+  function handle:setBorderColorOn(c) borderOn = c or borderOn; applyBorder() return self end
+  function handle:setTooltip(t) if alive(w) then w:setTooltip(tostring(t)) end return self end
+  function handle:setOn(on) if alive(w) then w:setOn(on and true or false); applyBorder() end return self end
+  function handle:isOn() return alive(w) and w:isOn() or false end
+  function handle:setDraggable(on) wantDrag = on and true or false; applyDraggable() return self end
+  function handle:setLocked(on) locked = on and true or false; applyDraggable(); persistField('locked', locked) return self end
+  function handle:isLocked() return locked end
+  function handle:show() if alive(w) then w:show() end return self end
+  function handle:hide() if alive(w) then w:hide() end return self end
+  function handle:setVisible(v) if alive(w) then w:setVisible(v and true or false) end return self end
+  function handle:setPos(x, y)
+    local pr = hudParent()
+    if pr and alive(w) then
+      x, y = clampInt(x, 0), clampInt(y, 0)
+      w:setPosition({ x = pr:getX() + x, y = pr:getY() + y }); pcall(function() w:bindRectToParent() end)
+      persistField()
+    end
+    return self
+  end
+  function handle:getPos()
+    local pr = hudParent()
+    if pr and alive(w) then return w:getX() - pr:getX(), w:getY() - pr:getY() end
+    return 0, 0
+  end
+  function handle:destroy()
+    if alive(w) then pcall(function() w:destroy() end) end
+    if s.huds then s.huds[elemId] = nil end
+    w = nil
+  end
+
+  if type(opts.onClick) == 'function' then
+    local cb = opts.onClick
+    w.onClick = function() runScriptCallback(s, cb, handle) end
+  end
+
+  return handle
+end
+
 local function compile(s)
   s.fn = nil
   local code, rerr = readScriptCode(s)
@@ -318,11 +643,10 @@ local function compile(s)
     debugAppend(s.name .. ' compile error: ' .. tostring(err), '#ff6666')
     return false, err
   end
-  -- Sandbox: expose `bot`, `Timer`, a persistent `storage`, and `print`=bot.log;
-  -- fall back to the module env (g_game, g_map, math, string, ...) for the rest.
+  -- Sandbox: expose `bot`, `Timer`, a persistent `storage`, and `print`=bot.log on
+  -- top of the CLOSED SANDBOX_GLOBALS (safe stdlib + g_game/g_map/g_clock only).
   if setfenv then
-    setfenv(fn, setmetatable({ bot = bot, storage = s.storage, print = bot.log, Timer = botTimer },
-                             { __index = moduleEnv }))
+    setfenv(fn, Scripting.makeEnv({ bot = bot, storage = s.storage, print = bot.log, Timer = botTimer }))
   end
   s.fn = fn
   return true
@@ -348,6 +672,7 @@ local function setEnabled(s, on)
     s.enabled = false
     stopScript(s)
   end
+  refreshAutoLoadList()   -- a real load/unload updates the remembered "load on login" set
   save()
   return true
 end
@@ -362,14 +687,17 @@ local function makeRow(listW, name, running)
   row:setColor(running and '#9fe08a' or '#cccccc')
   row:setOn(name == selName)
   row.scriptName = name
-  row.onClick = function() Scripting.selectScript(name) end
+  -- Select on PRESS, not on release (onClick): inside the helper MainWindow the
+  -- release-time onClick is unreliable (same reason the cavebot rows select on press),
+  -- so left-clicking a row would silently fail to select it.
+  row.onMousePress = function(_, mp, btn)
+    if btn == MouseRightButton then Scripting.scriptMenu(name, mp); return true end
+    if btn == MouseLeftButton then Scripting.selectScript(name); return true end
+    return false
+  end
   row.onDoubleClick = function()
     local s = scripts[name]
     if s then setEnabled(s, not s.enabled); Scripting.refreshLists() end
-  end
-  row.onMousePress = function(_, mp, btn)
-    if btn == MouseRightButton then Scripting.scriptMenu(name, mp); return true end
-    return false
   end
 end
 
@@ -456,22 +784,40 @@ function Scripting.openDebug()
   debugWindow = w
   debugListW   = w:recursiveGetChildById('debugList')
   debugScrollW = w:recursiveGetChildById('debugScroll')
+  debugSelectW = w:recursiveGetChildById('debugSelectText')
+
+  -- Selection plumbing: keep the invisible overlay scrolled in lock-step with the list
+  -- (so the selection sits over the right rows), and let the wheel over the overlay
+  -- scroll the list underneath it.
+  if debugSelectW and debugListW then
+    debugListW.onScrollChange = function(_, offset) debugSelectW:setTextVirtualOffset(offset) end
+    debugSelectW.onMouseWheel = function(_, mousePos, dir) return debugListW:onMouseWheel(mousePos, dir) end
+  end
+
   if debugListW then
     for _, line in ipairs(debugLines) do
       local row = g_ui.createWidget('ScriptDebugRow', debugListW)
       row:setText(line.text); row:setColor(line.color)
     end
   end
+  refreshDebugSelection()
   pcall(function() if debugScrollW then debugScrollW:setValue(debugScrollW:getMaximum()) end end)
 
   local function close()
-    debugListW = nil; debugScrollW = nil
+    debugListW = nil; debugScrollW = nil; debugSelectW = nil
     if debugWindow then debugWindow:destroy(); debugWindow = nil end
   end
   w:recursiveGetChildById('closeBtn').onClick = close
   w:recursiveGetChildById('clearBtn').onClick = function()
     debugLines = {}
     if debugListW then debugListW:destroyChildren() end
+    if debugSelectW then debugSelectW:setText('') end
+  end
+  -- Copy All: dump the whole buffer (not just the on-screen selection) to the clipboard.
+  w:recursiveGetChildById('copyAllBtn').onClick = function()
+    local parts = {}
+    for i = 1, #debugLines do parts[i] = debugLines[i].text end
+    g_window.setClipboardText(table.concat(parts, '\n'))
   end
 end
 
@@ -480,14 +826,17 @@ end
 -- ---------------------------------------------------------------------------
 local function load()
   scripts, order, selName = {}, {}, nil
-  -- Per-character: which files were running last session.
+  -- Per-character: which files were running last session + the auto-reload toggle.
   local enabledSet = {}
+  autoLoadList = {}
+  autoReload = true
   local p = configPath()
   if p and g_resources.fileExists(p) then
     local ok, res = pcall(function() return json.decode(g_resources.readFileContents(p)) end)
     if ok and type(res) == 'table' then
-      for _, name in ipairs(res.enabled or {}) do enabledSet[name] = true end
+      for _, name in ipairs(res.enabled or {}) do enabledSet[name] = true; autoLoadList[#autoLoadList + 1] = name end
       selName = res.selected
+      autoReload = (res.autoReload ~= false)  -- default ON (absent field == prior always-reload behavior)
     end
   end
   ensureDir()
@@ -511,11 +860,20 @@ local function load()
     scripts[name] = { name = name, enabled = false, storage = {}, errors = 0 }
     order[#order + 1] = name
   end
-  -- Re-enable files that were running last session.
-  for _, name in ipairs(order) do
-    if enabledSet[name] then setEnabled(scripts[name], true) end
+  -- Re-enable files that were running last session -- but only if auto-reload is on.
+  -- (When off, autoLoadList keeps the remembered set so turning it back on restores them.)
+  if autoReload then
+    for _, name in ipairs(order) do
+      if enabledSet[name] then setEnabled(scripts[name], true) end
+    end
   end
   if not selName or not scripts[selName] then selName = order[1] end
+  -- Reflect the per-character toggle in the checkbox without re-triggering a save.
+  if autoReloadW then
+    suppressAutoReloadSave = true
+    autoReloadW:setChecked(autoReload)
+    suppressAutoReloadSave = false
+  end
 end
 
 -- Re-scan the folder, keeping running scripts running. Picks up files the user
@@ -553,6 +911,15 @@ function Scripting.autoRescan()
   if sig ~= lastFolderSig then Scripting.rescan() end
 end
 
+-- User toggled the "Auto-reload last session scripts" checkbox. Only the flag
+-- changes here; autoLoadList (the remembered set) is left intact so the next login
+-- still restores it when re-enabled.
+local function onAutoReloadChange(_, checked)
+  if suppressAutoReloadSave then return end
+  autoReload = checked and true or false
+  save()
+end
+
 -- ---------------------------------------------------------------------------
 -- UI mounting (mirrors Cavebot: a panel in the helper content area)
 -- ---------------------------------------------------------------------------
@@ -573,6 +940,11 @@ local function mountUI(window)
   disabledListW = panel:recursiveGetChildById('disabledList')
   enabledListW  = panel:recursiveGetChildById('enabledList')
   statusLabel   = panel:recursiveGetChildById('scriptingStatus')
+  autoReloadW   = panel:recursiveGetChildById('autoReloadCheck')
+  if autoReloadW then
+    autoReloadW:setChecked(autoReload)
+    autoReloadW.onCheckChange = onAutoReloadChange
+  end
   return true
 end
 
@@ -586,6 +958,7 @@ function Scripting.init(window)
 end
 
 function Scripting.online()
+  loadHud()  -- restore saved HUD positions BEFORE bodies run (they recreate the icons)
   load()  -- re-enables the scripts that were running last session (runs each body once)
   lastFolderSig = table.concat(order, '|')
   Scripting.refreshLists()
@@ -604,7 +977,7 @@ function Scripting.terminate()
   for _, s in pairs(scripts) do stopScript(s) end
   if rescanEvent then removeEvent(rescanEvent); rescanEvent = nil end
   if debugWindow then debugWindow:destroy(); debugWindow = nil end
-  debugListW, debugScrollW = nil, nil
+  debugListW, debugScrollW, debugSelectW = nil, nil, nil
   helperWindow = nil
   panel = nil
 end

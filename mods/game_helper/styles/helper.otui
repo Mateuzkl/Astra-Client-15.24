@@ -191,73 +191,6 @@ HelperTracker < MiniWindow
     margin-left: 3
     margin-right: 3
 
-HelperRules < NewHeadlessWindow
-  id: helperRules
-  anchors.horizontalCenter: parent.horizontalCenter
-  size: 450 345
-  @onEscape: hide()
-  UIWidget
-    size: 145 56
-    anchors.top: parent.top
-    anchors.horizontalCenter: parent.horizontalCenter
-    margin-top: -33
-    image-source: /images/game/tutorial/backdrop_crestr
-    phantom: true
-
-  Panel
-    id: contentPanel
-    anchors.fill: parent
-    margin: 15 13 17 13
-    TextList
-      id: rules
-      anchors.top: parent.top
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.bottom: separator.top
-      margin-top: 10
-      margin-bottom: 10
-      text-align: center
-      padding: 1
-      focusable: false
-      background-color: #484848
-    
-    HorizontalSeparator
-      id: separator
-      anchors.bottom: next.top
-      anchors.left: parent.left
-      anchors.right: parent.right
-      margin-bottom: 10
-    Button
-      id: next
-      anchors.bottom: parent.bottom
-      anchors.right: parent.right
-      !text: tr('Next')
-      size: 43 20
-      enabled: false
-      @onClick: modules.game_helper:onHelperTermConditionNext()
-    Button
-      id: close
-      anchors.bottom: parent.bottom
-      anchors.right: prev.left
-      margin-right: 5
-      !text: tr('Close')
-      size: 43 20
-      @onClick: modules.game_helper.closeTerms()
-    CheckBox
-      id: termCondition
-      width: 100
-      anchors.bottom: parent.bottom
-      anchors.left: parent.left
-      text-offset: 16 -2
-      !text: tr('I agree with Astra Terms and Conditions.')
-      !tooltip: tr('I have read and I agree to the Extended Astra Service Agreement and the Astra Privacy Policy.')
-      margin-bottom: 5
-      font: $var-cip-font
-      color: $var-text-cip-color
-      text-auto-resize: true
-      @onCheckChange: modules.game_helper.onHelperTermCondition(self:getId(), self:isChecked())
-
-
 PlayerName < Label
   focusable: true
   height: 15
@@ -817,47 +750,108 @@ HealingPanel < Panel
       text-auto-resize: true
     Panel
       id: firstPanel
-      anchors.top: prev.bottom
+      anchors.top: friendTitle.bottom
       anchors.left: parent.left
       anchors.right: separator1.left
       anchors.bottom: parent.bottom
-      margin: 5 5 5 5
+      margin: 4 5 4 5
       focusable: true
       Label
         id: selectFriendLabel
         anchors.top: parent.top
         anchors.left: parent.left
-        !text: tr('Select a Friend')
+        !text: tr('Heal Priority')
         font: $var-cip-font
         color: $var-text-cip-color
         text-auto-resize: true
-      UIWidget
-        size: 12 12
-        anchors.top: prev.top
-        anchors.left: prev.right
-        margin-left: 5
-        margin-top: 2
-        image-source: /images/skin/show-gui-help-grey
-        !tooltip: tr('You must be in a party to assign a player to be healed')
       TextList
         id: friendList
-        height: 72
+        height: 50
         anchors.top: selectFriendLabel.bottom
         anchors.left: parent.left
-        anchors.right: parent.right
-        margin-top: 7
+        anchors.right: moveHealUp.left
+        margin-top: 4
+        margin-right: 3
         padding: 1
         focusable: true
         vertical-scrollbar: friendListScrollBar
         background-color: #484848
       VerticalScrollBar
         id: friendListScrollBar
-        anchors.top: prev.top
-        anchors.right: prev.right
-        anchors.bottom: prev.bottom
+        anchors.top: friendList.top
+        anchors.right: friendList.right
+        anchors.bottom: friendList.bottom
         margin: 1 1 1 0
         step: 14
         pixels-scroll: true
+      UIWidget
+        id: moveHealUp
+        size: 14 10
+        anchors.top: selectFriendLabel.bottom
+        anchors.right: parent.right
+        margin-top: 4
+        image-source: /images/arrows/icon-uparrow
+        cursor: pointer
+        opacity: 0.85
+        $hover:
+          opacity: 1.0
+        @onClick: modules.game_helper.moveHealName(self, -1)
+        !tooltip: tr('Move selected up (higher priority)')
+      UIWidget
+        id: moveHealDown
+        size: 14 10
+        anchors.top: moveHealUp.bottom
+        anchors.right: parent.right
+        margin-top: 30
+        image-source: /images/arrows/icon-downarrow
+        cursor: pointer
+        opacity: 0.85
+        $hover:
+          opacity: 1.0
+        @onClick: modules.game_helper.moveHealName(self, 1)
+        !tooltip: tr('Move selected down (lower priority)')
+      ButtonBox
+        id: radioPT
+        size: 38 18
+        anchors.top: friendList.bottom
+        anchors.left: parent.left
+        margin-top: 6
+        !text: tr('PT')
+        font: $var-cip-font
+        !tooltip: tr('Fill the list with your nearby party members')
+      ButtonBox
+        id: radioList
+        size: 42 18
+        anchors.top: radioPT.top
+        anchors.left: radioPT.right
+        margin-left: 4
+        !text: tr('List')
+        font: $var-cip-font
+        !tooltip: tr('Use a saved manual list of player names')
+      Button
+        id: addNames
+        size: 18 18
+        anchors.top: radioPT.top
+        anchors.left: radioList.right
+        margin-left: 3
+        !text: tr('+')
+        font: $var-cip-font
+        change-cursor-image: true
+        cursor: pointer
+        @onClick: modules.game_helper.onAddHealNames(self)
+        !tooltip: tr('Add players to the list, separated by ","')
+      Button
+        id: removeNames
+        size: 18 18
+        anchors.top: radioPT.top
+        anchors.left: addNames.right
+        margin-left: 3
+        !text: tr('-')
+        font: $var-cip-font
+        change-cursor-image: true
+        cursor: pointer
+        @onClick: modules.game_helper.onRemoveHealName(self)
+        !tooltip: tr('Remove the selected player from the list')
 
     VerticalSeparator
       id: separator1
@@ -870,125 +864,103 @@ HealingPanel < Panel
     Panel
       id: secondPanel
       anchors.top: friendTitle.bottom
-      anchors.left: prev.right
+      anchors.left: separator1.right
       anchors.right: parent.right
       anchors.bottom: parent.bottom
-      margin: 5 5 5 5
-      Label
+      margin: 6 6 6 6
+      CheckBox
+        id: enableHeal
+        width: 90
         anchors.top: parent.top
         anchors.left: parent.left
-        !text: tr('Heal Friend List')
+        !text: tr('Enable')
+        margin-top: 2
+        font: $var-cip-font
+        color: $var-text-cip-color
+        text-offset: 16 -2
+        @onCheckChange: modules.game_helper.onEnableHeal(self, self:isChecked())
+        $hover !disabled:
+          color: #c0c0c0
+      Label
+        id: healAtLabel
+        anchors.top: enableHeal.bottom
+        anchors.left: parent.left
+        margin-top: 6
+        !text: tr('Heal at life:')
         font: $var-cip-font
         color: $var-text-cip-color
         text-auto-resize: true
-      UICreature
-        id: friendButton0
-        size: 34 34
-        anchors.top: prev.bottom
+      UIButton
+        id: healRmvPercent
+        size: 10 24
+        anchors.top: healAtLabel.bottom
         anchors.left: parent.left
-        margin-top: 7
-        margin-left: 2
-        image-source: /images/store/bazaar-add-item
-        image-clip: 0 0 34 34
-        idle-animate: true
-        $pressed:
-          image-clip: 34 0 34 34
+        margin-top: 4
+        image-source: /images/ui/percent-buttons
+        image-clip: 0 0 10 24
+        @onSetup: |
+          g_mouse.bindAutoPress(self, function() modules.game_helper.stepHealPercent(self, -1) end, 150)
         $hover !pressed:
-          image-clip: 0 0 34 34
-        @onClick: modules.game_helper.onAddPartyMember(self)
-      CheckBox
-        id: enableSio0
-        width: 100
+          image-clip: 0 0 10 24
+        $pressed:
+          image-clip: 0 24 10 24
+        $disabled:
+          image-clip: 0 48 10 24
+      FlatPanel
+        id: healPercentBg
+        size: 42 24
         anchors.top: prev.top
-        anchors.left: friendButton0.right
-        !text: tr('Enable')
+        anchors.left: prev.right
+        margin-left: 2
+        image-source: /images/ui/percentBg
+        Label
+          id: healPercentLabel
+          anchors.top: parent.top
+          anchors.horizontalCenter: parent.horizontalCenter
+          margin-top: 4
+          !text: tr('99%%')
+          font: $var-cip-font
+          color: $var-text-cip-color
+          text-auto-resize: true
+      UIButton
+        id: healAddPercent
+        size: 10 24
+        anchors.top: prev.top
+        anchors.left: prev.right
+        margin-left: 2
+        image-source: /images/ui/percent-buttons
+        image-clip: 10 0 10 24
+        @onSetup: |
+          g_mouse.bindAutoPress(self, function() modules.game_helper.stepHealPercent(self, 1) end, 150)
+        $hover !pressed:
+          image-clip: 10 0 10 24
+        $pressed:
+          image-clip: 10 24 10 24
+        $disabled:
+          image-clip: 10 48 10 24
+      UIWidget
+        size: 12 12
+        anchors.top: prev.top
+        anchors.left: prev.right
         margin-left: 5
+        margin-top: 6
+        image-source: /images/skin/show-gui-help-grey
+        !tooltip: tr('Heals the highest-priority listed player whose life is below the set value, when in range')
+      CheckBox
+        id: prioritizeFriend
+        anchors.top: healRmvPercent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        margin-top: 6
+        text-align: left
+        !text: tr('Prioritize HF')
         font: $var-cip-font
         color: $var-text-cip-color
-        text-offset: 13 -3
-        change-cursor-image: false
-        @onCheckChange: modules.game_helper.onEnableSio(self, self:isChecked())
+        text-offset: 16 -1
+        @onCheckChange: modules.game_helper.onPrioritizeFriend(self, self:isChecked())
+        !tooltip: tr('When checked, healing the listed friend takes priority over healing your own character\nwhenever both your self-heal and a friend-heal condition would trigger a spell at the same time.\nDefault order is your character first, then Exura Gran Sio (if off cooldown), then Sio.')
         $hover !disabled:
           color: #c0c0c0
-      ComboBox
-        id: healPercent0
-        size: 67 20
-        anchors.top: prev.bottom
-        anchors.left: friendButton0.right
-        margin-top: 2
-        margin-left: 5
-        color: $var-text-cip-color
-        @onOptionChange: modules.game_helper.updateFriendHealingPercent(self:getId():match("%d+"), self:getCurrentOption().text:match("%d+"))
-        @onSetup: |
-          for i = 10, 100, 10 do
-            if i == 100 then
-              i = 99
-            end
-            self:addOption(i .. "%")
-          end
-          self:setCurrentOption("99%")
-      UIWidget
-        size: 12 12
-        anchors.top: prev.top
-        anchors.left: prev.right
-        margin-left: 5
-        margin-top: 4
-        image-source: /images/skin/show-gui-help-grey
-        !tooltip: tr('')
-      UICreature
-        id: friendButton1
-        size: 34 34
-        anchors.top: friendButton0.bottom
-        anchors.left: parent.left
-        margin-top: 5
-        margin-left: 2
-        image-source: /images/store/bazaar-add-item
-        image-clip: 0 0 34 34
-        $pressed:
-          image-clip: 34 0 34 34
-        $hover !pressed:
-          image-clip: 0 0 34 34
-        @onClick: modules.game_helper.onAddPartyMember(self)
-      CheckBox
-        id: enableSio1
-        width: 100
-        anchors.top: prev.top
-        anchors.left: friendButton1.right
-        !text: tr('Enable')
-        margin-left: 5
-        font: $var-cip-font
-        color: $var-text-cip-color
-        text-offset: 13 -3
-        change-cursor-image: false
-        @onCheckChange: modules.game_helper.onEnableSio(self, self:isChecked())
-        $hover !disabled:
-        color: #c0c0c0
-
-      ComboBox
-        id: healPercent1
-        size: 67 20
-        anchors.top: prev.bottom
-        anchors.left: friendButton1.right
-        margin-top: 2
-        margin-left: 5
-        color: $var-text-cip-color
-        @onOptionChange: modules.game_helper.updateFriendHealingPercent(self:getId():match("%d+"), self:getCurrentOption().text:match("%d+"))
-        @onSetup: |
-          for i = 10, 100, 10 do
-            if i == 100 then
-              i = 99
-            end
-            self:addOption(i .. "%")
-          end
-          self:setCurrentOption("99%")
-      UIWidget
-        size: 12 12
-        anchors.top: prev.top
-        anchors.left: prev.right
-        margin-left: 5
-        margin-top: 4
-        image-source: /images/skin/show-gui-help-grey
-        !tooltip: tr('')
 
   Panel
     id: granSioPanel
@@ -1012,47 +984,108 @@ HealingPanel < Panel
       text-auto-resize: true
     Panel
       id: firstPanel
-      anchors.top: prev.bottom
+      anchors.top: friendTitle.bottom
       anchors.left: parent.left
       anchors.right: separator1.left
       anchors.bottom: parent.bottom
-      margin: 5 5 5 5
+      margin: 4 5 4 5
       focusable: true
       Label
         id: selectFriendLabel
         anchors.top: parent.top
         anchors.left: parent.left
-        !text: tr('Select a Friend')
+        !text: tr('Heal Priority')
         font: $var-cip-font
         color: $var-text-cip-color
         text-auto-resize: true
-      UIWidget
-        size: 12 12
-        anchors.top: prev.top
-        anchors.left: prev.right
-        margin-left: 5
-        margin-top: 2
-        image-source: /images/skin/show-gui-help-grey
-        !tooltip: tr('You must be in a party to assign a player to be healed')
       TextList
         id: friendList2
-        height: 72
+        height: 50
         anchors.top: selectFriendLabel.bottom
         anchors.left: parent.left
-        anchors.right: parent.right
-        margin-top: 7
+        anchors.right: moveHealUp.left
+        margin-top: 4
+        margin-right: 3
         padding: 1
         focusable: true
         vertical-scrollbar: friendListScrollBar
         background-color: #484848
       VerticalScrollBar
         id: friendListScrollBar
-        anchors.top: prev.top
-        anchors.right: prev.right
-        anchors.bottom: prev.bottom
+        anchors.top: friendList2.top
+        anchors.right: friendList2.right
+        anchors.bottom: friendList2.bottom
         margin: 1 1 1 0
         step: 14
         pixels-scroll: true
+      UIWidget
+        id: moveHealUp
+        size: 14 10
+        anchors.top: selectFriendLabel.bottom
+        anchors.right: parent.right
+        margin-top: 4
+        image-source: /images/arrows/icon-uparrow
+        cursor: pointer
+        opacity: 0.85
+        $hover:
+          opacity: 1.0
+        @onClick: modules.game_helper.moveHealName(self, -1)
+        !tooltip: tr('Move selected up (higher priority)')
+      UIWidget
+        id: moveHealDown
+        size: 14 10
+        anchors.top: moveHealUp.bottom
+        anchors.right: parent.right
+        margin-top: 30
+        image-source: /images/arrows/icon-downarrow
+        cursor: pointer
+        opacity: 0.85
+        $hover:
+          opacity: 1.0
+        @onClick: modules.game_helper.moveHealName(self, 1)
+        !tooltip: tr('Move selected down (lower priority)')
+      ButtonBox
+        id: radioPT
+        size: 38 18
+        anchors.top: friendList2.bottom
+        anchors.left: parent.left
+        margin-top: 6
+        !text: tr('PT')
+        font: $var-cip-font
+        !tooltip: tr('Fill the list with your nearby party members')
+      ButtonBox
+        id: radioList
+        size: 42 18
+        anchors.top: radioPT.top
+        anchors.left: radioPT.right
+        margin-left: 4
+        !text: tr('List')
+        font: $var-cip-font
+        !tooltip: tr('Use a saved manual list of player names')
+      Button
+        id: addNames
+        size: 18 18
+        anchors.top: radioPT.top
+        anchors.left: radioList.right
+        margin-left: 3
+        !text: tr('+')
+        font: $var-cip-font
+        change-cursor-image: true
+        cursor: pointer
+        @onClick: modules.game_helper.onAddHealNames(self)
+        !tooltip: tr('Add players to the list, separated by ","')
+      Button
+        id: removeNames
+        size: 18 18
+        anchors.top: radioPT.top
+        anchors.left: addNames.right
+        margin-left: 3
+        !text: tr('-')
+        font: $var-cip-font
+        change-cursor-image: true
+        cursor: pointer
+        @onClick: modules.game_helper.onRemoveHealName(self)
+        !tooltip: tr('Remove the selected player from the list')
 
     VerticalSeparator
       id: separator1
@@ -1065,125 +1098,103 @@ HealingPanel < Panel
     Panel
       id: secondPanel2
       anchors.top: friendTitle.bottom
-      anchors.left: prev.right
+      anchors.left: separator1.right
       anchors.right: parent.right
       anchors.bottom: parent.bottom
-      margin: 5 5 5 5
-      Label
+      margin: 6 6 6 6
+      CheckBox
+        id: enableHeal
+        width: 90
         anchors.top: parent.top
         anchors.left: parent.left
-        !text: tr('Heal Friend List')
+        !text: tr('Enable')
+        margin-top: 2
+        font: $var-cip-font
+        color: $var-text-cip-color
+        text-offset: 16 -2
+        @onCheckChange: modules.game_helper.onEnableHeal(self, self:isChecked())
+        $hover !disabled:
+          color: #c0c0c0
+      Label
+        id: healAtLabel
+        anchors.top: enableHeal.bottom
+        anchors.left: parent.left
+        margin-top: 6
+        !text: tr('Heal at life:')
         font: $var-cip-font
         color: $var-text-cip-color
         text-auto-resize: true
-      UICreature
-        id: friendButton0
-        size: 34 34
-        anchors.top: prev.bottom
+      UIButton
+        id: healRmvPercent
+        size: 10 24
+        anchors.top: healAtLabel.bottom
         anchors.left: parent.left
-        margin-top: 7
-        margin-left: 2
-        image-source: /images/store/bazaar-add-item
-        image-clip: 0 0 34 34
-        idle-animate: true
-        $pressed:
-          image-clip: 34 0 34 34
+        margin-top: 4
+        image-source: /images/ui/percent-buttons
+        image-clip: 0 0 10 24
+        @onSetup: |
+          g_mouse.bindAutoPress(self, function() modules.game_helper.stepHealPercent(self, -1) end, 150)
         $hover !pressed:
-          image-clip: 0 0 34 34
-        @onClick: modules.game_helper.onAddPartyGranSioMember(self)
-      CheckBox
-        id: enableSio0
-        width: 100
+          image-clip: 0 0 10 24
+        $pressed:
+          image-clip: 0 24 10 24
+        $disabled:
+          image-clip: 0 48 10 24
+      FlatPanel
+        id: healPercentBg
+        size: 42 24
         anchors.top: prev.top
-        anchors.left: friendButton0.right
-        !text: tr('Enable')
+        anchors.left: prev.right
+        margin-left: 2
+        image-source: /images/ui/percentBg
+        Label
+          id: healPercentLabel
+          anchors.top: parent.top
+          anchors.horizontalCenter: parent.horizontalCenter
+          margin-top: 4
+          !text: tr('99%%')
+          font: $var-cip-font
+          color: $var-text-cip-color
+          text-auto-resize: true
+      UIButton
+        id: healAddPercent
+        size: 10 24
+        anchors.top: prev.top
+        anchors.left: prev.right
+        margin-left: 2
+        image-source: /images/ui/percent-buttons
+        image-clip: 10 0 10 24
+        @onSetup: |
+          g_mouse.bindAutoPress(self, function() modules.game_helper.stepHealPercent(self, 1) end, 150)
+        $hover !pressed:
+          image-clip: 10 0 10 24
+        $pressed:
+          image-clip: 10 24 10 24
+        $disabled:
+          image-clip: 10 48 10 24
+      UIWidget
+        size: 12 12
+        anchors.top: prev.top
+        anchors.left: prev.right
         margin-left: 5
+        margin-top: 6
+        image-source: /images/skin/show-gui-help-grey
+        !tooltip: tr('Heals the highest-priority listed player whose life is below the set value, when in range')
+      CheckBox
+        id: prioritizeFriend
+        anchors.top: healRmvPercent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        margin-top: 6
+        text-align: left
+        !text: tr('Prioritize HF')
         font: $var-cip-font
         color: $var-text-cip-color
-        text-offset: 13 -3
-        change-cursor-image: false
-        @onCheckChange: modules.game_helper.onEnableGranSio(self, self:isChecked())
+        text-offset: 16 -1
+        @onCheckChange: modules.game_helper.onPrioritizeFriend(self, self:isChecked())
+        !tooltip: tr('When checked, healing the listed friend takes priority over healing your own character\nwhenever both your self-heal and a friend-heal condition would trigger a spell at the same time.\nDefault order is your character first, then Exura Gran Sio (if off cooldown), then Sio.')
         $hover !disabled:
           color: #c0c0c0
-      ComboBox
-        id: healPercent0
-        size: 67 20
-        anchors.top: prev.bottom
-        anchors.left: friendButton0.right
-        margin-top: 2
-        margin-left: 5
-        color: $var-text-cip-color
-        @onOptionChange: modules.game_helper.updateGranSioPercent(self:getId():match("%d+"), self:getCurrentOption().text:match("%d+"))
-        @onSetup: |
-          for i = 10, 100, 10 do
-            if i == 100 then
-              i = 99
-            end
-            self:addOption(i .. "%")
-          end
-          self:setCurrentOption("99%")
-      UIWidget
-        size: 12 12
-        anchors.top: prev.top
-        anchors.left: prev.right
-        margin-left: 5
-        margin-top: 4
-        image-source: /images/skin/show-gui-help-grey
-        !tooltip: tr('')
-      UICreature
-        id: friendButton1
-        size: 34 34
-        anchors.top: friendButton0.bottom
-        anchors.left: parent.left
-        margin-top: 5
-        margin-left: 2
-        image-source: /images/store/bazaar-add-item
-        image-clip: 0 0 34 34
-        $pressed:
-          image-clip: 34 0 34 34
-        $hover !pressed:
-          image-clip: 0 0 34 34
-        @onClick: modules.game_helper.onAddPartyGranSioMember(self)
-      CheckBox
-        id: enableSio1
-        width: 100
-        anchors.top: prev.top
-        anchors.left: friendButton1.right
-        !text: tr('Enable')
-        margin-left: 5
-        font: $var-cip-font
-        color: $var-text-cip-color
-        text-offset: 13 -3
-        change-cursor-image: false
-        @onCheckChange: modules.game_helper.onEnableGranSio(self, self:isChecked())
-        $hover !disabled:
-        color: #c0c0c0
-
-      ComboBox
-        id: healPercent1
-        size: 67 20
-        anchors.top: prev.bottom
-        anchors.left: friendButton1.right
-        margin-top: 2
-        margin-left: 5
-        color: $var-text-cip-color
-        @onOptionChange: modules.game_helper.updateGranSioPercent(self:getId():match("%d+"), self:getCurrentOption().text:match("%d+"))
-        @onSetup: |
-          for i = 10, 100, 10 do
-            if i == 100 then
-              i = 99
-            end
-            self:addOption(i .. "%")
-          end
-          self:setCurrentOption("99%")
-      UIWidget
-        size: 12 12
-        anchors.top: prev.top
-        anchors.left: prev.right
-        margin-left: 5
-        margin-top: 4
-        image-source: /images/skin/show-gui-help-grey
-        !tooltip: tr('')
 
 // Reusable +/- percent selector matching the Auto-Healing one. Driven from Lua via
 // initPercentSelector(widget, value, min, max, step, suffix, onChange) + onPercentStep.
@@ -1241,7 +1252,7 @@ ToolsPanel < Panel
   anchors.fill: parent
   Panel
     id: toolsPanel
-    height: 159
+    height: 225
     anchors.top: parent.top
     anchors.left: parent.left
     anchors.right: parent.right
@@ -1357,26 +1368,6 @@ ToolsPanel < Panel
         change-cursor-image: false
         $hover !disabled:
         color: #c0c0c0
-      ComboBox
-        id: trainingBox
-        size: 67 20
-        anchors.top: prev.bottom
-        anchors.left: spellTrainingButton0.right
-        margin-top: 2
-        margin-left: 5
-        color: $var-text-cip-color
-        enabled: false
-        @onSetup: |
-          self:addOption("")
-          self:setCurrentOption("")
-      UIWidget
-        size: 12 12
-        anchors.top: prev.top
-        anchors.left: prev.right
-        margin-left: 5
-        margin-top: 4
-        image-source: /images/skin/show-gui-help-grey
-        !tooltip: tr('Feature is being developed.')
     VerticalSeparator
       id: separator1
       anchors.top: toolsTitle.bottom
@@ -1508,6 +1499,52 @@ ToolsPanel < Panel
         change-cursor-image: false
         $hover !disabled:
           color: #c0c0c0
+      CheckBox
+        id: sellLoot
+        width: 110
+        anchors.top: prev.bottom
+        anchors.left: parent.left
+        !text: tr('Auto Sell Loot')
+        margin-top: 7
+        margin-left: 2
+        font: $var-cip-font
+        color: $var-text-cip-color
+        text-offset: 13 -3
+        text-auto-resize: true
+        @onCheckChange: modules.game_helper.toggleAutoSellLoot(self:isChecked())
+        change-cursor-image: false
+        $hover !disabled:
+          color: #c0c0c0
+      UIWidget
+        size: 12 12
+        anchors.verticalCenter: prev.verticalCenter
+        anchors.left: prev.right
+        margin-left: 4
+        image-source: /images/skin/show-gui-help-grey
+        !tooltip: tr('Automatically uses your Loot Seller when your free capacity\ndrops below 1000, at most once every 20s.\nSelling to NPCs stays manual.')
+      CheckBox
+        id: autoBless
+        width: 110
+        anchors.top: sellLoot.bottom
+        anchors.left: parent.left
+        !text: tr('Auto Bless')
+        margin-top: 7
+        margin-left: 2
+        font: $var-cip-font
+        color: $var-text-cip-color
+        text-offset: 13 -3
+        text-auto-resize: true
+        @onCheckChange: modules.game_helper.toggleAutoBless(self:isChecked())
+        change-cursor-image: false
+        $hover !disabled:
+          color: #c0c0c0
+      UIWidget
+        size: 12 12
+        anchors.verticalCenter: prev.verticalCenter
+        anchors.left: prev.right
+        margin-left: 4
+        image-source: /images/skin/show-gui-help-grey
+        !tooltip: tr('Casts !bless whenever you are missing the 5 blessings,\nso an unexpected death never costs you items.\nStrict: it only fires when actually unblessed, and !bless\nis free when you are already fully blessed.')
 
   // Mage-only magic-shield suite (utamo vita / exana vita / shield potion).
   // Hidden by default; setupMageShield() shows it for sorcerers & druids.
@@ -2881,7 +2918,7 @@ NewHeadlessWindow
     anchors.top: parent.top
     anchors.horizontalCenter: parent.horizontalCenter
     margin-top: -33
-    image-source: /images/game/tutorial/backdrop_crestr
+    image-source: /images/game/tutorial/backdrop_crest
     phantom: true
 
   Panel

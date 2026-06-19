@@ -4,7 +4,6 @@ local toolsPanel = nil
 local mouseGrabberWidget = nil
 local helper = nil
 local helperTracker = nil
-local helperRules = nil
 local friendListWidget = nil
 local granListWidget = nil
 local hotkeyHelperStatus = false
@@ -146,6 +145,35 @@ end
 
 local spectators = {}
 
+-- Per-cycle shared context. helperCycleEvent bumps tickCycle once per 50ms pass; the
+-- getters below memoize their result for that cycle, so multiple events firing in the
+-- same pass share a single map scan instead of each rebuilding it. This decouples the
+-- events from redundant reads (e.g. friend-heal detection + self-heal's friend-priority
+-- probe both need the nearby players, but now scan the map only once per cycle).
+local tickCycle = 0
+local tickCache = { nearbyCycle = -1, nearby = nil }
+
+-- Nearby player creatures keyed by name, within the castable reach box (7x5). Computed
+-- at most once per cycle; callers must only use it from inside a helperCycleEvent pass.
+local function tickNearbyPlayers()
+  if tickCache.nearbyCycle == tickCycle and tickCache.nearby then
+    return tickCache.nearby
+  end
+  local nearby = {}
+  local localPlayer = g_game.getLocalPlayer()
+  local position = localPlayer and localPlayer:getPosition()
+  if position then
+    for _, creature in ipairs(g_map.getSpectatorsInRange(position, false, 7, 5)) do
+      if creature:isPlayer() and not creature:isLocalPlayer() then
+        nearby[creature:getName()] = creature
+      end
+    end
+  end
+  tickCache.nearby = nearby
+  tickCache.nearbyCycle = tickCycle
+  return nearby
+end
+
 helperConfig = {
   spells = {
     { id = 0, percent = 80 },
@@ -163,24 +191,22 @@ helperConfig = {
   haste = {
     { id = 0, enabled = false, safecast = false }
   },
-  friendhealing = {
-    { name = "", percent = 0, enabled = false },
-    { name = "", percent = 0, enabled = false }
-  },
-  gransiohealing = {
-    { name = "", percent = 0, enabled = false },
-    { name = "", percent = 0, enabled = false }
-  },
+  -- mode: "PT" (auto party members) | "List" (manual saved names). percent = single
+  -- HP% trigger. list = manual List-mode names (ordered = priority). ptOrder = saved
+  -- priority order for PT mode (by name; new members appended). See onFriendHealing.
+  friendhealing = { mode = "PT", percent = 99, enabled = false, prioritizeFriend = false, list = {}, ptOrder = {} },
+  gransiohealing = { mode = "PT", percent = 99, enabled = false, prioritizeFriend = false, list = {}, ptOrder = {} },
 
   shooterProfiles = {
     ["Default"] = defaultShooterProfile
   },
   selectedShooterProfile = "Default",
 
-  terms = false,
   autoEatFood = false,
   autoReconnect = false,
   autoChangeGold = false,
+  autoSellLoot = false,
+  autoBless = false,
   magicShooterEnabled = false,
   magicShooterOnHold = false,
   autoTargetEnabled = false,
@@ -374,8 +400,6 @@ function init()
 
   helper = g_ui.displayUI('styles/helper')
   helperTracker = g_ui.createWidget('HelperTracker')
-  helperRules = g_ui.createWidget('HelperRules', rootWidget)
-  helperRules:hide()
   helperTracker:setup()
   helperTracker:close()
 
@@ -495,6 +519,7 @@ function show()
 end
 
 function helperCycleEvent()
+  tickCycle = tickCycle + 1 -- invalidates the per-cycle shared context (tickNearbyPlayers)
   for eventName, eventData in pairs(eventTable) do
     timers[eventName] = timers[eventName] + helperEvents.helperCycleTimer
     if timers[eventName] >= eventData.interval then
@@ -760,6 +785,10 @@ function setupMageShield()
   local tv = translateVocation(voc)
   mageShieldIsMage = (tv == 5 or tv == 6) -- Sorcerer (ms) or Druid (ed)
   if mageShieldPanel then mageShieldPanel:setVisible(mageShieldIsMage) end
+  -- The mage-only magic-shield panel is anchored BELOW the tools box, so mages need a
+  -- taller helper window to fit it without overlapping the bottom buttons. Non-mages
+  -- keep the compact default. Re-applied each game start, so it tracks vocation changes.
+  if helper then helper:setHeight(mageShieldIsMage and 475 or 365) end
   if not mageShieldIsMage then return end
   local ms = helperConfig.mageShield
   local function setup(id, fn) local w = msChild(id); if w then fn(w) end end
@@ -788,7 +817,10 @@ function online()
   helperConfig.currentLockedTargetId = 0
   helperEvents.helperCycleEvent = cycleEvent(helperCycleEvent, helperEvents.helperCycleTimer)
 
-  resetPartyPanel()
+  -- Sync the Friend Healing / Gran Sio panels (radio, enable, %, list) from the
+  -- now-loaded config and fill the boxes (PT party members / saved List names).
+  setupHealRadio("friend")
+  setupHealRadio("gran")
   consoleln("Helper loaded in " .. (g_clock.millis() - benchmark) / 1000 .. " seconds.")
 end
 
@@ -935,8 +967,6 @@ function loadMenu(menuId)
       healPanel:setHeight(120)
       friendHealingPanel:setVisible(true)
       granSioPanel:setVisible(false)
-      friendHealingPanel.secondPanel.enableSio0:setText('Enable UH')
-      friendHealingPanel.secondPanel.enableSio1:setText('Enable UH')
       rmvPercentButton2:setVisible(false)
       spellPercentBg2:setVisible(false)
       addPercentButton2:setVisible(false)
@@ -954,8 +984,6 @@ function loadMenu(menuId)
       healPanel:setHeight(120)
       friendHealingPanel:setVisible(true)
       granSioPanel:setVisible(true)
-      friendHealingPanel.secondPanel.enableSio0:setText('Enable Sio')
-      friendHealingPanel.secondPanel.enableSio1:setText('Enable Sio')
       rmvPercentButton2:setVisible(false)
       spellPercentBg2:setVisible(false)
       addPercentButton2:setVisible(false)
@@ -973,8 +1001,6 @@ function loadMenu(menuId)
       healPanel:setHeight(160)
       friendHealingPanel:setVisible(true)
       granSioPanel:setVisible(false)
-      friendHealingPanel.secondPanel.enableSio0:setText('Enable Sio')
-      friendHealingPanel.secondPanel.enableSio1:setText('Enable Sio')
       rmvPercentButton2:setVisible(true)
       spellPercentBg2:setVisible(true)
       addPercentButton2:setVisible(true)
@@ -1818,179 +1844,310 @@ function updateButton(button)
   end
 end
 
-function onPartyDataClear()
-  if not friendListWidget or not granListWidget then
-    return
-  end
+-- ===========================================================================
+-- Friend Healing / Exura Gran Sio: PT-or-List priority model.
+-- The box IS the priority list (top = highest priority). "PT" auto-fills it with
+-- nearby party members; "List" uses a saved manual list edited via the "+" button.
+-- A single life-% threshold triggers the spell on the highest-priority listed
+-- player that is in range (see onFriendHealing). Both panels reuse the same child
+-- ids, so handlers resolve their target by walking up to the owning panel.
+-- ===========================================================================
+healRadios = {}
 
-  friendListWidget:destroyChildren()
-  granListWidget:destroyChildren()
-  resetPartyPanel()
+local function healKindOf(widget)
+  local p = widget
+  while p do
+    local id = p:getId()
+    if id == "friendHealingPanel" then return "friend" end
+    if id == "granSioPanel" then return "gran" end
+    p = p:getParent()
+  end
+end
+
+local function healCfgOf(kind)
+  return kind == "gran" and helperConfig.gransiohealing or helperConfig.friendhealing
+end
+
+local function healListOf(kind)
+  return kind == "gran" and granListWidget or friendListWidget
+end
+
+local function healPanelOf(kind)
+  return kind == "gran" and granSioPanel or friendHealingPanel
+end
+
+-- Reflect cfg.percent into the panel's percent label + enable/disable +/- at bounds.
+local function setHealPercentLabel(kind)
+  local panel = healPanelOf(kind)
+  if not panel then return end
+  local pct = healCfgOf(kind).percent or 99
+  local label = panel:recursiveGetChildById("healPercentLabel")
+  if label then label:setText(pct .. "%") end
+  local add = panel:recursiveGetChildById("healAddPercent")
+  local rmv = panel:recursiveGetChildById("healRmvPercent")
+  if add then add:setEnabled(pct < 99) end
+  if rmv then rmv:setEnabled(pct > 1) end
+end
+
+-- Ordered names to show/heal. List mode -> the saved list. PT mode -> nearby party
+-- members ordered by the saved priority (ptOrder), new members appended; the
+-- refreshed order is written back so the priority persists across party changes.
+local function healOrderedNames(kind)
+  local cfg = healCfgOf(kind)
+  if cfg.mode == "List" then
+    return cfg.list
+  end
+  -- PT mode needs the local player position synced (getUpcomingPartyMembers distance-
+  -- checks against it). Early in online() it isn't ready yet, so bail to the saved
+  -- order to avoid crashing; the box refills once party data arrives / the tick runs.
+  local localPlayer = g_game.getLocalPlayer()
+  if not localPlayer or not localPlayer:getPosition() then
+    return cfg.ptOrder
+  end
+  local present = {}
+  for _, creature in ipairs(modules.game_party_list.getUpcomingPartyMembers()) do
+    if creature:isPlayer() and not creature:isLocalPlayer() then
+      present[creature:getName()] = true
+    end
+  end
+  local ordered = {}
+  for _, name in ipairs(cfg.ptOrder) do
+    if present[name] then
+      table.insert(ordered, name)
+      present[name] = nil
+    end
+  end
+  for name in pairs(present) do
+    table.insert(ordered, name)
+  end
+  -- Only persist when members are actually present; otherwise a momentary party-less
+  -- tick (now that onFriendHealing runs without a party gate) would wipe the saved order.
+  if #ordered > 0 then
+    cfg.ptOrder = ordered
+  end
+  return ordered
+end
+
+local function granSioOffCooldown()
+  local spell = Spells.getSpellByClientId(242) -- exura gran sio
+  return spell ~= nil and spell.id ~= 0 and not isSpellOnCooldown(spell)
+end
+
+-- Support-cast arbiter: the single support heal that should take this cycle's spell-
+-- exhaust window. Decides self-heal vs friend-heal centrally so checkHealthHealing and
+-- onFriendHealing stop probing each other's config -- and so "Prioritize heal friend"
+-- actually wins (the per-cast checkHealthPriority guard inside useAuto* used to override
+-- it). Memoized per cycle; returns "self", "gran", "sio", or nil (no heal wanted ->
+-- haste may cast). Priority, high -> low:
+--   1. a friend panel flagged prioritizeFriend with an eligible target (gran needs its
+--      cooldown free; gran is considered before sio)
+--   2. self-heal (a self spell whose HP% threshold is met)
+--   3. friend heal not flagged (gran before sio)
+local tickSupport = { cycle = -1, tag = nil }
+local function topSupportCast()
+  if tickSupport.cycle == tickCycle then return tickSupport.tag end
+  local tag = nil
+  local localPlayer = g_game.getLocalPlayer()
+  local position = localPlayer and localPlayer:getPosition()
+  if position then
+    local fh, gh = helperConfig.friendhealing, helperConfig.gransiohealing
+    local nearby = tickNearbyPlayers()
+    local function targetPending(cfg, kind)
+      if not cfg.enabled then return false end
+      for _, name in ipairs(healOrderedNames(kind)) do
+        local member = nearby[name]
+        if member and member:getHealthPercent() <= cfg.percent
+          and isWithinReach(position, member:getPosition())
+          and g_map.isSightClear(position, member:getPosition()) then
+          return true
+        end
+      end
+      return false
+    end
+    local granReady = targetPending(gh, "gran") and granSioOffCooldown()
+    local sioPending = targetPending(fh, "friend")
+    local selfNeeded = (checkHealthPriority() == false)
+    if gh.prioritizeFriend and granReady then
+      tag = "gran"
+    elseif fh.prioritizeFriend and sioPending then
+      tag = "sio"
+    elseif selfNeeded then
+      tag = "self"
+    elseif granReady then
+      tag = "gran"
+    elseif sioPending then
+      tag = "sio"
+    end
+  end
+  tickSupport.cycle = tickCycle
+  tickSupport.tag = tag
+  return tag
+end
+
+-- (Re)build a panel's list box from its ordered names, preserving the selection.
+function populateHealList(kind)
+  local listWidget = healListOf(kind)
+  if not listWidget then return end
+  local cfg = healCfgOf(kind)
+  local focused = listWidget:getFocusedChild()
+  local keepName = focused and focused:getText() or nil
+  listWidget:destroyChildren()
+  for _, name in ipairs(healOrderedNames(kind)) do
+    local row = g_ui.createWidget("PlayerName", listWidget)
+    row:setText(name)
+    if cfg.mode == "List" then
+      row:setTooltip(tr("Double-click to remove"))
+      row.onDoubleClick = function()
+        for i = #cfg.list, 1, -1 do
+          if cfg.list[i] == name then table.remove(cfg.list, i) end
+        end
+        saveSettings()
+        populateHealList(kind)
+        return true
+      end
+    end
+    if name == keepName then
+      row:focus()
+    end
+  end
+end
+
+-- Wire a panel's PT/List radio and sync Enable/percent widgets to the config.
+function setupHealRadio(kind)
+  local panel = healPanelOf(kind)
+  if not panel then return end
+  local cfg = healCfgOf(kind)
+  local pt = panel:recursiveGetChildById("radioPT")
+  local list = panel:recursiveGetChildById("radioList")
+  if not pt or not list then return end
+  local radio = UIRadioGroup.create()
+  radio:addWidget(pt)
+  radio:addWidget(list)
+  radio.onSelectionChange = function(_, selected)
+    if not selected then return end
+    cfg.mode = (selected:getId() == "radioList") and "List" or "PT"
+    panel:recursiveGetChildById("addNames"):setEnabled(cfg.mode == "List")
+    panel:recursiveGetChildById("removeNames"):setEnabled(cfg.mode == "List")
+    saveSettings()
+    populateHealList(kind)
+  end
+  healRadios[kind] = radio
+  radio:selectWidget(cfg.mode == "List" and list or pt, true) -- dontSignal: sync below
+  panel:recursiveGetChildById("addNames"):setEnabled(cfg.mode == "List")
+  panel:recursiveGetChildById("removeNames"):setEnabled(cfg.mode == "List")
+  panel:recursiveGetChildById("enableHeal"):setChecked(cfg.enabled and true or false)
+  panel:recursiveGetChildById("prioritizeFriend"):setChecked(cfg.prioritizeFriend and true or false)
+  setHealPercentLabel(kind)
+  populateHealList(kind)
+end
+
+-- "+" button: add comma-separated names to the List (trim + dedupe). List mode only.
+function onAddHealNames(self)
+  local kind = healKindOf(self)
+  if not kind then return end
+  local cfg = healCfgOf(kind)
+  if cfg.mode ~= "List" then return end
+  local box = UIInputBox.create(tr("Add players to heal list"), function(text)
+    if not text then return end
+    local added = false
+    for raw in text:gmatch("[^,]+") do
+      local name = raw:gsub("^%s+", ""):gsub("%s+$", "")
+      if name ~= "" and not table.contains(cfg.list, name) then
+        table.insert(cfg.list, name)
+        added = true
+      end
+    end
+    if added then
+      saveSettings()
+      populateHealList(kind)
+    end
+  end, nil)
+  box:addLineEdit(tr('Names (separated by ",")'), "", 2000)
+  box:display()
+end
+
+-- "-" button: remove the selected entry from the List (List mode only).
+function onRemoveHealName(self)
+  local kind = healKindOf(self)
+  if not kind then return end
+  local cfg = healCfgOf(kind)
+  if cfg.mode ~= "List" then return end
+  local listWidget = healListOf(kind)
+  local focused = listWidget and listWidget:getFocusedChild()
+  if not focused then return end
+  local name = focused:getText()
+  local removed = false
+  for i = #cfg.list, 1, -1 do
+    if cfg.list[i] == name then
+      table.remove(cfg.list, i)
+      removed = true
+    end
+  end
+  if removed then
+    saveSettings()
+    populateHealList(kind)
+  end
+end
+
+-- Up/down arrows: move the selected entry within the active ordered list.
+function moveHealName(self, dir)
+  local kind = healKindOf(self)
+  if not kind then return end
+  local cfg = healCfgOf(kind)
+  local listWidget = healListOf(kind)
+  local focused = listWidget:getFocusedChild()
+  if not focused then return end
+  local name = focused:getText()
+  local arr = (cfg.mode == "List") and cfg.list or cfg.ptOrder
+  local idx
+  for i, n in ipairs(arr) do
+    if n == name then idx = i break end
+  end
+  if not idx then return end
+  local j = idx + dir
+  if j < 1 or j > #arr then return end
+  arr[idx], arr[j] = arr[j], arr[idx]
+  saveSettings()
+  populateHealList(kind)
+end
+
+function onEnableHeal(self, checked)
+  local kind = healKindOf(self)
+  if not kind then return end
+  healCfgOf(kind).enabled = checked and true or false
+  saveSettings()
+end
+
+-- "Prioritize heal friend": invert the default self > friend order for this panel.
+function onPrioritizeFriend(self, checked)
+  local kind = healKindOf(self)
+  if not kind then return end
+  healCfgOf(kind).prioritizeFriend = checked and true or false
+  saveSettings()
+end
+
+-- +/- stepper buttons (hold-repeat via bindAutoPress): adjust cfg.percent by 1,
+-- clamp 1..99, mirroring the Spell Healing selector. self is the clicked +/- button.
+function stepHealPercent(self, delta)
+  local kind = healKindOf(self)
+  if not kind then return end
+  local cfg = healCfgOf(kind)
+  local newPct = math.max(1, math.min(99, (cfg.percent or 99) + delta))
+  if newPct == cfg.percent then return end
+  cfg.percent = newPct
+  setHealPercentLabel(kind)
+  saveSettings()
+end
+
+-- Party roster changed: refresh whichever boxes are in PT mode.
+function onPartyDataClear()
+  if friendHealingPanel and helperConfig.friendhealing.mode == "PT" then populateHealList("friend") end
+  if granSioPanel and helperConfig.gransiohealing.mode == "PT" then populateHealList("gran") end
 end
 
 function onPartyDataUpdate(members)
-  if table.empty(members) or not friendListWidget or not granListWidget then
-    return
-  end
-
-  if (#members - 1) ~= friendListWidget:getChildCount() then
-    friendListWidget:destroyChildren()
-    granListWidget:destroyChildren()
-    resetPartyPanel()
-
-    for _, member in pairs(members) do
-      local creature = g_map.getCreatureById(member.id)
-      if creature and not creature:isLocalPlayer() and creature:isPlayer() and creature:isPartyMember() then
-        local widget_1 = g_ui.createWidget("PlayerName", friendListWidget)
-        local widget_2 = g_ui.createWidget("PlayerName", granListWidget)
-        widget_1:setText(member.name)
-        widget_2:setText(member.name)
-        widget_1.creature = creature
-        widget_2.creature = creature
-      end
-    end
-  end
-end
-
-function resetPartyPanel()
-  local sioPanel = healingPanel:recursiveGetChildById('friendHealingPanel')
-  local granSioPanel = healingPanel:recursiveGetChildById('granSioPanel')
-
-  local player = g_game.getLocalPlayer()
-  if not player or not player:isPartyMember() then
-    friendListWidget:destroyChildren()
-    granListWidget:destroyChildren()
-    for i = 0, 1 do
-      sioPanel:recursiveGetChildById("healPercent" .. i):setEnabled(false)
-      granSioPanel:recursiveGetChildById("healPercent" .. i):setEnabled(false)
-
-      sioPanel:recursiveGetChildById("enableSio" .. i):setEnabled(false)
-      granSioPanel:recursiveGetChildById("enableSio" .. i):setChecked(false)
-
-      sioPanel:recursiveGetChildById("friendButton" .. i):setCreature(nil)
-      granSioPanel:recursiveGetChildById("friendButton" .. i):setCreature(nil)
-
-      sioPanel:recursiveGetChildById("friendButton" .. i):setImageSource("/images/store/bazaar-add-item")
-      granSioPanel:recursiveGetChildById("friendButton" .. i):setImageSource("/images/store/bazaar-add-item")
-
-      helperConfig.friendhealing[i + 1].name = ""
-      helperConfig.friendhealing[i + 1].percent = 0
-      helperConfig.friendhealing[i + 1].enabled = false
-
-      helperConfig.gransiohealing[i + 1].name = ""
-      helperConfig.gransiohealing[i + 1].percent = 0
-      helperConfig.gransiohealing[i + 1].enabled = false
-    end
-    return
-  end
-
-  if not sioPanel:recursiveGetChildById("healPercent0"):isEnabled() then
-    for i = 0, 1 do
-      sioPanel:recursiveGetChildById("healPercent" .. i):setEnabled(true)
-      sioPanel:recursiveGetChildById("enableSio" .. i):setEnabled(true)
-      sioPanel:recursiveGetChildById("friendButton" .. i):setEnabled(true)
-    end
-  end
-
-  if not granSioPanel:recursiveGetChildById("healPercent0"):isEnabled() then
-    for i = 0, 1 do
-      granSioPanel:recursiveGetChildById("healPercent" .. i):setEnabled(true)
-      granSioPanel:recursiveGetChildById("enableSio" .. i):setEnabled(true)
-      granSioPanel:recursiveGetChildById("friendButton" .. i):setEnabled(true)
-    end
-  end
-end
-
-function onAddPartyMember(self)
-  local slotIndex = tonumber(self:getId():match("%d+"))
-  local panel = healingPanel:recursiveGetChildById('secondPanel')
-  local selectedWidget = friendListWidget:getFocusedChild()
-  if not selectedWidget then
-    return true
-  end
-
-  local sioPanel = healingPanel:recursiveGetChildById('friendHealingPanel')
-  local enabled = sioPanel:recursiveGetChildById("enableSio" .. slotIndex) and
-  sioPanel:recursiveGetChildById("enableSio" .. slotIndex):isChecked()
-  local percent = panel:recursiveGetChildById("healPercent" .. slotIndex):getCurrentOption().text
-  if self:getImageSource() == "/images/store/clean-button" then
-    helperConfig.friendhealing[slotIndex + 1].name = ""
-    helperConfig.friendhealing[slotIndex + 1].percent = 0
-    helperConfig.friendhealing[slotIndex + 1].enabled = false
-    self:setCreature(nil)
-    self:setImageSource("/images/store/bazaar-add-item")
-    manageSioSettings(false, slotIndex)
-  else
-    if (selectedWidget:getText() == helperConfig.friendhealing[1].name) or (selectedWidget:getText() == helperConfig.friendhealing[2].name) then
-      return true
-    end
-    helperConfig.friendhealing[slotIndex + 1].name = selectedWidget:getText()
-    helperConfig.friendhealing[slotIndex + 1].percent = tonumber(percent:match("%d+"))
-    helperConfig.friendhealing[slotIndex + 1].enabled = enabled
-    self:setCreature(selectedWidget.creature)
-    self:setImageSource("/images/store/clean-button")
-    manageSioSettings(true, slotIndex)
-  end
-end
-
-function onAddPartyGranSioMember(self)
-  local slotIndex = tonumber(self:getId():match("%d+"))
-  local panel = healingPanel:recursiveGetChildById('secondPanel2')
-  local selectedWidget = granListWidget:getFocusedChild()
-  if not selectedWidget then
-    return true
-  end
-
-  local sioPanel = healingPanel:recursiveGetChildById('granSioPanel')
-  local enabled = sioPanel:recursiveGetChildById("enableSio" .. slotIndex) and
-  sioPanel:recursiveGetChildById("enableSio" .. slotIndex):isChecked()
-  local percent = panel:recursiveGetChildById("healPercent" .. slotIndex):getCurrentOption().text
-  if self:getImageSource() == "/images/store/clean-button" then
-    helperConfig.gransiohealing[slotIndex + 1].name = ""
-    helperConfig.gransiohealing[slotIndex + 1].percent = 0
-    helperConfig.gransiohealing[slotIndex + 1].enabled = false
-    self:setCreature(nil)
-    self:setImageSource("/images/store/bazaar-add-item")
-    manageGranSioSettings(false, slotIndex)
-  else
-    if (selectedWidget:getText() == helperConfig.gransiohealing[1].name) or (selectedWidget:getText() == helperConfig.gransiohealing[2].name) then
-      return true
-    end
-    helperConfig.gransiohealing[slotIndex + 1].name = selectedWidget:getText()
-    helperConfig.gransiohealing[slotIndex + 1].percent = tonumber(percent:match("%d+"))
-    helperConfig.gransiohealing[slotIndex + 1].enabled = enabled
-    self:setCreature(selectedWidget.creature)
-    self:setImageSource("/images/store/clean-button")
-    manageGranSioSettings(true, slotIndex)
-  end
-end
-
-function manageSioSettings(activate, index)
-  local sioPanel = healingPanel:recursiveGetChildById('friendHealingPanel')
-  sioPanel:recursiveGetChildById("healPercent" .. index):setEnabled(activate)
-  sioPanel:recursiveGetChildById("enableSio" .. index):setEnabled(activate)
-  if not activate then
-    sioPanel:recursiveGetChildById("enableSio" .. index):setChecked(false)
-  end
-end
-
-function manageGranSioSettings(activate, index)
-  local granSioPanel = healingPanel:recursiveGetChildById('granSioPanel')
-  granSioPanel:recursiveGetChildById("healPercent" .. index):setEnabled(activate)
-  granSioPanel:recursiveGetChildById("enableSio" .. index):setEnabled(activate)
-  if not activate then
-    granSioPanel:recursiveGetChildById("enableSio" .. index):setChecked(false)
-  end
-end
-
-function onEnableSio(button, checked)
-  local slotIndex = tonumber(button:getId():match("%d+"))
-  helperConfig.friendhealing[slotIndex + 1].enabled = checked
-end
-
-function onEnableGranSio(button, checked)
-  local slotIndex = tonumber(button:getId():match("%d+"))
-  helperConfig.gransiohealing[slotIndex + 1].enabled = checked
+  if friendHealingPanel and helperConfig.friendhealing.mode == "PT" then populateHealList("friend") end
+  if granSioPanel and helperConfig.gransiohealing.mode == "PT" then populateHealList("gran") end
 end
 
 function onEnableTraining(buttonId, checked)
@@ -2121,14 +2278,6 @@ function updatePotionPercent(buttonId, newPercent)
   end
 end
 
-function updateFriendHealingPercent(index, newPercent)
-  helperConfig.friendhealing[index + 1].percent = tonumber(newPercent)
-end
-
-function updateGranSioPercent(index, newPercent)
-  helperConfig.gransiohealing[index + 1].percent = tonumber(newPercent)
-end
-
 function castHealingSpell(spellId)
   local spell = Spells.getSpellByClientId(tonumber(spellId))
   if not spell or spell.id == 0 then
@@ -2179,6 +2328,13 @@ function checkHealthHealing()
     if hasItemInBackpack(potion.id) and potionMode(potion) == "health" and healthPercent <= potion.percent then
       usePotion(potion.id)
     end
+  end
+
+  -- The arbiter (topSupportCast) decides self vs friend priority centrally; only cast
+  -- the self-heal SPELL if self-heal wins this cycle (the potions above ran as an HP
+  -- safety net regardless of the arbiter).
+  if topSupportCast() ~= "self" then
+    return
   end
 
   local prioritizedSpells = {}
@@ -2259,10 +2415,6 @@ function useAutoSio(target)
     return false
   end
 
-  if not checkHealthPriority() then
-    return
-  end
-
   if (isSpellOnCooldown(spell)) then
     return false
   end
@@ -2277,10 +2429,6 @@ function useAutoGranSio(target)
   local spell = Spells.getSpellByClientId(spellId)
   if not spell or spell.id == 0 then
     return false
-  end
-
-  if not checkHealthPriority() then
-    return
   end
 
   if (isSpellOnCooldown(spell)) then
@@ -2299,10 +2447,6 @@ function useAutoTioSio(target)
     return false
   end
 
-  if not checkHealthPriority() then
-    return
-  end
-
   if (isSpellOnCooldown(spell)) then
     return false
   end
@@ -2317,10 +2461,6 @@ function useAutoUH(target)
   local rune = Spells.getRuneSpellByItem(runeId)
   if not rune then
     return false
-  end
-
-  if not checkHealthPriority() then
-    return
   end
 
   helperConfig.magicShooterOnHold = true
@@ -2378,6 +2518,14 @@ function toogleChangeGold(checked)
   helperConfig.autoChangeGold = checked
 end
 
+function toggleAutoSellLoot(checked)
+  helperConfig.autoSellLoot = checked
+end
+
+function toggleAutoBless(checked)
+  helperConfig.autoBless = checked
+end
+
 function autoEatFood()
   if not g_game.isOnline() or not player or not helperConfig.autoEatFood then
     return
@@ -2419,6 +2567,63 @@ function autoChangeGold()
   g_game.doThing(true)
 end
 
+-- "Loot Seller" store item (KoliseuOT id 60257). Using it sells the loot pouch.
+-- Auto Sell Loot fires a use-by-id packet when free capacity drops below the threshold;
+-- selling at an NPC stays manual. The item lives locked in the Store Inbox, which is a
+-- player inventory slot (CONST_SLOT_STORE_INBOX) server-side, so the server's use-by-id
+-- search (findItemOfType, depthSearch) reaches it regardless of whether the Store Inbox
+-- window is open on the client. No container lookup needed -- and there's a single id,
+-- so blindly sending it (rate-limited) can't flood like the multi-id food gate would.
+local LOOT_SELLER_ID = 60257
+local LOOT_SELLER_CAP_THRESHOLD = 1000
+local LOOT_SELLER_COOLDOWN = 20000 -- only fire every 20s while still overweight (anti-flood)
+
+function autoSellLoot()
+  if not g_game.isOnline() or not player or not helperConfig.autoSellLoot then
+    return
+  end
+  -- Only when we're (nearly) full; above the threshold there's nothing to do.
+  if player:getFreeCapacity() >= LOOT_SELLER_CAP_THRESHOLD then
+    return
+  end
+  -- Anti-flood: at most one use per cooldown while we stay overweight.
+  if getSpellCooldown("lootSeller") >= g_clock.millis() then
+    return
+  end
+
+  g_game.doThing(false)
+  g_game.useInventoryItem(LOOT_SELLER_ID)
+  g_game.doThing(true)
+  spellsCooldown["lootSeller"] = g_clock.millis() + LOOT_SELLER_COOLDOWN
+end
+
+-- Auto Bless: keep the player blessed so an unexpected death never drops items for
+-- lack of blessing. STRICT by design -- only fires when the server's bless status
+-- byte says the 5 blesses are missing (1 = Disabled/<5). !bless (BuyAllBlesses) is
+-- idempotent server-side (no charge when already fully blessed), so this is safe.
+function autoBless()
+  if not g_game.isOnline() or not player or not helperConfig.autoBless then
+    return
+  end
+  if g_game.isDead() then
+    return
+  end
+  -- Needs the C++ getBlessStatus() (rebuild). Until then this is a safe no-op rather
+  -- than blindly spamming !bless (getBlessings() only carries the cosmetic glow flag).
+  if not player.getBlessStatus then
+    return
+  end
+  if player:getBlessStatus() ~= 1 then -- 1 = missing the 5 blesses
+    return
+  end
+  if getSpellCooldown("bless") >= g_clock.millis() then
+    return
+  end
+
+  g_game.talk("!bless")
+  spellsCooldown["bless"] = g_clock.millis() + 8000
+end
+
 function checkMana()
   if not g_game.isOnline() or not player or not hotkeyHelperStatus then return end
   if not player then
@@ -2433,14 +2638,19 @@ end
 
 eventTable.checkMana.action = checkMana
 
+-- Convenience tools (eat / change gold / sell loot / bless) run independently of the
+-- master combat helper toggle (hotkeyHelperStatus): each has its own Enable checkbox,
+-- so e.g. Auto Eat should work even with the combat helper Disabled. Combat logic stays
+-- gated in its own events (checkHealthHealing, checkMana, ...).
 function routineChecks()
-  if not hotkeyHelperStatus then return end
   if player then
     if player:getRegenerationTime() <= 500 then
       autoEatFood()
     end
 
     autoChangeGold()
+    autoSellLoot()
+    autoBless()
   end
 end
 
@@ -3088,8 +3298,11 @@ eventTable.checkAutoTarget.action = checkAutoTarget
 
 function checkFriendHealing()
   if not hotkeyHelperStatus then return end
+  -- No party gate: List mode heals manually-listed names (who may not be partied),
+  -- and PT mode simply resolves to no targets when not in a party. onFriendHealing
+  -- early-returns unless a panel is enabled.
   local localPlayer = g_game.getLocalPlayer()
-  if localPlayer and localPlayer:isPartyMember() then
+  if localPlayer then
     onFriendHealing(localPlayer)
   end
 end
@@ -3160,70 +3373,42 @@ end
 function onFriendHealing(localPlayer)
   if not hotkeyHelperStatus then return end
 
-  local primaryHealing = helperConfig.friendhealing[1]
-  local secondaryHealing = helperConfig.friendhealing[2]
-  local gransioHealing1 = helperConfig.gransiohealing[1]
-  local gransioHealing2 = helperConfig.gransiohealing[2]
+  local fh = helperConfig.friendhealing
+  local gh = helperConfig.gransiohealing
+  if not (fh.enabled or gh.enabled) then return end
+
+  -- The arbiter (topSupportCast) decides self vs friend priority centrally; act only if
+  -- it picked one of our friend heals this cycle. It already verified the target is
+  -- pending and, for gran, that the spell is off cooldown.
+  local winner = topSupportCast()
+  if winner ~= "gran" and winner ~= "sio" then return end
 
   local position = localPlayer:getPosition()
-  local partyMembers = modules.game_party_list.getUpcomingPartyMembers()
+  local nearby = tickNearbyPlayers()
+  local cfg = (winner == "gran") and gh or fh
+  local kind = (winner == "gran") and "gran" or "friend"
 
-  table.sort(partyMembers, function(a, b)
-    if a:getName() == primaryHealing.name then
-      return true
-    elseif b:getName() == primaryHealing.name then
-      return false
-    else
-      return a:getName() < b:getName()
-    end
-  end)
-
-  for _, member in ipairs(partyMembers) do
-    if not member:isPlayer() then
-      goto continue
-    end
-
-    local memberHealth = member:getHealthPercent()
-    local isInSight = g_map.isSightClear(position, member:getPosition()) and
-    isWithinReach(position, member:getPosition())
-
-    if not isInSight then
-      goto continue
-    end
-
-    if gransioHealing1.enabled and member:getName() == gransioHealing1.name and memberHealth <= gransioHealing1.percent then
-      useAutoGranSio(member)
-    end
-
-    if gransioHealing2.enabled and member:getName() == gransioHealing2.name and memberHealth <= gransioHealing2.percent then
-      useAutoGranSio(member)
-    end
-
-    if primaryHealing.enabled then
-      if member:getName() == primaryHealing.name and memberHealth <= primaryHealing.percent and member:isPartyMember() then
-        if translateVocation(localPlayer:getVocation()) == 5 then
+  -- Heal the FIRST priority-ordered target that is present, in range and below the
+  -- threshold (the same eligibility the arbiter used to pick this heal).
+  for _, name in ipairs(healOrderedNames(kind)) do
+    local member = nearby[name]
+    if member and member:getHealthPercent() <= cfg.percent
+      and isWithinReach(position, member:getPosition())
+      and g_map.isSightClear(position, member:getPosition()) then
+      if winner == "gran" then
+        useAutoGranSio(member)
+      else
+        local voc = translateVocation(localPlayer:getVocation())
+        if voc == 5 then
           useAutoUH(member)
-        elseif translateVocation(localPlayer:getVocation()) == 9 then
+        elseif voc == 9 then
           useAutoTioSio(member)
         else
           useAutoSio(member)
         end
       end
+      return
     end
-
-    if secondaryHealing.enabled then
-      if member:getName() == secondaryHealing.name and memberHealth <= secondaryHealing.percent and member:isPartyMember() then
-        if translateVocation(localPlayer:getVocation()) == 5 then
-          useAutoUH(member)
-        elseif translateVocation(localPlayer:getVocation()) == 9 then
-          useAutoTioSio(member)
-        else
-          useAutoSio(member)
-        end
-      end
-    end
-
-    :: continue ::
   end
 end
 
@@ -3603,6 +3788,8 @@ function onLoadHelperData()
   toolsPanel:recursiveGetChildById("eatFood"):setChecked(helperConfig.autoEatFood)
   toolsPanel:recursiveGetChildById("reconnect"):setChecked(helperConfig.autoReconnect)
   toolsPanel:recursiveGetChildById("changeGold"):setChecked(helperConfig.autoChangeGold)
+  toolsPanel:recursiveGetChildById("sellLoot"):setChecked(helperConfig.autoSellLoot)
+  toolsPanel:recursiveGetChildById("autoBless"):setChecked(helperConfig.autoBless)
   enableButtons:recursiveGetChildById("enableMagicShooter"):setChecked(helperConfig.magicShooterEnabled)
   enableButtons:recursiveGetChildById("enableAutoTarget"):setChecked(helperConfig.autoTargetEnabled)
   local autoTargetMode = enableButtons:recursiveGetChildById("autoTargetMode")
@@ -3656,14 +3843,8 @@ function loadSettings()
     haste = {
       { id = 0, enabled = false, safecast = false }
     },
-    friendhealing = {
-      { name = "", percent = 0, enabled = false },
-      { name = "", percent = 0, enabled = false }
-    },
-    gransiohealing = {
-      { name = "", percent = 0, enabled = false },
-      { name = "", percent = 0, enabled = false }
-    },
+    friendhealing = { mode = "PT", percent = 99, enabled = false, prioritizeFriend = false, list = {}, ptOrder = {} },
+    gransiohealing = { mode = "PT", percent = 99, enabled = false, prioritizeFriend = false, list = {}, ptOrder = {} },
 
     shooterProfiles = {
       ["Default"] = deepCopy(defaultShooterProfile)
@@ -3673,6 +3854,8 @@ function loadSettings()
     autoEatFood = false,
     autoReconnect = false,
     autoChangeGold = false,
+    autoSellLoot = false,
+    autoBless = false,
     magicShooterEnabled = false,
     magicShooterOnHold = false,
     autoTargetEnabled = false,
@@ -3746,18 +3929,21 @@ function loadSettings()
         { id = 0, enabled = false, safecast = false }
       }
     end
-    if not result.friendhealing then
-      helperConfig.friendhealing = {
-        { name = "", percent = 0, enabled = false },
-        { name = "", percent = 0, enabled = false }
-      }
+    -- Friend/Gran-Sio healing migrated from the old 2-fixed-slot model to the new
+    -- PT/List priority-list model. Old saves (array with [1].name) are incompatible,
+    -- so reset to the new default when the new `mode` field is missing.
+    if type(helperConfig.friendhealing) ~= "table" or helperConfig.friendhealing.mode == nil then
+      helperConfig.friendhealing = { mode = "PT", percent = 99, enabled = false, prioritizeFriend = false, list = {}, ptOrder = {} }
     end
-    if not result.gransiohealing then
-      helperConfig.gransiohealing = {
-        { name = "", percent = 0, enabled = false },
-        { name = "", percent = 0, enabled = false }
-      }
+    helperConfig.friendhealing.list = helperConfig.friendhealing.list or {}
+    helperConfig.friendhealing.ptOrder = helperConfig.friendhealing.ptOrder or {}
+    helperConfig.friendhealing.prioritizeFriend = helperConfig.friendhealing.prioritizeFriend or false
+    if type(helperConfig.gransiohealing) ~= "table" or helperConfig.gransiohealing.mode == nil then
+      helperConfig.gransiohealing = { mode = "PT", percent = 99, enabled = false, prioritizeFriend = false, list = {}, ptOrder = {} }
     end
+    helperConfig.gransiohealing.list = helperConfig.gransiohealing.list or {}
+    helperConfig.gransiohealing.ptOrder = helperConfig.gransiohealing.ptOrder or {}
+    helperConfig.gransiohealing.prioritizeFriend = helperConfig.gransiohealing.prioritizeFriend or false
     if not result.shooterProfiles then
       result.selectedShooterProfile = "Default"
       result.shooterProfiles = {
@@ -3779,6 +3965,12 @@ function loadSettings()
     end
     if not result.autoChangeGold then
       helperConfig.autoChangeGold = false
+    end
+    if not result.autoSellLoot then
+      helperConfig.autoSellLoot = false
+    end
+    if not result.autoBless then
+      helperConfig.autoBless = false
     end
     if not result.magicShooterEnabled then
       helperConfig.magicShooterEnabled = false
@@ -4147,6 +4339,12 @@ function applyPotionPriorityButtons()
       end
     end
   end
+end
+
+-- Read-only accessor for the master helper on/off state (the scripting API's
+-- bot.helper.enabled/enable/disable reads this; botStatus() flips it).
+function isHelperEnabled()
+  return hotkeyHelperStatus == true
 end
 
 function botStatus()
@@ -4532,56 +4730,6 @@ function toggleHelperTracker()
       helperTracker:getParent():moveChildToIndex(helperTracker, #helperTracker:getParent():getChildren())
     end
   end
-end
-
-function showTerms()
-  if helperConfig.terms then
-    show()
-  else
-    createHelperRules()
-    helperRules:show()
-    helperRules:focus()
-  end
-end
-
-function closeTerms()
-  helperRules:hide()
-end
-
-function createHelperRules()
-  local rulesTextList = helperRules:recursiveGetChildById('rules')
-  if rulesTextList then
-    rulesTextList:destroyChildren()
-
-    local longText = "\n           Extended Terms of Conditions for Helper Services\n\n" ..
-        " These Terms of Service establish the conditions under which D FATO GAMES LTDA provides 'Helper' and 'Additional Services' for the online RPG game 'Astra.' This document complements the 'Astra Service Agreement,' which all users must accept when creating an account.\n\n" ..
-        "2 - Cheating\n\n" ..
-        "2.H - Automations in RTC.\n If the player is using the RTC client and the Caster function to attack monsters and/or cast spells is active, they will undergo a standard check by our team. If the player absence is confirmed, a ban will be applied to the player and their account."
-
-    local label = g_ui.createWidget('UILabel', rulesTextList)
-    label:setText(longText)
-    label:setColor(tovar('$var-text-cip-color'))
-    label:setFont(tovar('$var-cip-font'))
-    label:setTextWrap(true)
-    label:setTextAutoResize(true)
-    label:setMarginRight(10)
-    label:setMarginLeft(10)
-    label:setBackgroundColor('#414141')
-  end
-end
-
-function onHelperTermCondition(widgetId, value)
-  helperRules:recursiveGetChildById('next'):setEnabled(value)
-end
-
-function onHelperTermConditionNext()
-  helperRules:hide()
-  show()
-  helperConfig.terms = true
-end
-
-function hasAcceptedTerms()
-  return helperConfig.terms
 end
 
 function move(panel, height, index, minimized, locked)
