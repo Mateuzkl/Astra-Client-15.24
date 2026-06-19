@@ -164,6 +164,15 @@ void MapView::drawMapBackground(const Rect& rect, const TilePtr& crosshairTile) 
             g_drawQueue->setOpacity(floorStart, fading);
     }
 
+    // Mouse-target crosshair: drawn LAST, after every floor/tile, so it always sits on
+    // top of all items, creatures and taller sprites from adjacent tiles/upper floors.
+    // (It used to be drawn mid-tile inside drawFloor and got covered by drawTop/creatures.)
+    if (m_crosshair && crosshairTile) {
+        Point tileDrawPos = transformPositionTo2D(crosshairTile->getPosition(), cameraPosition);
+        g_drawQueue->addTexturedRect(Rect(tileDrawPos, tileDrawPos + g_sprites.spriteSize() - 1),
+                                     m_crosshair, Rect(0, 0, m_crosshair->getSize()));
+    }
+
     if(!m_shader.empty() && isFollowingCreature()) {
         g_drawQueue->setShader(m_shader);
 
@@ -217,11 +226,6 @@ void MapView::drawFloor(short floor, const Position& cameraPosition, const TileP
 
             tile->drawBottom(tileDrawPos, m_lightView.get());
 
-            if (m_crosshair && tile == crosshairTile) {
-                g_drawQueue->addTexturedRect(Rect(tileDrawPos, tileDrawPos + g_sprites.spriteSize() - 1),
-                                             m_crosshair, Rect(0, 0, m_crosshair->getSize()));
-            }
-
             tile->drawCreatures(tileDrawPos, m_lightView.get());
             tile->drawTop(tileDrawPos, m_lightView.get());
         }
@@ -240,11 +244,6 @@ void MapView::drawFloor(short floor, const Position& cameraPosition, const TileP
             tile->drawGround(tileDrawPos, m_lightView.get());
 
             tile->drawBottom(tileDrawPos, m_lightView.get());
-
-            if (m_crosshair && tile == crosshairTile) {
-                g_drawQueue->addTexturedRect(Rect(tileDrawPos, tileDrawPos + g_sprites.spriteSize() - 1),
-                                             m_crosshair, Rect(0, 0, m_crosshair->getSize()));
-            }
 
             tile->drawCreatures(tileDrawPos, m_lightView.get());
             tile->drawTop(tileDrawPos, m_lightView.get());
@@ -372,7 +371,11 @@ void MapView::drawMapForeground(const Rect& rect)
             mp.x *= horizontalStretchFactor;
             mp.y *= verticalStretchFactor;
             mp += rect.topLeft();
-            Rect tileRect(mp, Size(tw, th));
+            // Reach square: radius tiles of half-extent around the waypoint tile (0 = 1x1,
+            // 1 = 3x3, 2 = 5x5). Centered on the waypoint tile; the label stays on it.
+            const int r = std::max<int>(0, mark.radius);
+            const int side = 2 * r + 1;
+            Rect tileRect(mp.x - r * tw, mp.y - r * th, side * tw, side * th);
             g_drawQueue->addFilledRect(tileRect, mark.color.opacity(0.30f));
             g_drawQueue->addBoundingRect(tileRect, 2, mark.color);
             if (cbFont && !mark.text.empty())
@@ -575,6 +578,10 @@ void MapView::drawPlayerHudConditions(const Rect& rect)
     for (const std::string& id : active) {
         auto it = configs.find(id);
         if (it == configs.end())
+            continue;
+        // Skip blank paths: g_textures.getTexture("") fails AND is never cached,
+        // so it would log "Unable to load texture ''" every single frame.
+        if (it->second.empty())
             continue;
         TexturePtr tex = g_textures.getTexture(it->second);
         if (tex)

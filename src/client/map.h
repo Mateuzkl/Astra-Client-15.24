@@ -327,8 +327,10 @@ public:
 
     // Cavebot waypoint overlay: tile-anchored markers drawn in MapView::drawMapForeground
     // (on top of the map tiles/borders, under the UI). Fed from Lua by the cavebot HUD.
-    struct CavebotMark { Position pos; Color color; std::string text; };
-    void addCavebotMark(const Position& pos, const Color& color, const std::string& text) { m_cavebotMarks.push_back({ pos, color, text }); }
+    // radius = tiles of half-extent for the on-map square (0 = single tile, 1 = 3x3, 2 = 5x5).
+    // Mirrors the cavebot reach radius so the HUD shows the actual acceptance area.
+    struct CavebotMark { Position pos; Color color; std::string text; int radius; };
+    void addCavebotMark(const Position& pos, const Color& color, const std::string& text, int radius = 0) { m_cavebotMarks.push_back({ pos, color, text, radius }); }
     void clearCavebotMarks() { m_cavebotMarks.clear(); }
     const std::vector<CavebotMark>& getCavebotMarks() { return m_cavebotMarks; }
 
