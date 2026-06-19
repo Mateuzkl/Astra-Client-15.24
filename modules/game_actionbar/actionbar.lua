@@ -895,6 +895,22 @@ function updateButton(button)
 	dragButton = button
 	dragItem = self
     onDragItem(self, mousePos)
+    -- MUST return true: UIManager only tracks the drag (sets m_draggingWidget) when
+    -- onDragEnter returns truthy. Without it, onDragLeave never fires on release, so
+    -- the item ripped out via onDragItem (reparented to gameRootPanel) is never reset
+    -- and stays stuck floating at the drop position.
+    return true
+  end
+
+  -- Make the ripped-out item follow the cursor and keep the drop-target highlight
+  -- live. The base UIItem:onDragMove only repositions a dragClone, but the action bar
+  -- drags the real item itself, so we reposition it here via onDragItem each move.
+  button.item.onDragMove = function(self, mousePos)
+    if not button.cache.isDragging then
+      return false
+    end
+    onDragItem(self, mousePos)
+    return true
   end
 
   button.item.onDragLeave = function(self, widget, mousePos)
@@ -2192,12 +2208,16 @@ local function getPrevInvisibleButton(actionBar)
 end
 
 local function getLastVisibleButton(actionBar)
-	for _, button in ipairs(actionBar.tabBar:getReverseChildren()) do
+	-- NOTE: UIWidget has no getReverseChildren() (it doesn't exist in this engine,
+	-- C++ or Lua); calling it threw "attempt to call method 'getReverseChildren'".
+	-- Walk children forward and keep the last visible one instead.
+	local lastVisible = nil
+	for _, button in ipairs(actionBar.tabBar:getChildren()) do
 		if button:isVisible() then
-			return button
+			lastVisible = button
 		end
 	end
-	return nil
+	return lastVisible
 end
 
 function moveActionButtons(widget)
@@ -2207,7 +2227,6 @@ function moveActionButtons(widget)
 	local tabBar = actionBar.tabBar
 	local buttons = { actionBar.prevPanel.prev, actionBar.prevPanel.first, actionBar.nextPanel.next, actionBar.nextPanel.last }
 	local children = tabBar:getChildren()
-	local reverseChildren = tabBar.getReverseChildren and tabBar:getReverseChildren() or {}
 
 	local dimension = actionBar.isVertical and tabBar:getHeight() or tabBar:getWidth()
 	local visibleCount = math.max(1, math.floor(dimension / 36))
@@ -2251,12 +2270,14 @@ function moveActionButtons(widget)
 		scroll:setValue(scroll:getMinimum())
 
 	elseif dir == "last" then
-		for i, button in ipairs(reverseChildren) do
-			button:setVisible(i <= visibleCount)
+		-- show the last `visibleCount` buttons (no getReverseChildren in this engine)
+		local total = #children
+		for i, button in ipairs(children) do
+			button:setVisible(i > total - visibleCount)
 		end
 
 		actionBar.firstVisibleIndex = tabBar:getChildIndex(getFirstVisibleButton(actionBar))
-		actionBar.lastVisibleIndex = #children
+		actionBar.lastVisibleIndex = total
 		scroll:setValue(scroll:getMaximum())
 	end
 
