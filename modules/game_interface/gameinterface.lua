@@ -28,6 +28,17 @@ arcLifeDistance = 0
 focusReason = {}
 hookedMenuOptions = {}
 lastDirTime = g_clock.millis()
+-- Saved container layout to apply when the server reopens containers after login.
+-- The reopen packets arrive asynchronously (often a poll after onPlayerLoad's
+-- restore pass), so we stash each container's target slot here keyed by its
+-- server container id and apply it in game_containers.onContainerOpen.
+pendingContainerRestore = {}
+-- Handle for the timer that drops stale pending placements, so a fast relog can
+-- cancel the previous login's timer instead of letting it wipe the new layout.
+pendingRestoreCleanupEvent = nil
+-- Temporary: logs container restore decisions to the client console ([BPRESTORE]).
+-- Set to false (or delete the guarded logs) once the restore is verified working.
+CONTAINER_RESTORE_DEBUG = true
 
 local keybindStopAll = KeyBind:getKeyBind("Movement", "Stop All Actions")
 local keybindLogout = KeyBind:getKeyBind("Misc.", "Logout")
@@ -200,6 +211,13 @@ end
 function onGameEnd()
   hide()
   modules.client_topmenu.getTopMenu():setImageColor('white')
+  -- Drop the leftover restore timer so it can't fire during the next login and
+  -- wipe that session's freshly-recorded container placements.
+  if pendingRestoreCleanupEvent then
+    removeEvent(pendingRestoreCleanupEvent)
+    pendingRestoreCleanupEvent = nil
+  end
+  pendingContainerRestore = {}
   onPlayerUnload()
   interfaceSaved = true
 end
@@ -2175,7 +2193,48 @@ function onLoadHorizontalPanels(horizontalLeftOptions, horizontalRightOptions)
   end
 end
 
+-- Remember where a saved container should land so it can be restored to the same
+-- panel/slot whenever the server reopens it after login (see pendingContainerRestore).
+function recordPendingContainerRestore(instance, panel, index, height, minimized, locked)
+  if not instance or not panel then return end
+  pendingContainerRestore[instance] = {
+    panel = panel,
+    index = index,
+    height = height,
+    minimized = minimized,
+    locked = locked,
+  }
+  if CONTAINER_RESTORE_DEBUG then
+    g_logger.info(string.format("[BPRESTORE] record pending id=%s panel=%s index=%s",
+      tostring(instance), tostring(panel:getId()), tostring(index)))
+  end
+end
+
+function clearPendingContainerRestore(instance)
+  if instance == nil then return end
+  pendingContainerRestore[instance] = nil
+end
+
+-- Consume and return the saved placement for a container id (nil if none).
+function takePendingContainerRestore(instance)
+  local entry = pendingContainerRestore[instance]
+  pendingContainerRestore[instance] = nil
+  return entry
+end
+
+-- True if a stored restore panel can still safely host a window. removePanel detaches
+-- a sidebar panel (setParent(nil)) without destroying it, so a removed panel passes
+-- isDestroyed() yet is off-tree; reparenting onto it would hide the container. Require
+-- it to be both alive and still attached to the panel tree.
+function isRestorePanelUsable(panel)
+  if not panel then return false end
+  if panel.isDestroyed and panel:isDestroyed() then return false end
+  return panel:getParent() ~= nil
+end
+
 function onPlayerLoad(config)
+  -- Drop any stale layout from a previous character/login before rebuilding it.
+  pendingContainerRestore = {}
   if not config.leftSidebarCount then
     for i = 1, gameLeftPanels:getChildCount() do
       removeLeftPanel()
@@ -2244,7 +2303,8 @@ function onPlayerLoad(config)
 
       for k, x in ipairs(config.openWidgetsHorizontalRight) do
         if x.type == 'container' then
-          modules.game_containers.move(x.instance, horizontalRightPanel, x.height, k)
+          recordPendingContainerRestore(x.instance, horizontalRightPanel, k, x.height, x.minimized, x.locked)
+          modules.game_containers.move(x.instance, horizontalRightPanel, x.height, k, x.minimized, x.locked)
         elseif x.type == 'analyticsSelector' then
           modules.game_analyser.moveAnalyser(horizontalRightPanel, x.height)
         elseif table.contains({'bossCooldowns', 'damageInputAnalyser', 'lootTracker','huntingSessionAnalyser', 'impactAnalyser', 'lootAnalyser', 'partyHuntAnalyser', 'wasteAnalyser', 'xpAnalyser', 'miscAnalyzer'}, x.type) then
@@ -2290,7 +2350,8 @@ function onPlayerLoad(config)
 
       for k, x in ipairs(config.openWidgetsHorizontalLeft) do
         if x.type == 'container' then
-           modules.game_containers.move(x.instance, horizontalLeftPanel, x.heigh, k)
+          recordPendingContainerRestore(x.instance, horizontalLeftPanel, k, x.height, x.minimized, x.locked)
+          modules.game_containers.move(x.instance, horizontalLeftPanel, x.height, k, x.minimized, x.locked)
         elseif x.type == 'analyticsSelector' then
           modules.game_analyser.moveAnalyser(horizontalLeftPanel, x.height)
         elseif table.contains({'bossCooldowns', 'damageInputAnalyser', 'lootTracker','huntingSessionAnalyser', 'impactAnalyser', 'lootAnalyser', 'partyHuntAnalyser', 'wasteAnalyser', 'xpAnalyser'}, x.type) then
@@ -2327,6 +2388,20 @@ function onPlayerLoad(config)
       end
     end
   end)
+
+  -- Containers are reopened asynchronously by the server right after login; give that
+  -- burst a window to arrive and snap into their saved slots, then drop any leftover
+  -- placements so a container the player opens later isn't yanked to an old position.
+  -- Kept short to limit the chance a freshly opened container reuses a still-pending
+  -- server id. Cancel any prior login's timer first (fast relog) so it can't wipe this
+  -- session's table mid-restore.
+  if pendingRestoreCleanupEvent then
+    removeEvent(pendingRestoreCleanupEvent)
+  end
+  pendingRestoreCleanupEvent = scheduleEvent(function()
+    pendingContainerRestore = {}
+    pendingRestoreCleanupEvent = nil
+  end, 5000)
 end
 
 function onPlayerUnload()
@@ -2466,6 +2541,12 @@ function _moveChildren(panel, x, k)
 
   local widget = nil
   if x.type == 'container' then
+    -- The container window almost never exists yet at login (the server reopens it a
+    -- poll later), so record the slot for onContainerOpen to claim. Keep the pending
+    -- entry even if the immediate move() below succeeds: when a container reopens in
+    -- the SAME poll as login it is created before this runs, gets a nil placement, and
+    -- only its own deferred block (which runs after this) can re-claim the pending slot.
+    recordPendingContainerRestore(x.instance, panel, k, x.height, x.minimized, x.locked)
     widget = modules.game_containers.move(x.instance, panel, x.height, k, x.minimized, x.locked)
   elseif x.type == 'analyticsSelector' then
     widget = modules.game_analyser.moveAnalyser(panel, x.height, x.minimized)

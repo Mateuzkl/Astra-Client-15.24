@@ -134,17 +134,41 @@ function onContainerOpen(container, previousContainer)
     previousContainer.itemsPanel = nil
   else
     containerWindow = g_ui.createWidget('ContainerWindow', m_interface.getContainerPanel())
-    if not m_interface.addToPanels(containerWindow) then
-      return false
+    -- If this container held a saved slot at logout, restore it there instead of
+    -- letting addToPanels drop it in the first panel with free space. The server
+    -- reopens containers a poll after the layout was restored, so the placement was
+    -- stashed by m_interface and is claimed here when the window finally exists.
+    local placement = m_interface.takePendingContainerRestore(container:getId())
+    if placement and not m_interface.isRestorePanelUsable(placement.panel) then
+      placement = nil
     end
+    if CONTAINER_RESTORE_DEBUG then
+      g_logger.info(string.format("[BPRESTORE] open id=%s name=%s placementAtCreate=%s",
+        tostring(container:getId()), tostring(container:getName()),
+        placement and tostring(placement.panel:getId()) or "none"))
+    end
+    containerWindow.savedPlacement = placement
+    if placement and placement.panel then
+      containerWindow:setParent(placement.panel)
+    else
+      if not m_interface.addToPanels(containerWindow) then
+        return false
+      end
 
-    containerWindow:getParent():moveChildToIndex(containerWindow, #containerWindow:getParent():getChildren())
+      containerWindow:getParent():moveChildToIndex(containerWindow, #containerWindow:getParent():getChildren())
+    end
     -- white border flash effect
     containerWindow:setBorderWidth(2)
     containerWindow:setBorderColor("#FFFFFF")
     scheduleEvent(function()
       if containerWindow then
-        containerWindow:setBorderWidth(0)
+        -- Don't clobber a restored container's red lock border (set ~100ms after open).
+        if containerWindow.isLocked and containerWindow:isLocked() then
+          containerWindow:setBorderWidth(1)
+          containerWindow:setBorderColor('$var-text-cip-store-red')
+        else
+          containerWindow:setBorderWidth(0)
+        end
       end
     end, 300)
   end
@@ -168,9 +192,23 @@ function onContainerOpen(container, previousContainer)
     if containerPanel:getChildByPos(mousePos) then
       return false
     end
-    local child = containerPanel:getNearestChild(mousePos)
-    if child then
-      child:onDrop(widget, mousePos, true)
+    -- Dropped on the window chrome (header/border), not directly on a slot. getNearestChild
+    -- is not bound on this client, so find the closest slot by center distance and route the
+    -- drop there, so moving an item onto the header still works instead of erroring.
+    local nearest, nearestDist
+    for _, child in ipairs(containerPanel:getChildren()) do
+      if child.position then -- only the item slots (they carry a container slot position)
+        local cx = child:getX() + child:getWidth() / 2
+        local cy = child:getY() + child:getHeight() / 2
+        local dx, dy = cx - mousePos.x, cy - mousePos.y
+        local dist = dx * dx + dy * dy
+        if not nearestDist or dist < nearestDist then
+          nearest, nearestDist = child, dist
+        end
+      end
+    end
+    if nearest then
+      nearest:onDrop(widget, mousePos, true)
     end
   end
 
@@ -271,6 +309,7 @@ function onContainerOpen(container, previousContainer)
   addEvent(function ()
     local layout = containerPanel:getLayout()
     if not layout then
+      containerWindow.savedPlacement = nil
       return
     end
 
@@ -285,25 +324,63 @@ function onContainerOpen(container, previousContainer)
       end
     end
     
-    if not previousContainer then
-      containerWindow:setHeight(30)
-      if not m_interface.addToPanels(containerWindow) then
-        return false
-      end
+    local placement = containerWindow.savedPlacement
+    if not placement then
+      -- Same-poll relog: the container reopened before onPlayerLoad recorded its saved
+      -- slot, so nothing was available at creation time and addToPanels placed it by
+      -- default. onPlayerLoad's restore pass runs before this deferred block, so the
+      -- pending placement exists now; claim it and override the default placement.
+      placement = m_interface.takePendingContainerRestore(container:getId())
+    end
+    if placement and not m_interface.isRestorePanelUsable(placement.panel) then
+      placement = nil
+    end
+    containerWindow.savedPlacement = nil
 
-      containerWindow:getParent():moveChildToIndex(containerWindow, #containerWindow:getParent():getChildren())
+    if CONTAINER_RESTORE_DEBUG and not previousContainer then
+      g_logger.info(string.format("[BPRESTORE] deferred id=%s placementFinal=%s index=%s",
+        tostring(container:getId()),
+        placement and tostring(placement.panel:getId()) or "addToPanels-default",
+        placement and tostring(placement.index) or "-"))
     end
 
     if not previousContainer then
-      local filledLines = math.max(math.ceil(container:getItemsCount() / layout:getNumColumns()), 1)
-      if filledLines < layout:getNumLines() then
-        if container:getItemsCount() ~= 0 then
-          containerWindow:setContentHeight(filledLines*(cellSize.height+6)+3)
-        else
-          containerWindow:setContentHeight(filledLines*(cellSize.height+6)-3)
+      containerWindow:setHeight(30)
+      if placement and placement.panel then
+        -- The addEvent runs a frame later; the panel order may have shifted while
+        -- other widgets were restored, so re-assert the saved panel and slot index.
+        if containerWindow:getParent() ~= placement.panel then
+          containerWindow:setParent(placement.panel)
+        end
+        if placement.panel:hasChild(containerWindow) then
+          containerWindow:getParent():moveChildToIndex(containerWindow, math.min(placement.index or 1, placement.panel:getChildCount()))
         end
       else
-        containerWindow:setContentHeight(filledLines*(cellSize.height+6))
+        if not m_interface.addToPanels(containerWindow) then
+          return false
+        end
+
+        containerWindow:getParent():moveChildToIndex(containerWindow, #containerWindow:getParent():getChildren())
+      end
+    end
+
+    if not previousContainer then
+      if placement and placement.minimized then
+        if placement.height then
+          containerWindow:setHeight(placement.height)
+        end
+        containerWindow:minimize()
+      else
+        local filledLines = math.max(math.ceil(container:getItemsCount() / layout:getNumColumns()), 1)
+        if filledLines < layout:getNumLines() then
+          if container:getItemsCount() ~= 0 then
+            containerWindow:setContentHeight(filledLines*(cellSize.height+6)+3)
+          else
+            containerWindow:setContentHeight(filledLines*(cellSize.height+6)-3)
+          end
+        else
+          containerWindow:setContentHeight(filledLines*(cellSize.height+6))
+        end
       end
     elseif container:hasPages() and containerWindow:getContentHeight() < 83 then
       containerWindow:setHeight(84)
@@ -312,6 +389,15 @@ function onContainerOpen(container, previousContainer)
 
     containerWindow:setup()
     containerWindow:setColor(ContainerConfig.moveManualSort and "#C28400" or "#909090")
+
+    if placement and placement.locked then
+      scheduleEvent(function()
+        if containerWindow then
+          containerWindow:lock(true)
+        end
+      end, 100)
+    end
+    containerWindow.savedPlacement = nil
   end)
 
 end
