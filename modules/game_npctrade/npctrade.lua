@@ -1010,37 +1010,38 @@ function SellItemList(items, window)
 
   window:hide()
 
-  local total = 0
-  local sold = 0
-  local sellIds = {}
   local maxItems = math.min(#items, 300)
 
+  -- The server's onPlayerSellAllItems sells EVERY sellable item the NPC buys across the
+  -- whole inventory AND the loot pouch, EXCEPT the ids we send here. So we send the
+  -- "ignore" list, not a selection: the persistent blacklist (sellAllWhitelist) plus
+  -- anything the player unchecked in this dialog. Items that aren't shown here (e.g. loot
+  -- still in the pouch) aren't ignored, so the server sells them. One extended-opcode
+  -- packet avoids the per-item packet flood that gets the client kicked.
+  -- Payload: byte 0 = ignoreEquipped flag, then each ignored item id as a little-endian U16.
+  local ignoreIds = {}
+  local seen = {}
+  local function addIgnore(id)
+    if id and id > 0 and not seen[id] then
+      seen[id] = true
+      ignoreIds[#ignoreIds + 1] = id
+    end
+  end
+  for _, id in ipairs(sellAllWhitelist) do addIgnore(id) end
   for i = 1, maxItems do
     local widget = items[i]
-    if widget and widget.sellCheckbox:isChecked() and widget.item.ptr and widget.item.ptr:getId() > 0 then
-      local quantity = getSellQuantity(widget.item.ptr)
-      if quantity > 0 then
-        total = total + (quantity * widget.item.price)
-        sold = sold + 1
-        table.insert(sellIds, widget.item.ptr:getId())
-      end
+    if widget and widget.item and widget.item.ptr and not widget.sellCheckbox:isChecked() then
+      addIgnore(widget.item.ptr:getId())
     end
   end
 
-  -- Selling each item with its own packet floods the server's maxPacketsPerSecond
-  -- limit and gets the client kicked (g_game.sellAllItems is just a no-op stub).
-  -- Send the whole selection in a single extended-opcode packet instead; the server
-  -- sells every eligible unit of each id in one batch (mirrors the loot-pouch sell-all).
-  -- Payload: byte 0 = ignoreEquipped flag, then each item id as a little-endian U16.
-  if #sellIds > 0 then
-    local proto = g_game.getProtocolGame and g_game.getProtocolGame()
-    if proto then
-      local payload = string.char(ignoreEquipped and 1 or 0)
-      for _, id in ipairs(sellIds) do
-        payload = payload .. string.char(id % 256, math.floor(id / 256) % 256)
-      end
-      pcall(function() proto:sendExtendedOpcode(NPC_SELL_ALL_OPCODE, payload) end)
+  local proto = g_game.getProtocolGame and g_game.getProtocolGame()
+  if proto then
+    local payload = string.char(ignoreEquipped and 1 or 0)
+    for _, id in ipairs(ignoreIds) do
+      payload = payload .. string.char(id % 256, math.floor(id / 256) % 256)
     end
+    pcall(function() proto:sendExtendedOpcode(NPC_SELL_ALL_OPCODE, payload) end)
   end
 
   g_client.setInputLockWidget(nil)
