@@ -128,7 +128,11 @@ void Outfit::draw(Point dest, Otc::Direction direction, uint walkAnimationPhase,
             int mountAnimationPhase = walkAnimationPhase;
             auto mountType = g_things.rawGetThingType(m_mount, ThingCategoryCreature);
             auto idleAnimator = mountType->getIdleAnimator();
-            if (idleAnimator && animate) {
+            // In UI previews (ui == true) the mount must cycle its walk animation just
+            // like the outfit body does, otherwise mounts that own an idle animator look
+            // frozen while mounts without one walk -- an inconsistency in the outfit window.
+            // Mirrors the body's own "idleAnimator && !ui" guard above.
+            if (idleAnimator && animate && !ui) {
                 if (walkAnimationPhase > 0) {
                     mountAnimationPhase += idleAnimator->getAnimationPhases() - 1;
                 } else {
@@ -136,9 +140,20 @@ void Outfit::draw(Point dest, Otc::Direction direction, uint walkAnimationPhase,
                 }
             }
             else if (ui && animate) {
+                // Mirror the outfit body's UI branch EXACTLY: a creature sheet stores
+                // [idle frames][walk frames], so to actually show walking we cycle the
+                // walk-frame count and then offset past the idle frames. Without the
+                // idle offset, mounts that own an idle animator cycle their idle frames
+                // (looks frozen) while mounts without one walk -- the inconsistency.
                 int phases = mountType->getAnimator() ? mountType->getAnimator()->getAnimationPhases() : mountType->getAnimationPhases();
-                int ticksPerFrame = 1000 / phases;
+                if (phases < 4) {
+                    phases = 2; // old protocols with 2 frames walk animation
+                }
+                int ticksPerFrame = !g_game.getFeature(Otc::GameEnhancedAnimations) ? 333 : (1000 / phases);
                 mountAnimationPhase = (g_clock.millis() % (ticksPerFrame * phases)) / ticksPerFrame;
+                if (idleAnimator) {
+                    mountAnimationPhase += idleAnimator->getAnimationPhases() - 1;
+                }
                 if (!mountType->isAnimateAlways()) {
                     mountAnimationPhase += 1;
                 }

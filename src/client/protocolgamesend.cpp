@@ -894,37 +894,59 @@ void ProtocolGame::sendRequestOutfit()
     send(msg);
 }
 
-void ProtocolGame::sendChangeOutfit(const Outfit& outfit)
+void ProtocolGame::sendChangeOutfit(const Outfit& outfit, bool randomizeMount)
 {
     auto msg = std::make_shared<OutputMessage>();
     msg->addU8(Proto::ClientChangeOutfit);
 
-    if (g_game.getFeature(Otc::GameTibia12Protocol) && g_game.getProtocolVersion() >= 1220) {
-        msg->addU8(0); // outfit type
+    // Legacy (pre-12) clients keep the old, feature-gated wire layout.
+    if (!g_game.getFeature(Otc::GameTibia12Protocol)) {
+        if (g_game.getFeature(Otc::GameLooktypeU16))
+            msg->addU16(outfit.getId());
+        else
+            msg->addU8(outfit.getId());
+        msg->addU8(outfit.getHead());
+        msg->addU8(outfit.getBody());
+        msg->addU8(outfit.getLegs());
+        msg->addU8(outfit.getFeet());
+        if (g_game.getFeature(Otc::GamePlayerAddons))
+            msg->addU8(outfit.getAddons());
+        if (g_game.getFeature(Otc::GamePlayerMounts))
+            msg->addU16(outfit.getMount());
+        send(msg);
+        return;
     }
 
-    if(g_game.getFeature(Otc::GameLooktypeU16))
-        msg->addU16(outfit.getId());
-    else
-        msg->addU8(outfit.getId());
+    // crystalserver/canary parseSetOutfit, modern path. The koliseu server runs
+    // isOTCR for every OTClient login, so it reads the FULL block after the mount
+    // (mount colors, mounted flag, familiar, randomize) AND the OTCR extras
+    // (wings, aura, effect, shader). The stock client jumped straight from the
+    // mount id to wings, so the server read past the packet end ("[getByte] Not
+    // enough data") on every outfit change. We model only a subset of these, so
+    // the unsupported fields (mount colors, familiar, effect) go out as 0.
+    msg->addU8(0); // outfit type (0 = apply outfit)
+
+    msg->addU16(outfit.getId());
     msg->addU8(outfit.getHead());
     msg->addU8(outfit.getBody());
     msg->addU8(outfit.getLegs());
     msg->addU8(outfit.getFeet());
-    if(g_game.getFeature(Otc::GamePlayerAddons))
-        msg->addU8(outfit.getAddons());
-    if(g_game.getFeature(Otc::GamePlayerMounts))
-        msg->addU16(outfit.getMount());
-    if (g_game.getFeature(Otc::GameWingsAndAura)) {
-        msg->addU16(outfit.getWings());
-        msg->addU16(outfit.getAura());
-    }
-    if(g_game.getFeature(Otc::GameOutfitShaders))
-        msg->addString(outfit.getShader());
-    if (g_game.getFeature(Otc::GameHealthInfoBackground)) {
-        msg->addU16(outfit.getHealthBar());
-        msg->addU16(outfit.getManaBar());
-    }
+    msg->addU8(outfit.getAddons());
+
+    msg->addU16(outfit.getMount());
+    msg->addU8(0); // mount head
+    msg->addU8(0); // mount body
+    msg->addU8(0); // mount legs
+    msg->addU8(0); // mount feet
+    msg->addU8(outfit.getMount() != 0 ? 1 : 0); // is mounted
+    msg->addU16(0); // familiar
+    msg->addU8(randomizeMount ? 1 : 0); // randomize mount
+
+    msg->addU16(outfit.getWings());
+    msg->addU16(outfit.getAura());
+    msg->addU16(0); // effect
+    msg->addString(outfit.getShader());
+
     send(msg);
 }
 

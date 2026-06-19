@@ -121,7 +121,7 @@ public:
     void sendCancelAttackAndFollow();
     void sendRefreshContainer(int containerId);
     void sendRequestOutfit();
-    void sendChangeOutfit(const Outfit& outfit);
+    void sendChangeOutfit(const Outfit& outfit, bool randomizeMount = false);
     void sendOutfitExtensionStatus(int mount = -1, int wings = -1, int aura = -1, int shader = -1, int healthBar = -1, int manaBar = -1);
     void sendApplyImbuement(uint8_t slot, uint32_t imbuementId, bool protectionCharm);
     void sendClearImbuement(uint8_t slot);

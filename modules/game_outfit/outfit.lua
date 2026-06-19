@@ -64,9 +64,9 @@ function terminate()
 end
 
 function onMovementChange(checkBox, checked)
-  previewCreature:setAnimate(checked)
-  previewCreature:setIdleAnimate(not checked)
-  previewCreature:setStaticWalking(checked)
+  -- Recompute through updatePreview so the animate flags stay consistent with the
+  -- other toggles (e.g. aura, which needs animation even while Movement is off).
+  updatePreview()
 end
 
 function onShowFloorChange(checkBox, checked)
@@ -499,6 +499,9 @@ end
 
 function showOutfits(searchText)
   onHidePresetWindow()
+  -- An empty string is truthy in Lua and matchText("", ...) never matches, which
+  -- would blank the whole list when the search box is cleared. Treat it as "no filter".
+  if searchText == '' then searchText = nil end
   window.ScrollBar.selectionList.onChildFocusChange = nil
   window.ScrollBar.selectionList:destroyChildren()
   window.filter_outfits.onlyCheck:setEnabled(true)
@@ -564,6 +567,8 @@ end
 
 function showMounts(searchText)
   onHidePresetWindow()
+  -- See showOutfits: empty search string must behave like no filter, not "match nothing".
+  if searchText == '' then searchText = nil end
   window.ScrollBar.selectionList.onChildFocusChange = nil
   window.ScrollBar.selectionList:destroyChildren()
   window.filter_outfits.onlyCheck:setEnabled(true)
@@ -1077,9 +1082,13 @@ function updatePreview(onlyMount)
   end
 
   if movementCheck and previewCreature then
-    previewCreature:setAnimate(movementCheck:isChecked())
-    previewCreature:setIdleAnimate(not movementCheck:isChecked())
-    previewCreature:setStaticWalking(movementCheck:isChecked())
+    -- Movement off => fully static (no walk cycle). isAnimating() == m_animate ||
+    -- m_idleAnimate in C++, so idle-animate must NOT be forced on here or the body
+    -- keeps walking while the box is unchecked.
+    local moving = movementCheck:isChecked()
+    previewCreature:setAnimate(moving)
+    previewCreature:setIdleAnimate(false)
+    previewCreature:setStaticWalking(moving)
   end
 
   if showAuraCheck and showAuraCheck:isChecked() and previewCreature then
