@@ -107,13 +107,13 @@ function ForgeSystem.init(classPrice, transferMap, fusionPrices, transferPrices,
 	conversionMenu.windowIncreaseDustLimit.itemCount.amount:setColor("#d33c3c")
 	conversionMenu.windowIncreaseDustLimit.increaseButton.item:setItemId(37160)
 	conversionMenu.windowIncreaseDustLimit.increaseButton.itemRight:setItemId(37160)
-	conversionMenu.windowIncreaseDustLimit.baseText:setText('Raise limit from')
-	conversionMenu.windowIncreaseDustLimit.currentDust:setVisible(true)
-	conversionMenu.windowIncreaseDustLimit.img1:setVisible(true)
-	conversionMenu.windowIncreaseDustLimit.img2:setVisible(true)
-	conversionMenu.windowIncreaseDustLimit.currentDust:setText('100')
-	conversionMenu.windowIncreaseDustLimit.nextDust:setVisible(true)
-	conversionMenu.windowIncreaseDustLimit.nextDust:setText('to 101')
+	-- The dust-limit labels and the "Maximum Reached" state are driven by
+	-- updateConversion (which compares maxPlayerDust against maxDust). The server
+	-- re-sends 0x86 (sendForgingData) after EVERY resource conversion
+	-- (slivers/cores/increase-limit) and never re-sends 0x87, so hardcoding
+	-- "Raise limit from 100 to 101" here would clobber the correct "Maximum Reached"
+	-- panel back to the placeholder on each conversion for an already-maxed player.
+	ForgeSystem.updateConversion()
 end
 
 function ForgeSystem.onForgeData(fusionData, fusionConvergenceData, transferData, transferConvergenceData, maxPlayerDust)
