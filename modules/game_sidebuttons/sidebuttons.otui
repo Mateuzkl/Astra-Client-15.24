@@ -113,6 +113,23 @@ NonClosableMiniWindow
         image-clip: 0 0 20 20
       @onClick: modules.client_settings.toggle()
 
+    // Helper opener: sits right below options/logout, right-aligned with logout.
+    // bot.png is 42x40 (two 42x20 states stacked, like the other topbuttons), so the
+    // 42-wide button shows it 1:1 with no stretching.
+    UIButton
+      id: helperButton
+      anchors.top: logout.bottom
+      anchors.right: logout.right
+      margin-top: 5
+      size: 42 20
+      image-source: /images/topbuttons/bot
+      image-clip: 0 0 42 20
+      !tooltip: tr('Open Helper')
+      tooltip-delayed: true
+      @onClick: modules.game_helper.toggle()
+      $pressed:
+        image-clip: 0 20 42 20
+
     Panel
       id: buttons
       size: 108 20

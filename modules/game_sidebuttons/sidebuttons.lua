@@ -32,6 +32,15 @@ function getControlButtonTooltip(button)
   return buttonTooltip
 end
 
+-- The Helper has its own dedicated wide button below logout/options (defined in
+-- sidebuttons.otui), so keep "helperDialog" OUT of the icon grid to avoid a duplicate.
+local function dropHelperFromGrid(widgets)
+  local idx = table.find(widgets, "helperDialog")
+  if idx then
+    table.remove(widgets, idx)
+  end
+end
+
 function init()
   buttonsWindow = g_ui.loadUI('sidebuttons', m_interface.getRightPanel())
   local activeWidgets = Options.getActiveWidgets()
@@ -46,6 +55,8 @@ function init()
       table.insert(activeWidgets, v)
     end
   end
+
+  dropHelperFromGrid(activeWidgets)
 
   for _, v in pairs(activeWidgets) do
     local widget = g_ui.createWidget("UISideButton", buttonPanel)
@@ -108,6 +119,7 @@ function updateSideButtons()
   end
 
   buttonPanel:destroyChildren()
+  dropHelperFromGrid(activeWidgets)
   for _, v in pairs(activeWidgets) do
     local widget = g_ui.createWidget("UISideButton", buttonPanel)
     widget.button:setImageSource(tr("/images/topbuttons/%s.png", v))
@@ -336,7 +348,7 @@ function executeButtonFunctionality(button)
   elseif button:getParent():getId() == "highscoresDialog" then
     modules.game_highscores:show(true)
   elseif button:getParent():getId() == "helperDialog" then
-    modules.game_helper:showTerms()
+    modules.game_helper:show(true)
   elseif button:getParent():getId() == "weaponProficiency" then
     modules.game_proficiency.requestOpenWindow()
   elseif button:getParent():getId() == "manageShortcuts" then
