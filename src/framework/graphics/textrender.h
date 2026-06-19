@@ -14,6 +14,8 @@ struct TextRenderCache {
     Fw::AlignmentFlag align;
     TexturePtr texture;
     CoordsBuffer coords;
+    std::vector<InlineImageDrawCmd> images;                // inline icons baked alongside the glyphs
+    std::vector<std::unique_ptr<StyledTextRun>> styledRuns; // <i>/<b> segments on a different-texture font
     ticks_t lastUse;
 };
 

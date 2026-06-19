@@ -23,6 +23,7 @@
 #include "atlas.h"
 #include "fontmanager.h"
 #include "texture.h"
+#include "texturemanager.h"
 
 #include <framework/core/eventdispatcher.h>
 #include <framework/core/resourcemanager.h>
@@ -104,4 +105,58 @@ BitmapFontPtr FontManager::getFont(const std::string& fontName)
     // when not found, fallback to default font
     g_logger.error(stdext::format("font '%s' not found", fontName));
     return getDefaultFont();
+}
+
+void FontManager::registerInlineImage(int code, const std::string& file, int srcX, int srcY, int srcW, int srcH, int yOffset)
+{
+    // Only control bytes are valid: they must not collide with real glyphs
+    // (>= 32) or with whitespace control codes (\t \n \v \f \r). The latter is
+    // important because Lua's setHTML/setColorText shims trim and collapse with
+    // the %s class, which would silently eat \v (11) and \f (12) placeholders.
+    if (code <= 0 || code >= 32 || code == '\t' || code == '\n' ||
+        code == '\v' || code == '\f' || code == '\r')
+        return;
+
+    TexturePtr tex = g_textures.getTexture(file);
+    if (!tex)
+        return;
+    // NOTE: do not call tex->update() here. This runs on the Lua thread; the GL
+    // upload happens lazily on the graphics thread via Painter::setTexture when
+    // the icon is first drawn.
+
+    InlineTextImage& img = m_inlineImages[code];
+    const bool wasEmpty = img.width == 0;
+    img.texture = tex;
+    img.srcRect = Rect(srcX, srcY, srcW, srcH);
+    img.width = srcW;   // drawn 1:1 with the source region
+    img.height = srcH;
+    img.yOffset = yOffset;
+    if (wasEmpty)
+        m_inlineImageCount++;
+}
+
+void FontManager::registerStyleFont(int code, const std::string& fontName)
+{
+    // Same control-byte rules as inline images: never collide with real glyphs
+    // (>= 32) or whitespace control codes the text layout treats specially.
+    if (code <= 0 || code >= 32 || code == '\t' || code == '\n' ||
+        code == '\v' || code == '\f' || code == '\r')
+        return;
+
+    const bool wasEmpty = !m_styleFonts[code] && !m_styleReset[code];
+    if (fontName.empty()) {
+        m_styleReset[code] = true;
+        m_styleFonts[code] = nullptr;
+    } else {
+        m_styleReset[code] = false;
+        m_styleFonts[code] = getFont(fontName); // falls back to default if missing
+    }
+    if (wasEmpty)
+        m_styleCount++;
+}
+
+const BitmapFontPtr& FontManager::getStyleFont(int code) const
+{
+    static const BitmapFontPtr none;
+    return (code > 0 && code < 256) ? m_styleFonts[code] : none;
 }

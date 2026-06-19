@@ -150,6 +150,7 @@ void Application::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_app", "isMobile", &Application::isMobile, static_cast<Application*>(&g_app));
     g_lua.bindSingletonFunction("g_app", "restart", &Application::restart, static_cast<Application*>(&g_app));
     g_lua.bindSingletonFunction("g_app", "restartArgs", &Application::restartArgs, static_cast<Application*>(&g_app));
+    g_lua.bindSingletonFunction("g_app", "launchBinary", &Application::launchBinary, static_cast<Application*>(&g_app));
 
     // Crypt
     g_lua.registerSingletonClass("g_crypt");
@@ -444,6 +445,8 @@ void Application::registerLuaFunctions()
     g_lua.bindSingletonFunction("g_fonts", "importFont", &FontManager::importFont, &g_fonts);
     g_lua.bindSingletonFunction("g_fonts", "fontExists", &FontManager::fontExists, &g_fonts);
     g_lua.bindSingletonFunction("g_fonts", "setDefaultFont", &FontManager::setDefaultFont, &g_fonts);
+    g_lua.bindSingletonFunction("g_fonts", "registerInlineImage", &FontManager::registerInlineImage, &g_fonts);
+    g_lua.bindSingletonFunction("g_fonts", "registerStyleFont", &FontManager::registerStyleFont, &g_fonts);
 
     // Particles, for backward compability
     g_lua.registerSingletonClass("g_particles");

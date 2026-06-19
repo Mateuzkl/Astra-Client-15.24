@@ -22,6 +22,7 @@
 
 #include "atlas.h"
 #include "bitmapfont.h"
+#include "fontmanager.h"
 #include "texturemanager.h"
 #include "graphics.h"
 #include "image.h"
@@ -104,11 +105,20 @@ void BitmapFont::drawColoredText(const std::string& text, const Rect& screenCoor
     g_drawQueue->addColoredText(shared_from_this(), text, screenCoords, align, colors, shadow);
 }
 
-void BitmapFont::calculateDrawTextCoords(CoordsBuffer& coordsBuffer, const std::string& textIn, const Rect& screenCoords, Fw::AlignmentFlag align)
+void BitmapFont::calculateDrawTextCoords(CoordsBuffer& coordsBuffer, const std::string& textIn, const Rect& screenCoords, Fw::AlignmentFlag align, std::vector<InlineImageDrawCmd>* outImages, std::vector<std::unique_ptr<StyledTextRun>>* outRuns)
 {
     // prevent glitches from invalid rects
     if (!screenCoords.isValid() || !m_texture)
         return;
+
+    const bool hasInline = outImages && g_fonts.hasInlineImages();
+    const bool hasStyles = outRuns && g_fonts.hasStyleFonts();
+
+    // Current font for the run we are emitting. Style-marker bytes (see below)
+    // flip this to an alternate font; glyphs then come from that font's texture.
+    BitmapFont* curFont = this;
+    int curRunIdx = -1;   // index into *outRuns for the open alternate-font run
+    int glyphIndex = 0;   // drawable glyph counter (matches color positions)
 
     // Truncate pathologically long strings BEFORE any layout. A desynced packet
     // can hand us a garbage label thousands of chars long; laying it out and
@@ -129,13 +139,51 @@ void BitmapFont::calculateDrawTextCoords(CoordsBuffer& coordsBuffer, const std::
     for (int i = 0; i < textLenght; ++i) {
         int glyph = (uchar)text[i];
 
-        // skip invalid glyphs
-        if (glyph < 32)
-            continue;
+        // Style-marker bytes (zero width) switch the current font for the glyphs
+        // that follow: an <i>/<b> open flips to italic/bold, the reset closes it.
+        if (hasStyles && glyph < 32) {
+            if (g_fonts.isStyleReset(glyph)) {
+                curFont = this;
+                curRunIdx = -1;
+                continue;
+            }
+            if (const BitmapFontPtr& styleFont = g_fonts.getStyleFont(glyph)) {
+                curFont = styleFont.get();
+                curRunIdx = -1; // a fresh run opens on the next glyph
+                continue;
+            }
+        }
 
-        // calculate initial glyph rect and texture coords
-        Rect glyphScreenCoords(glyphsPositions[i], m_glyphsSize[glyph]);
-        Rect glyphTextureCoords = m_glyphsTextureCoords[glyph];
+        // Control bytes are normally skipped, but a registered inline-image code
+        // is laid out and drawn as a picture (from its own texture) instead.
+        const InlineTextImage* inlineImg = nullptr;
+        if (glyph < 32) {
+            if (hasInline)
+                inlineImg = g_fonts.getInlineImage(glyph);
+            if (!inlineImg)
+                continue;
+        }
+
+        // Advance the drawable-glyph counter for every real glyph (matching the
+        // color-position convention, which counts chars >= 32 regardless of
+        // clipping below). Inline images are < 32 and do not count.
+        const int thisGlyphIndex = glyphIndex;
+        if (glyph >= 32)
+            ++glyphIndex;
+
+        // The glyph is drawn from the current font (base, italic or bold). Layout
+        // positions came from the base font (markers are zero width), so alternate
+        // glyphs ride the base advances -- exact for italic, marginally tight for bold.
+        BitmapFont* glyphFont = inlineImg ? this : curFont;
+
+        // calculate initial glyph rect and texture coords (font glyph or image)
+        const Size drawSize = inlineImg ? Size(inlineImg->width, inlineImg->height) : glyphFont->m_glyphsSize[glyph];
+        Rect glyphScreenCoords(glyphsPositions[i], drawSize);
+        Rect glyphTextureCoords = inlineImg ? inlineImg->srcRect : glyphFont->m_glyphsTextureCoords[glyph];
+
+        // center the icon on the text line, then apply its fine-tune offset
+        if (inlineImg)
+            glyphScreenCoords.translate(0, (m_glyphHeight - inlineImg->height) / 2 + inlineImg->yOffset);
 
         // first translate to align position
         if (align & Fw::AlignBottom) {
@@ -185,8 +233,26 @@ void BitmapFont::calculateDrawTextCoords(CoordsBuffer& coordsBuffer, const std::
             glyphScreenCoords.setRight(screenCoords.right());
         }
 
-        // render glyph
-        coordsBuffer.addRect(glyphScreenCoords, glyphTextureCoords);
+        // Route the quad. Inline images go to their own list. A base-font glyph --
+        // or an alternate-font glyph whose texture is the SAME atlas as the base --
+        // joins the shared buffer: one batch, exact positional colors. Only an
+        // alternate font on a DIFFERENT texture needs its own per-run batch.
+        if (inlineImg) {
+            outImages->push_back(InlineImageDrawCmd{ inlineImg->texture, glyphScreenCoords, glyphTextureCoords });
+        } else if (glyphFont == this || glyphFont->m_texture == m_texture || !outRuns) {
+            coordsBuffer.addRect(glyphScreenCoords, glyphTextureCoords);
+        } else {
+            // Heap-stored so the CoordsBuffer is never moved (its move ctor aliases
+            // the vertex arrays); the unique_ptr is what the vector relocates.
+            if (curRunIdx < 0) {
+                outRuns->push_back(std::make_unique<StyledTextRun>());
+                StyledTextRun& run = *outRuns->back();
+                run.texture = glyphFont->m_texture;
+                run.firstGlyphIndex = thisGlyphIndex;
+                curRunIdx = (int)outRuns->size() - 1;
+            }
+            (*outRuns)[curRunIdx]->coords.addRect(glyphScreenCoords, glyphTextureCoords);
+        }
     }
 }
 
@@ -221,13 +287,14 @@ const std::vector<Point>& BitmapFont::calculateGlyphsPositions(const std::string
         for(i = 0; i< textLength; ++i) {
             glyph = (uchar)text[i];
 
+            const InlineTextImage* inlineImg = (glyph < 32 && g_fonts.hasInlineImages()) ? g_fonts.getInlineImage(glyph) : nullptr;
             if(glyph == (uchar)'\n') {
                 lines++;
                 if(lines+1 > (int)lineWidths.size())
                     lineWidths.resize(lines+1);
                 lineWidths[lines] = 0;
-            } else if(glyph >= 32) {
-                lineWidths[lines] += m_glyphsSize[glyph].width() ;
+            } else if(glyph >= 32 || inlineImg) {
+                lineWidths[lines] += inlineImg ? inlineImg->width : m_glyphsSize[glyph].width();
                 if((i+1 != textLength && text[i+1] != '\n')) // only add space if letter is not the last or before a \n.
                     lineWidths[lines] += m_glyphSpacing.width();
                 maxLineWidth = std::max<int>(maxLineWidth, lineWidths[lines]);
@@ -260,9 +327,12 @@ const std::vector<Point>& BitmapFont::calculateGlyphsPositions(const std::string
         // store current glyph topLeft
         glyphsPositions[i] = virtualPos;
 
-        // render only if the glyph is valid
+        // advance by the glyph width, or by an inline image's reserved width
         if(glyph >= 32 && glyph != (uchar)'\n') {
             virtualPos.x += m_glyphsSize[glyph].width() + m_glyphSpacing.width();
+        } else if(glyph < 32 && glyph != (uchar)'\n' && g_fonts.hasInlineImages()) {
+            if(const InlineTextImage* inlineImg = g_fonts.getInlineImage(glyph))
+                virtualPos.x += inlineImg->width + m_glyphSpacing.width();
         }
     }
 
@@ -319,8 +389,15 @@ std::string BitmapFont::wrapText(const std::string& text, int maxWidth, std::vec
             continue;
         }
 
-        if (glyph < 32) // invalid character
+        if (glyph < 32) { // control byte: invalid, unless it is an inline image
+            // Reserve the icon's width in the current word, but never let it count
+            // toward the colorable index c (color positions track only glyphs >= 32).
+            if (g_fonts.hasInlineImages()) {
+                if (const InlineTextImage* inlineImg = g_fonts.getInlineImage(glyph))
+                    wordLength += inlineImg->width + m_glyphSpacing.width();
+            }
             continue;
+        }
 
         wordLength += m_glyphsSize[glyph].width() + m_glyphSpacing.width();
         if (wordLength > maxWidth) { // too long word, split it

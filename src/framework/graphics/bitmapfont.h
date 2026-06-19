@@ -29,6 +29,39 @@
 #include <framework/otml/declarations.h>
 #include <framework/graphics/coordsbuffer.h>
 
+// Inline text images let a single byte in a text string render as a little
+// picture instead of a font glyph (e.g. the store description icons). A byte
+// whose code is registered in the FontManager registry is laid out as a
+// fixed-width box during wrapping/positioning, but drawn from its own texture
+// instead of the font atlas. Codes are control bytes (< 32) that normal text
+// never contains, so unregistered text is unaffected.
+struct InlineTextImage {
+    TexturePtr texture;
+    Rect srcRect;     // region of texture to sample
+    int width = 0;    // layout advance width (0 == code not registered)
+    int height = 0;   // draw height
+    int yOffset = 0;  // extra vertical nudge on top of line-centering
+};
+
+// A resolved inline image draw command produced by calculateDrawTextCoords,
+// in the same box-relative space as the glyph coords buffer.
+struct InlineImageDrawCmd {
+    TexturePtr texture;
+    Rect dest;
+    Rect src;
+};
+
+// A contiguous run of glyphs that uses an ALTERNATE font (e.g. an <i> italic or
+// <b> bold segment in a store description). Glyphs from a non-base font live in
+// a different texture, so they cannot share the base coords buffer; each run is
+// batched on its own texture and drawn with a single color resolved from the
+// run's first glyph position. See bitmapfont.cpp / fontmanager (style fonts).
+struct StyledTextRun {
+    TexturePtr texture;
+    CoordsBuffer coords;
+    int firstGlyphIndex = 0; // index among drawable glyphs (matches color positions)
+};
+
 class BitmapFont : public std::enable_shared_from_this<BitmapFont>
 {
 public:
@@ -47,7 +80,7 @@ public:
     void drawText(const std::string& text, const Rect& screenCoords, Fw::AlignmentFlag align = Fw::AlignTopLeft, const Color& color = Color::white, bool shadow = false);
     void drawColoredText(const std::string& text, const Rect& screenCoords, Fw::AlignmentFlag align, const std::vector<std::pair<int, Color>>& colors, bool shadow = false);
 
-    void calculateDrawTextCoords(CoordsBuffer& coordsBuffer, const std::string& text, const Rect& screenCoords, Fw::AlignmentFlag align = Fw::AlignTopLeft);
+    void calculateDrawTextCoords(CoordsBuffer& coordsBuffer, const std::string& text, const Rect& screenCoords, Fw::AlignmentFlag align = Fw::AlignTopLeft, std::vector<InlineImageDrawCmd>* outImages = nullptr, std::vector<std::unique_ptr<StyledTextRun>>* outRuns = nullptr);
 
     /// Calculate glyphs positions to use on render, also calculates textBoxSize if wanted
     const std::vector<Point>& calculateGlyphsPositions(const std::string& text,
