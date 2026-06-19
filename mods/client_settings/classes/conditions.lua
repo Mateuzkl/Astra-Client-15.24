@@ -810,7 +810,12 @@ end
 function ConditionsHUD:getSpecialConditionById(id)
     local newpath = ''
     local tooltip = ''
-    local suffix = id:match("^condition_curse([iv]*)$")
+    -- NOTE: use [iv]+ (not [iv]*) so the base id "condition_curse" (Goshnar's
+    -- Taint) does NOT match with an empty suffix. With [iv]* the empty match made
+    -- romanToImage[""]/tooltipMessage[""] nil, which corrupted the arc path to ""
+    -- and spammed "Unable to load texture ''" every frame. Only the roman-numeral
+    -- variants (condition_cursei .. condition_cursev) should be remapped here.
+    local suffix = id:match("^condition_curse([iv]+)$")
     if suffix then
         id = 'condition_curse'
         local romanToImage = {
@@ -871,7 +876,7 @@ function ConditionsHUD:getSpecialConditionById(id)
 
     for conditionId, condition in pairs(ConditionsHUD.hud) do
         if conditionId == id then
-            if newpath ~= '' then
+            if newpath and newpath ~= '' then
                 condition:setPath(newpath)
                 g_client.updateHudPath(condition:getId(), newpath)
 
@@ -885,7 +890,7 @@ function ConditionsHUD:getSpecialConditionById(id)
                 end
             end
 
-            if tooltip ~= '' then
+            if tooltip and tooltip ~= '' then
                 condition:setTooltipBar(tooltip)
             end
 
