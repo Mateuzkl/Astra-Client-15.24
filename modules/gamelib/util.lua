@@ -192,6 +192,27 @@ function short_text(text, chars_limit)
   end
 end
 
+-- Width-aware ellipsis: set `text` on `label`, but if it renders wider than
+-- `maxWidth` pixels (in the label's own font), trim it and append "..." until it
+-- fits. Unlike short_text (a fixed char count), this respects the real container
+-- width regardless of which characters the string uses. Single-line labels only.
+function ellipsize_text(label, text, maxWidth)
+  text = tostring(text or '')
+  label:setText(text)
+  if not maxWidth or maxWidth <= 0 or label:getTextSize().width <= maxWidth then
+    return text
+  end
+  local result = text
+  while #result > 1 do
+    result = result:sub(1, #result - 1)
+    label:setText(result .. '...')
+    if label:getTextSize().width <= maxWidth then
+      break
+    end
+  end
+  return label:getText()
+end
+
 function newline_text_long(text, chars_limit)
   if #text > chars_limit then
     local breakPoint = chars_limit
