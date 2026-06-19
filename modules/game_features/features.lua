@@ -24,12 +24,13 @@ function updateFeatures(version)
     -- magic-effect ids at full opacity, ignoring the Opacity Effects slider. Fill in
     -- the effect id your server sends for each special effect. Edit freely - this is
     -- read by g_map at runtime, no client recompile needed.
+    -- crystalserver magic-effect ids (src/utils/utils_definitions.hpp) for the special
+    -- combat procs that should stay fully visible even with the Opacity Effects slider down.
     local specialEffects = {
-        -- Critical      = 0,
-        -- Fatal         = 0,
-        -- Ruse          = 0,
-        -- Momentum      = 0,
-        -- Transcendence = 0,
+        Critical = 173, -- CONST_ME_CRITICAL_DAMAGE
+        Fatal    = 230, -- CONST_ME_FATAL
+        Dodge    = 231, -- CONST_ME_DODGE (Ruse proc)
+        Agony    = 249, -- CONST_ME_AGONY
     }
     local specialEffectIds = {}
     for _, id in pairs(specialEffects) do
