@@ -15,9 +15,9 @@ param(
 )
 
 $exeName = switch ($Config) {
-    'Debug'   { 'AstraClient_debug_x64.exe' }
-    'OpenGL'  { 'AstraClient_gl_x64.exe' }
-    'DirectX' { 'AstraClient_dx_x64.exe' }
+    'Debug'   { 'KoliseuClient_debug_x64.exe' }
+    'OpenGL'  { 'KoliseuClient_gl_x64.exe' }
+    'DirectX' { 'KoliseuClient.exe' }
 }
 
 $root = $PSScriptRoot

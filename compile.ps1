@@ -52,9 +52,9 @@ Write-Host "MSBuild: $msbuild" -ForegroundColor DarkGray
 
 # --- Kill running client so LINK can overwrite the .exe ----------------------
 if (-not $NoKill) {
-    $running = Get-Process -Name 'AstraClient_*' -ErrorAction SilentlyContinue
+    $running = Get-Process -Name 'KoliseuClient*' -ErrorAction SilentlyContinue
     if ($running) {
-        Write-Host "Stopping $($running.Count) running AstraClient process(es)..." -ForegroundColor Yellow
+        Write-Host "Stopping $($running.Count) running KoliseuClient process(es)..." -ForegroundColor Yellow
         $running | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 300
     }
@@ -83,13 +83,13 @@ $exitCode = $LASTEXITCODE
 $elapsed = (Get-Date) - $startTime
 
 if ($exitCode -eq 0) {
-    $exeSuffix = switch ($Config) {
-        'Debug'   { 'debug_x64' }
-        'OpenGL'  { 'gl_x64' }
-        'DirectX' { 'dx_x64' }
-        default   { 'debug_x64' }
+    $exeName = switch ($Config) {
+        'Debug'   { 'KoliseuClient_debug_x64.exe' }
+        'OpenGL'  { 'KoliseuClient_gl_x64.exe' }
+        'DirectX' { 'KoliseuClient.exe' }
+        default   { 'KoliseuClient_debug_x64.exe' }
     }
-    $exePath = Join-Path $repoRoot "AstraClient_$exeSuffix.exe"
+    $exePath = Join-Path $repoRoot $exeName
     Write-Host ""
     Write-Host "Build OK in $([int]$elapsed.TotalSeconds)s" -ForegroundColor Green
     if (Test-Path $exePath) {

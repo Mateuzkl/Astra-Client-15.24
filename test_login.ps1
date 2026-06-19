@@ -3,13 +3,13 @@
 $root = "c:\Users\joaoc\KoliseuOT\AstraClient"
 & "$root\compile.ps1" 2>&1 | Select-String -Pattern "error C|FAILED|Build OK" | Select-Object -First 5
 if ($LASTEXITCODE -ne 0) { Write-Host "BUILD FAILED"; exit 1 }
-Stop-Process -Name 'AstraClient_*' -Force -ErrorAction SilentlyContinue
+Stop-Process -Name 'KoliseuClient*' -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 400
-Start-Process -FilePath "$root\AstraClient_debug_x64.exe" -WorkingDirectory $root
+Start-Process -FilePath "$root\KoliseuClient_debug_x64.exe" -WorkingDirectory $root
 Start-Sleep -Seconds 22
-Stop-Process -Name 'AstraClient_*' -Force -ErrorAction SilentlyContinue
+Stop-Process -Name 'KoliseuClient*' -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
-$alog = "$root\astraclient.log"
+$alog = "$root\koliseuclient.log"
 $lines = Get-Content $alog
 $peCount = ($lines | Select-String "parse message exception").Count
 Write-Host "parse exceptions: $peCount"
