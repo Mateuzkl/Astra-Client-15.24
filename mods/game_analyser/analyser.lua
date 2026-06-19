@@ -18,6 +18,10 @@ local analyserWindows = {
   miscButton = 'styles/misc'
 }
 
+-- Misc Analyser proc feed: server (crystalserver) sends charm/imbuement/special-skill
+-- activations via this OTC-only extended opcode (see MiscAnalyzer.onMiscProcTracker).
+local MISC_PROC_OPCODE = 204
+
 -- objects
 function init()
   analyserMiniWindow = g_ui.loadUI('analyser', m_interface.getRightPanel())
@@ -89,6 +93,9 @@ function init()
   MiscAnalyzer:create()
   MiscAnalyzer:updateWindow()
 
+  pcall(function() ProtocolGame.unregisterExtendedOpcode(MISC_PROC_OPCODE) end)
+  ProtocolGame.registerExtendedOpcode(MISC_PROC_OPCODE, onMiscProcTracker)
+
   connect(g_game, {
     onGameStart = onlineAnalyser,
     onGameEnd = offlineAnalyser,
@@ -117,6 +124,8 @@ function init()
 end
 
 function terminate()
+  pcall(function() ProtocolGame.unregisterExtendedOpcode(MISC_PROC_OPCODE) end)
+
   if analyserMiniWindow then
     analyserMiniWindow:destroy()
     analyserMiniWindow = nil

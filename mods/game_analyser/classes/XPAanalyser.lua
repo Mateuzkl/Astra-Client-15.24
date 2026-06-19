@@ -114,6 +114,18 @@ function XPAnalyser:updateNextLevel(hours, minutes)
 	XPAnalyser.window.contentsPanel.nextLevel:setText(text)
 end
 
+-- True extrapolated per-hour rate from the session total. g_game.getHourExperience()
+-- and getHourRawExperience() are unbound no-op stubs (always 0), so XP/h and Raw XP/h
+-- are computed here from the accumulated session gain (fed by onUpdateExperience).
+local function getSessionPerHour(total)
+	local session = XPAnalyser.session
+	if session == 0 or total <= 0 then
+		return 0
+	end
+	local sessionDuration = math.max(1, os.time() - session)
+	return math.floor(total / sessionDuration * 3600 + 0.5)
+end
+
 function XPAnalyser:checkExpHour()
 	local player = g_game.getLocalPlayer()
 	if not player then
@@ -125,7 +137,7 @@ function XPAnalyser:checkExpHour()
 
 	-- exp per hour
 	local displayExp = experience
-	XPAnalyser.xpHour = g_game.getHourExperience()
+	XPAnalyser.xpHour = getSessionPerHour(XPAnalyser.xpGain)
 
 	if displayExp == 0 then
 		XPAnalyser.xpHour = 0
@@ -141,7 +153,7 @@ function XPAnalyser:checkExpHour()
 	XPAnalyser:updateNextLevel(hoursLeft, minutesLeft)
 
 	local displayExp = XPAnalyser.rawXPGain
-	XPAnalyser.rawXpHour = g_game.getHourRawExperience()
+	XPAnalyser.rawXpHour = getSessionPerHour(XPAnalyser.rawXPGain)
 
 	if displayExp == 0 then
 		XPAnalyser.rawXpHour = 0

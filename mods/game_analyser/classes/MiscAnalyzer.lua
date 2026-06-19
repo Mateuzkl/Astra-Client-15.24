@@ -63,7 +63,7 @@ function MiscAnalyzer:getPerHourValue(value)
 	local hitsPerSecond = value / sessionDuration
     local hitsPerHour = hitsPerSecond * 3600
 
-    return format_thousand(math.floor(hitsPerHour + 0.5)) -- Arredonda para o número inteiro mais próximo
+    return format_thousand(math.floor(hitsPerHour + 0.5)) -- Arredonda para o nï¿½mero inteiro mais prï¿½ximo
 end
 
 function MiscAnalyzer:updateWindow(updateScroll, ignoreVisible)
@@ -381,6 +381,35 @@ function MiscAnalyzer:clipboardData()
 	end
 
 	g_window.setClipboardText(text)
+end
+
+-- Server (crystalserver) batches charm/imbuement/special-skill procs and ships them
+-- here as "i<id>=<delta>;s<id>=<delta>;c<id>=<delta>;" roughly every 500ms via extended
+-- opcode 204. OTC-only: the server never sends this to the CIP client. The proc sites
+-- live in koliseuot game.cpp/player.cpp/iobestiary.cpp (Player::trackMisc* -> flushAnalyzerBatch).
+--   i1 = crit (count)      i2 = mana leech (sum)   i3 = life leech (sum)
+--   s0/1/2/3 = onslaught/ruse/momentum/transcendence (count)
+--   c<charmId> = charm activations (count)
+function onMiscProcTracker(protocol, opcode, buffer)
+	if not buffer or buffer == "" then
+		return
+	end
+
+	for kind, id, n in buffer:gmatch("(%a)(%d+)=(%d+)") do
+		id = tonumber(id)
+		n = tonumber(n)
+		if kind == "i" then
+			if id == 1 then
+				for _ = 1, n do MiscAnalyzer:onImbuementActivated(1) end -- crit: count activations
+			else
+				MiscAnalyzer:onImbuementActivated(id, n) -- leech: accumulate the summed amount
+			end
+		elseif kind == "s" then
+			for _ = 1, n do MiscAnalyzer:onSpecialSkillActivated(id) end
+		elseif kind == "c" then
+			for _ = 1, n do MiscAnalyzer:onCharmActivated(id) end
+		end
+	end
 end
 
 function onMiscAnalyzerExtra(mousePosition)

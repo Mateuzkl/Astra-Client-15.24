@@ -155,6 +155,19 @@ local function getPerHourValue(primary)
     return math.floor(hitsPerHour + 0.5)
 end
 
+-- True extrapolated per-hour rate from a session total. Used for XP/h and Raw XP/h
+-- because g_game.getHourExperience()/getHourRawExperience() are unbound no-op stubs
+-- (always 0). The accumulated xpGain/rawXPGain (fed by onUpdateExperience) is the
+-- source of truth, so we project it over the elapsed session time here.
+local function getSessionPerHour(total)
+	local session = HuntingAnalyser.session
+	if session == 0 or total <= 0 then
+		return 0
+	end
+	local sessionDuration = math.max(1, os.time() - session)
+	return math.floor(total / sessionDuration * 3600 + 0.5)
+end
+
 function HuntingAnalyser:updateWindow(ignoreVisible)
 	if not HuntingAnalyser.window:isVisible() and not ignoreVisible then
 		return
@@ -190,8 +203,7 @@ function HuntingAnalyser:updateWindow(ignoreVisible)
 	end
 
 	-- exp per hour
-	local _duration = math.floor((g_clock.millis() - HuntingAnalyser.launchTime)/1000)
-	HuntingAnalyser.xpHour = g_game.getHourExperience()
+	HuntingAnalyser.xpHour = getSessionPerHour(HuntingAnalyser.xpGain)
 
 	if HuntingAnalyser.xpHour ~= HuntingAnalyser.xpHour then
 		HuntingAnalyser.xpHour = 0
@@ -207,7 +219,7 @@ function HuntingAnalyser:updateWindow(ignoreVisible)
 	end
 
 	local rawExperience = HuntingAnalyser.rawXPGain
-	HuntingAnalyser.rawXpHour = g_game.getHourRawExperience()
+	HuntingAnalyser.rawXpHour = getSessionPerHour(HuntingAnalyser.rawXPGain)
 
 	if not contentsPanel.rawXpGain.lastValue or contentsPanel.rawXpGain.lastValue ~= rawExperience then
 		if rawExperience > 10000000 then
