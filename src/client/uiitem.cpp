@@ -95,39 +95,28 @@ void UIItem::drawSelf(Fw::DrawPane drawPane)
             }
         }
 
-        // Upgrade badge (custom server upgrade system): green for weapons, blue for
-        // set pieces (helmet/armor/legs/boots). Drawn at the top-left so it never
-        // collides with the tier badge (top-right) or the count/duration (bottom-right).
-        // A single blank badge image per colour is used and the upgrade level number
-        // is drawn on top as text (so any level is supported, e.g. +12). Artwork
-        // (to be supplied): /images/game/items/upgrade-weapon.png (green) and
-        // /images/game/items/upgrade-set.png (blue).
+        // Custom server upgrade level shown as a "+N" tag at the BOTTOM-RIGHT corner
+        // (no badge chip -- the small circle couldn't fit a readable 2-digit number).
+        // GREEN for weapon attack upgrades (weapon_upgrade.lua), BLUE for set-piece skill
+        // upgrades (skill_gems.lua). Drawn like the count/duration with a black outline so
+        // it reads on any item. Upgradeable items (weapons/armor) are never stackable, so
+        // it won't collide with a stack count.
         if (m_item->getUpgradeLevel() > 0) {
             ThingType* tt = m_item->rawGetThingType();
-            std::string variant;
+            bool isSetPiece = false;
             if (tt) {
                 const int slot = tt->getClothSlot();
-                const bool isSetPiece = (slot == Otc::InventorySlotHead || slot == Otc::InventorySlotArmor ||
-                                         slot == Otc::InventorySlotLegs || slot == Otc::InventorySlotFeet);
-                // Set pieces (helmet/armor/legs/boots) -> blue; any other upgraded item
-                // -> weapon (green). getWeaponType() is unreliable for some weapons
-                // (wands/rods report 0), and the server's upgrade system only marks
-                // weapons + set pieces, so "not a set piece" => weapon is robust.
-                variant = isSetPiece ? "set" : "weapon";
+                isSetPiece = (slot == Otc::InventorySlotHead || slot == Otc::InventorySlotArmor ||
+                              slot == Otc::InventorySlotLegs || slot == Otc::InventorySlotFeet);
             }
-            if (!variant.empty()) {
-                const TexturePtr& upgradeTexture = g_textures.getTexture("/images/game/items/upgrade-" + variant);
-                if (upgradeTexture) {
-                    // Scale the small colour chip up (native art is only 9x8) so a 1-2
-                    // digit upgrade level (+1..+12) stays legible in the top-left corner.
-                    const Size texSize = upgradeTexture->getSize();
-                    const int bw = std::max<int>(13, drawRect.width() * 42 / 100);
-                    const int bh = std::max<int>(11, drawRect.height() * 36 / 100);
-                    Rect upgradeRect(drawRect.topLeft(), Size(bw, bh));
-                    g_drawQueue->addTexturedRect(upgradeRect, upgradeTexture, Rect(0, 0, texSize));
-                    if (m_font)
-                        g_drawQueue->addText(m_font, std::to_string(m_item->getUpgradeLevel()), upgradeRect, Fw::AlignCenter, Color::white, true);
-                }
+            static const BitmapFontPtr upgradeFont = g_fonts.getFont("verdana-8px-rounded");
+            const BitmapFontPtr& tagFont = upgradeFont ? upgradeFont : m_font;
+            if (tagFont) {
+                const Color tagColor = isSetPiece ? Color(0x4c, 0x9f, 0xff) : Color(0x4c, 0xd9, 0x4c);
+                const std::string tagText = "+" + std::to_string(m_item->getUpgradeLevel());
+                g_drawQueue->addText(tagFont, tagText,
+                                     Rect(drawRect.topLeft(), drawRect.bottomRight() - Point(2, 0)),
+                                     Fw::AlignBottomRight, tagColor, true);
             }
         }
     }
