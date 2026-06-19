@@ -806,7 +806,9 @@ void ProtocolGame::parseBlessings(const InputMessagePtr& msg)
 {
     uint16 blessings = msg->getU16();
     if (g_game.getFeature(Otc::GameTibia12Protocol)) {
-        msg->getU8(); // blessStatus - 1 = Disabled | 2 = normal | 3 = green
+        // blessStatus - 1 = Disabled (<5 blesses) | 2 = normal (5-6) | 3 = green (7+).
+        // Kept (Auto Bless relies on it); the U16 above is only the cosmetic glow flag.
+        m_localPlayer->setBlessStatus(msg->getU8());
     }
     m_localPlayer->setBlessings(blessings);
 }
@@ -2143,8 +2145,14 @@ void ProtocolGame::parsePreyPrices(const InputMessagePtr& msg)
 
 void ProtocolGame::parseStoreOfferDescription(const InputMessagePtr& msg)
 {
-    msg->getU32(); // offer id
-    msg->getString(); // description
+    // crystalserver sendOfferDescription (0xEA): [offerId U32][description String].
+    // The server PUSHES one of these per offer group from inside sendShowStoreOffers
+    // (gamestore/init.lua:1121) — they arrive ahead of the 0xFC offer list, so the
+    // Lua side must cache them by offerId and render on selection. Dispatching the
+    // data to Lua is mandatory: the stock parser dropped it, leaving descriptions blank.
+    const uint32_t offerId = msg->getU32();
+    const std::string description = msg->getString();
+    g_lua.callGlobalField("g_game", "onStoreDescription", offerId, description);
 }
 
 
@@ -2192,7 +2200,10 @@ void ProtocolGame::parsePlayerStats(const InputMessagePtr& msg)
         double freeCapacity = msg->getU32() / 100.0;
         double experience = (double)msg->getU64();
         double level = msg->getU16();
-        double levelPercent = msg->getU16();
+        // Server sends levelPercent * 100 as a U16 (e.g. 50.55% -> 5055). All
+        // getLevelPercent() consumers expect a 0-100 scale, so divide back here;
+        // otherwise the exp/level progress bar saturates (clamped at 100 = full).
+        double levelPercent = msg->getU16() / 100.0;
         int baseXpGain = msg->getU16();      // base xp gain rate
         int grindingXpBoost = msg->getU16(); // low level / grinding bonus
         int xpBoostPercent = msg->getU16();  // xp boost percent
@@ -2398,7 +2409,23 @@ void ProtocolGame::parsePlayerSkills(const InputMessagePtr& msg)
 // "double" (precision U8 + scaled U32) via NetworkMessage::addDouble.
 void ProtocolGame::parsePlayerSkillsModern(const InputMessagePtr& msg)
 {
-    const auto readDouble = [&] { msg->getU8(); msg->getU32(); }; // precision + scaled value
+    // Server addDouble = precision(U8) + (value * 10^precision + INT32_MAX)(U32).
+    // Decode back to the real value (10^precision via a tiny loop to avoid <cmath>).
+    const auto readDouble = [&]() -> double {
+        const uint8_t precision = msg->getU8();
+        const uint32_t scaled = msg->getU32();
+        double scale = 1.0;
+        for (uint8_t p = 0; p < precision; ++p) scale *= 10.0;
+        return (static_cast<double>(scaled) - 2147483647.0) / scale;
+    };
+
+    // gamelib Skill.* ids (modules/gamelib/const.lua) used as setSpecialSkill keys.
+    enum : int {
+        SK_CRIT_CHANCE = 7, SK_CRIT_DAMAGE = 8,
+        SK_LIFE_LEECH = 10, SK_MANA_LEECH = 12,
+        SK_ONSLAUGHT = 13, SK_RUSE = 14,
+        SK_MOMENTUM = 15, SK_TRANSCENDENCE = 16, SK_AMPLIFICATION = 17
+    };
 
     // Magic: level, base, loyalty, percent*100
     {
@@ -2427,38 +2454,55 @@ void ProtocolGame::parsePlayerSkillsModern(const InputMessagePtr& msg)
     m_localPlayer->setTotalCapacity(totalCapacity);
     m_localPlayer->setBaseCapacity(baseCapacity);
 
-    msg->getU16(); // flat damage & healing total
+    // --- Offence stats (fed to game_skills via onUpdateOffenceStats) ---
+    const int damageAndHealing = msg->getU16(); // flat damage & healing total
 
     // Weapon block: attack U16 + element U8, then converted-damage (double + element U8).
     // The server always emits exactly: U16 + U8 + double(5B) + U8 regardless of which
     // weapon branch it took (wand/distance/melee/fist all serialize the same shape).
-    msg->getU16();   // attack / max hit chance
-    msg->getU8();    // cipbia element
-    readDouble();    // converted-damage fraction
-    msg->getU8();    // converted-damage element
+    const int attackValue = msg->getU16();          // attack total
+    const int attackElement = msg->getU8();         // cipbia element
+    const double convertedValue = readDouble() * 100.0; // converted-damage fraction -> %
+    const int convertedElement = msg->getU8();
 
-    // Imbuements / forge doubles: life leech, mana leech, crit chance, crit damage, onslaught
-    for (int i = 0; i < 5; ++i)
-        readDouble();
+    // Imbuements / forge doubles (fractions -> display %): life leech, mana leech,
+    // crit chance, crit damage, onslaught. Stored as special skills, read by the UI.
+    m_localPlayer->setSpecialSkill(SK_LIFE_LEECH, readDouble() * 100.0);
+    m_localPlayer->setSpecialSkill(SK_MANA_LEECH, readDouble() * 100.0);
+    m_localPlayer->setSpecialSkill(SK_CRIT_CHANCE, readDouble() * 100.0);
+    m_localPlayer->setSpecialSkill(SK_CRIT_DAMAGE, readDouble() * 100.0);
+    m_localPlayer->setSpecialSkill(SK_ONSLAUGHT, readDouble() * 100.0);
 
-    msg->getU16();   // defense
-    msg->getU16();   // armor
-    msg->getU16();   // mantra total
-    readDouble();    // mitigation
-    readDouble();    // dodge (ruse)
-    msg->getU16();   // physical damage reflection (flat)
+    // --- Defence stats (fed via onUpdateDefenceStats) ---
+    const int defense = msg->getU16();
+    const int armor = msg->getU16();
+    const int mantra = msg->getU16();
+    const double mitigation = readDouble() * 100.0;  // server sent getMitigation()/100 (a fraction) -> back to percent
+    m_localPlayer->setSpecialSkill(SK_RUSE, readDouble() * 100.0); // dodge
+    const int damageReflection = msg->getU16();      // physical damage reflection (flat)
 
-    // Combat absorb values: count U8, then count * (element U8 + double 5B)
+    // Combat absorb values (elemental resistances), indexed by cipbia element 0..11.
+    std::vector<double> elementalProtections(12, 0.0);
     const uint8_t combats = msg->getU8();
     for (uint8_t i = 0; i < combats; ++i) {
-        msg->getU8(); // element
-        readDouble(); // client modifier
+        const uint8_t element = msg->getU8();
+        const double value = readDouble() * 100.0;
+        if (element < elementalProtections.size())
+            elementalProtections[element] = value;
     }
 
-    // Forge bonuses: momentum, transcendence, amplification
-    readDouble();
-    readDouble();
-    readDouble();
+    // Forge bonuses (fractions -> %): momentum, transcendence, amplification.
+    m_localPlayer->setSpecialSkill(SK_MOMENTUM, readDouble() * 100.0);
+    m_localPlayer->setSpecialSkill(SK_TRANSCENDENCE, readDouble() * 100.0);
+    m_localPlayer->setSpecialSkill(SK_AMPLIFICATION, readDouble() * 100.0);
+
+    // Drive the Skills window: game_skills connects these on the LocalPlayer (not
+    // g_game), so fire them via callLuaField on the local player object. callLuaField
+    // prepends the object as the handler's first arg (the `player` parameter); the UI
+    // reads the special skills above via getSpecialSkill and takes the rest as args.
+    m_localPlayer->callLuaField("onUpdateOffenceStats", damageAndHealing, attackValue, attackElement, convertedValue, convertedElement);
+    m_localPlayer->callLuaField("onUpdateDefenceStats", elementalProtections, defense, armor, mantra, mitigation, damageReflection);
+    m_localPlayer->callLuaField("onUpdateMiscStats");
 }
 
 void ProtocolGame::parsePlayerState(const InputMessagePtr& msg)
@@ -2875,7 +2919,9 @@ void ProtocolGame::parseOpenOutfitWindow(const InputMessagePtr& msg)
         msg->getU16(); // current familiar looktype
     }
 
-    std::vector<std::tuple<int, std::string, int> > outfitList;
+    // 4th element = store offer id (0 when the player already owns the outfit);
+    // the outfit window uses it to flag store-only outfits with a blue card.
+    std::vector<std::tuple<int, std::string, int, int> > outfitList;
 
     if (g_game.getFeature(Otc::GameNewOutfitProtocol)) {
         int outfitCount = g_game.getFeature(Otc::GameTibia12Protocol) ? msg->getU16() : msg->getU8();
@@ -2883,15 +2929,29 @@ void ProtocolGame::parseOpenOutfitWindow(const InputMessagePtr& msg)
             int outfitId = msg->getU16();
             std::string outfitName = msg->getString();
             int outfitAddons = msg->getU8();
+            int storeOfferId = 0;
             if (g_game.getFeature(Otc::GameTibia12Protocol)) {
                 // 0 = owned, 1 = store (adds U32 offer id), 2 = golden, 3 = royal;
-                // golden/royal add nothing after the mode byte.
+                // golden/royal add nothing after the mode byte. The offer id is
+                // forwarded to Lua so locked outfits can be flagged + linked to the store.
                 int mode = msg->getU8();
                 if (mode == 1) {
-                    msg->getU32(); // store offer id
+                    storeOfferId = msg->getU32(); // store offer id
+                    // The mode byte alone marks a store-locked outfit (the CIP client
+                    // flags it the same way). The server sends 0 as the offer id, so fall
+                    // back to a non-zero marker -- the outfit window keys the blue "store"
+                    // card / locked state off a positive value, and the offer id is only
+                    // needed for the optional store deep-link.
+                    if (storeOfferId == 0)
+                        storeOfferId = 1;
+                    // Store-locked outfit: the player owns neither the outfit nor its
+                    // addons. The server sends addons == 3 here (so it can preview them),
+                    // but we must not let the window advertise the addon checkboxes as
+                    // available/ownable -- zero them so configureAddons() disables them.
+                    outfitAddons = 0;
                 }
             }
-            outfitList.push_back(std::make_tuple(outfitId, outfitName, outfitAddons));
+            outfitList.push_back(std::make_tuple(outfitId, outfitName, outfitAddons, storeOfferId));
         }
     } else {
         int outfitStart, outfitEnd;
@@ -2904,10 +2964,11 @@ void ProtocolGame::parseOpenOutfitWindow(const InputMessagePtr& msg)
         }
 
         for (int i = outfitStart; i <= outfitEnd; i++)
-            outfitList.push_back(std::make_tuple(i, "", 0));
+            outfitList.push_back(std::make_tuple(i, "", 0, 0));
     }
 
-    std::vector<std::tuple<int, std::string> > mountList;
+    // 3rd element = store offer id (0 when owned), same purpose as outfits above.
+    std::vector<std::tuple<int, std::string, int> > mountList;
     std::vector<std::tuple<int, std::string> > wingList;
     std::vector<std::tuple<int, std::string> > auraList;
     std::vector<std::tuple<int, std::string> > shaderList;
@@ -2918,14 +2979,19 @@ void ProtocolGame::parseOpenOutfitWindow(const InputMessagePtr& msg)
         for (int i = 0; i < mountCount; ++i) {
             int mountId = msg->getU16(); // mount type
             std::string mountName = msg->getString(); // mount name
+            int storeOfferId = 0;
             if (g_game.getFeature(Otc::GameTibia12Protocol)) {
                 bool locked = msg->getU8() > 0;
                 if (locked) {
-                    msg->getU32(); // store offer id
+                    storeOfferId = msg->getU32(); // store offer id
+                    // See the outfit note above: flag the locked/store mount even when
+                    // the server omits the real offer id (sends 0).
+                    if (storeOfferId == 0)
+                        storeOfferId = 1;
                 }
             }
 
-            mountList.push_back(std::make_tuple(mountId, mountName));
+            mountList.push_back(std::make_tuple(mountId, mountName, storeOfferId));
         }
     }
 

@@ -459,8 +459,8 @@ void Game::processRemoveAutomapFlag(const Position& pos, int icon, const std::st
     g_lua.callGlobalField("g_game", "onRemoveAutomapFlag", pos, icon, message);
 }
 
-void Game::processOpenOutfitWindow(const Outfit& currentOutfit, const std::vector<std::tuple<int, std::string, int>>& outfitList,
-                                   const std::vector<std::tuple<int, std::string>>& mountList,
+void Game::processOpenOutfitWindow(const Outfit& currentOutfit, const std::vector<std::tuple<int, std::string, int, int>>& outfitList,
+                                   const std::vector<std::tuple<int, std::string, int>>& mountList,
                                    const std::vector<std::tuple<int, std::string>>& wingList,
                                    const std::vector<std::tuple<int, std::string>>& auraList,
                                    const std::vector<std::tuple<int, std::string>>& shaderList,
@@ -1160,11 +1160,11 @@ void Game::requestOutfit()
     m_protocolGame->sendRequestOutfit();
 }
 
-void Game::changeOutfit(const Outfit& outfit)
+void Game::changeOutfit(const Outfit& outfit, bool randomizeMount)
 {
     if(!canPerformGameAction())
         return;
-    m_protocolGame->sendChangeOutfit(outfit);
+    m_protocolGame->sendChangeOutfit(outfit, randomizeMount);
 }
 
 void Game::addVip(const std::string& name)

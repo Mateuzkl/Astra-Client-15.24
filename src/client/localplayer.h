@@ -89,6 +89,11 @@ public:
     int getSkillLevel(uint8_t skill) { return skill < m_skillsLevel.size() ? m_skillsLevel[skill] : 0; }
     int getSkillBaseLevel(uint8_t skill) { return skill < m_skillsBaseLevel.size() ? m_skillsBaseLevel[skill] : 0; }
     int getSkillLevelPercent(uint8_t skill) { return skill < m_skillsLevelPercent.size() ? m_skillsLevelPercent[skill] : 0; }
+    // Combat "special" skills (life/mana leech, crit, onslaught, ruse, momentum,
+    // transcendence, ...) keyed by the gamelib Skill.* ids. Stored as the display
+    // percent (e.g. 35.7 for 35.7%) and fed to the Skills window via getSpecialSkill.
+    void setSpecialSkill(int id, double value) { m_specialSkills[id] = value; }
+    double getSpecialSkill(int id) { const auto it = m_specialSkills.find(id); return it != m_specialSkills.end() ? it->second : 0.0; }
     int getVocation() { return m_vocation; }
     double getHealth() { return m_health; }
     double getMaxHealth() { return m_maxHealth; }
@@ -121,6 +126,11 @@ public:
     std::vector<int> getSpells() { return m_spells; }
     ItemPtr getInventoryItem(Otc::InventorySlot inventory) { return m_inventoryItems[inventory]; }
     int getBlessings() { return m_blessings; }
+    // Reliable "do I have the 5 blesses?" signal from the 0x9C packet's status byte
+    // (1 = Disabled/<5 blesses, 2 = normal/5-6, 3 = green/7+). getBlessings() only
+    // carries the cosmetic glow flag, which is NOT a dependable blessed indicator.
+    void setBlessStatus(int status) { m_blessStatus = status; }
+    int getBlessStatus() { return m_blessStatus; }
     int getTaints() { return m_taints; }
     int getGroupType() { return m_groupType; }
     int getMagicLoyalty() { return m_magicLoyalty; }
@@ -224,6 +234,7 @@ private:
     std::vector<int> m_skillsBaseLevel;
     std::vector<int> m_skillsLevelPercent;
     std::vector<int> m_skillsLoyalty;
+    std::map<int, double> m_specialSkills;
     std::vector<int> m_spells;
     std::set<std::string> m_hudConditions;
     std::map<int, uint64> m_resources;
@@ -238,6 +249,7 @@ private:
     int m_staminaXpBoost = -1;
     int m_storeXpBoostTime = -1;
     int m_blessings;
+    int m_blessStatus = 2; // default "blessed" so Auto Bless doesn't fire before the first 0x9C
     int m_taints;
     int m_groupType;
     int m_magicLoyalty;

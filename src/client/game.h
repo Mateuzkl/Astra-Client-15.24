@@ -82,7 +82,6 @@ protected:
     void processLoginWait(const std::string& message, int time);
     void processLoginToken(bool unknown);
     void processLogin();
-    void processPendingGame();
     void processEnterGame();
 
     void processGameStart();
@@ -135,8 +134,8 @@ protected:
     void processRemoveAutomapFlag(const Position& pos, int icon, const std::string& message);
 
     // outfit
-    void processOpenOutfitWindow(const Outfit& currentOutfit, const std::vector<std::tuple<int, std::string, int>>& outfitList,
-                                 const std::vector<std::tuple<int, std::string>>& mountList,
+    void processOpenOutfitWindow(const Outfit& currentOutfit, const std::vector<std::tuple<int, std::string, int, int>>& outfitList,
+                                 const std::vector<std::tuple<int, std::string, int>>& mountList,
                                  const std::vector<std::tuple<int, std::string>>& wingList,
                                  const std::vector<std::tuple<int, std::string>>& auraList,
                                  const std::vector<std::tuple<int, std::string>>& shaderList,
@@ -174,6 +173,9 @@ public:
     void cancelLogin();
     void forceLogout();
     void safeLogout();
+    // re-enter the world without a full relogin (resume after death); also used
+    // internally by ProtocolGame when the server reports the pending-game state
+    void processPendingGame();
 
     // walk related
     void walk(Otc::Direction direction, bool withPreWalk);
@@ -233,7 +235,7 @@ public:
 
     // outfit related
     void requestOutfit();
-    void changeOutfit(const Outfit& outfit);
+    void changeOutfit(const Outfit& outfit, bool randomizeMount = false);
 
     // vip related
     void addVip(const std::string& name);
@@ -371,6 +373,7 @@ public:
     bool isOnline() { return m_online; }
     bool isLogging() { return !m_online && m_protocolGame; }
     bool isDead() { return m_dead; }
+    void setDead(bool dead) { m_dead = dead; }
     bool isAttacking() { return !!m_attackingCreature && !m_attackingCreature->isRemoved(); }
     bool isFollowing() { return !!m_followingCreature && !m_followingCreature->isRemoved(); }
     bool isConnectionOk() { return m_protocolGame && m_protocolGame->getElapsedTicksSinceLastRead() < 5000; }
