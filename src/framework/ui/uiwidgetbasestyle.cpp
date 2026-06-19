@@ -379,6 +379,16 @@ void UIWidget::parseBaseStyle(const OTMLNodePtr& styleNode)
 void UIWidget::drawBackground(const Rect& screenCoords)
 {
     if(m_backgroundColor.aF() > 0.0f) {
+        // An explicitly COLLAPSED background rect (one dimension 0, the other > 0)
+        // means "draw nothing" -- e.g. a progress bar at 0% fill (setBackgroundRect
+        // with width 0). Without this, such a rect is invalid -> ignored below -> the
+        // FULL background is drawn, so an empty bar rendered completely full. A
+        // fully-zero/default rect (never set) still falls through to the full draw.
+        // Mirrors the same guard in UIWidget::drawImage.
+        if((m_backgroundRect.width() == 0 && m_backgroundRect.height() > 0) ||
+           (m_backgroundRect.height() == 0 && m_backgroundRect.width() > 0))
+            return;
+
         Rect drawRect = screenCoords;
         drawRect.translate(m_backgroundRect.topLeft());
         if(m_backgroundRect.isValid())
