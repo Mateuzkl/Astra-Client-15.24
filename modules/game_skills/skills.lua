@@ -605,6 +605,11 @@ function offline()
 
   if expSpeedEvent then expSpeedEvent:cancel() expSpeedEvent = nil end
 
+  if storeBoostTimerEvent then
+    removeEvent(storeBoostTimerEvent)
+    storeBoostTimerEvent = nil
+  end
+
   rateHighlightEvent = nil
   resetPercentVisibility()
   skillsWindow:close()
@@ -852,13 +857,30 @@ function onExpBoostChange(localPlayer, time, canBuy)
     removeEvent(storeBoostTimerEvent)
     storeBoostTimerEvent = nil
   end
+
+  local storeBoostValue = skillsWindow:recursiveGetChildById('storeBoostValue')
   if time > 0 then
-    storeBoostTimerEvent = scheduleEvent(function()
+    -- Tick the countdown every second. This was a scheduleEvent (fires ONCE), so the
+    -- displayed time decremented a single second and then froze; cycleEvent keeps it
+    -- ticking. Update the label directly instead of re-running the heavy onUpdateGainRate.
+    storeBoostValue:setText(formatTimeBySeconds(storeBoostTime))
+    storeBoostValue:setColor(storeBoostTime <= 300 and "$var-text-cip-store-red" or "$var-text-cip-color-green")
+    storeBoostTimerEvent = cycleEvent(function()
       storeBoostTime = storeBoostTime - 1
-      onUpdateGainRate(localPlayer, localPlayer:getBaseExpRate(), localPlayer:getLowLevelRate(), localPlayer:getExpBoostRate(), localPlayer:getStaminaRate())
+      if storeBoostTime <= 0 then
+        storeBoostTime = 0
+        storeBoostValue:setText('00:00')
+        storeBoostValue:setColor("$var-text-cip-store-red")
+        if storeBoostTimerEvent then
+          removeEvent(storeBoostTimerEvent)
+          storeBoostTimerEvent = nil
+        end
+        return
+      end
+      storeBoostValue:setText(formatTimeBySeconds(storeBoostTime))
+      storeBoostValue:setColor(storeBoostTime <= 300 and "$var-text-cip-store-red" or "$var-text-cip-color-green")
     end, 1000)
   else
-    local storeBoostValue = skillsWindow:recursiveGetChildById('storeBoostValue')
     storeBoostValue:setText('00:00')
     storeBoostValue:setColor("$var-text-cip-store-red")
   end
@@ -1071,6 +1093,13 @@ function manageMiscStats(state)
   end, 100)
 end
 
+-- Combat stats arrive as doubles (e.g. 35.7, 63.07). Format with up to 2 decimals,
+-- trimming trailing zeros so whole values show clean ("54" not "54.00").
+local function fmtPct(v)
+  local s = string.format("%.2f", tonumber(v) or 0)
+  return (s:gsub("%.?0+$", ""))
+end
+
 function onUpdateOffenceStats(player, damageAndHealing, damageValue, damageElement, convertedValue, convertedElement)
   -- Damage and Healing
   local damageHealingWidget = skillsWindow:recursiveGetChildById('damageHealingLabel')
@@ -1083,7 +1112,7 @@ function onUpdateOffenceStats(player, damageAndHealing, damageValue, damageEleme
 
   -- Converted Damage
   local convertedWidget = skillsWindow:recursiveGetChildById('convertedDamage')
-  convertedWidget:recursiveGetChildById("value"):setText("+" .. convertedValue .. "%")
+  convertedWidget:recursiveGetChildById("value"):setText("+" .. fmtPct(convertedValue) .. "%")
   convertedWidget:recursiveGetChildById("combatIcon"):setImageSource("/game_cyclopedia/images/icons/stats/element_" .. convertedElement)
   convertedWidget:setTooltip(tr(specialTooltips["convertedDamage"], convertedValue, getCombatName(convertedElement)))
   convertedWidget:setVisible(convertedValue > 0)
@@ -1095,14 +1124,14 @@ function onUpdateOffenceStats(player, damageAndHealing, damageValue, damageEleme
   -- Life Leech
   local lifeWidget = skillsWindow:recursiveGetChildById('lifeLeech')
   local lifeLevel = player:getSpecialSkill(Skill.LifeLeechAmount)
-  lifeWidget:recursiveGetChildById("value"):setText("+" .. lifeLevel .. "%")
+  lifeWidget:recursiveGetChildById("value"):setText("+" .. fmtPct(lifeLevel) .. "%")
   lifeWidget:setTooltip(tr(specialTooltips["lifeLeech"], lifeLevel))
   lifeWidget:setVisible(lifeLevel > 0)
 
   -- Mana Leech
   local manaWidget = skillsWindow:recursiveGetChildById('manaLeech')
   local manaLevel = player:getSpecialSkill(Skill.ManaLeechAmount)
-  manaWidget:recursiveGetChildById("value"):setText("+" .. manaLevel .. "%")
+  manaWidget:recursiveGetChildById("value"):setText("+" .. fmtPct(manaLevel) .. "%")
   manaWidget:setTooltip(tr(specialTooltips["manaLeech"], manaLevel))
   manaWidget:setVisible(manaLevel > 0)
 
@@ -1114,9 +1143,9 @@ function onUpdateOffenceStats(player, damageAndHealing, damageValue, damageEleme
   local chanceLevel = player:getSpecialSkill(Skill.CriticalChance)
   local damageLevel = player:getSpecialSkill(Skill.CriticalDamage)
 
-  chanceWidget:recursiveGetChildById("value"):setText("+" .. chanceLevel .. "%")
+  chanceWidget:recursiveGetChildById("value"):setText("+" .. fmtPct(chanceLevel) .. "%")
   chanceWidget:setTooltip(tr(specialTooltips["criticalChance"], chanceLevel, damageLevel))
-  extraDamageWidget:recursiveGetChildById("value"):setText("+" .. damageLevel .. "%")
+  extraDamageWidget:recursiveGetChildById("value"):setText("+" .. fmtPct(damageLevel) .. "%")
   extraDamageWidget:setTooltip(tr(specialTooltips["criticalDamage"], chanceLevel, damageLevel))
 
   criticalWidget:setVisible(chanceLevel > 0 or damageLevel > 0)
@@ -1126,7 +1155,7 @@ function onUpdateOffenceStats(player, damageAndHealing, damageValue, damageEleme
   -- Onslaught
   local onslaughtWidget = skillsWindow:recursiveGetChildById('onslaught')
   local onslaughtLevel = player:getSpecialSkill(Skill.OnslaughtChance)
-  onslaughtWidget:recursiveGetChildById('value'):setText("+" .. onslaughtLevel .. "%")
+  onslaughtWidget:recursiveGetChildById('value'):setText("+" .. fmtPct(onslaughtLevel) .. "%")
   onslaughtWidget:setTooltip(tr(specialTooltips["onslaught"], onslaughtLevel))
   onslaughtWidget:setVisible(onslaughtLevel > 0)
 
@@ -1142,7 +1171,7 @@ function onUpdateDefenceStats(player, elementalProtections, defense, armor, mant
     local elementWidget = skillsWindow:recursiveGetChildById('elementalDefense_' .. i)
     if elementWidget then
       elementWidget:setVisible(value ~= 0)
-      elementWidget:recursiveGetChildById("value"):setText(value < 0 and (value .. "%") or ("+" .. value .. "%"))
+      elementWidget:recursiveGetChildById("value"):setText(value < 0 and (fmtPct(value) .. "%") or ("+" .. fmtPct(value) .. "%"))
       elementWidget:recursiveGetChildById("value"):setColor(value < 0 and "#ff9854" or "#44ad25")
 
       local effectStr = value < 0 and "increased" or "reduced"
@@ -1165,12 +1194,12 @@ function onUpdateDefenceStats(player, elementalProtections, defense, armor, mant
 
   -- Mitigation
   local mitigationWidget = skillsWindow:recursiveGetChildById('mitigationValue')
-  mitigationWidget:recursiveGetChildById('value'):setText("+" .. mitigation .. "%")
+  mitigationWidget:recursiveGetChildById('value'):setText("+" .. fmtPct(mitigation) .. "%")
 
   -- Dodge
   local ruseWidget = skillsWindow:recursiveGetChildById('ruseValue')
   local ruseLevel = player:getSpecialSkill(Skill.RuseChance)
-  ruseWidget:recursiveGetChildById('value'):setText("+" .. ruseLevel .. "%")
+  ruseWidget:recursiveGetChildById('value'):setText("+" .. fmtPct(ruseLevel) .. "%")
   ruseWidget:setTooltip(tr(specialTooltips["ruseValue"], ruseLevel))
   ruseWidget:setVisible(ruseLevel > 0)
 
@@ -1189,21 +1218,21 @@ function onUpdateMiscStats(player)
   -- Momentum
   local momentumWidget = skillsWindow:recursiveGetChildById('momentumValue')
   local momentumLevel = player:getSpecialSkill(Skill.MomentumChance)
-  momentumWidget:recursiveGetChildById('value'):setText("+" .. momentumLevel .. "%")
+  momentumWidget:recursiveGetChildById('value'):setText("+" .. fmtPct(momentumLevel) .. "%")
   momentumWidget:setTooltip(tr(specialTooltips["momentumValue"], momentumLevel))
   momentumWidget:setVisible(momentumLevel > 0)
 
   -- Transcendence
   local transcendenceWidget = skillsWindow:recursiveGetChildById('transcendenceValue')
   local transcendenceLevel = player:getSpecialSkill(Skill.TranscendenceChance)
-  transcendenceWidget:recursiveGetChildById('value'):setText("+" .. transcendenceLevel .. "%")
+  transcendenceWidget:recursiveGetChildById('value'):setText("+" .. fmtPct(transcendenceLevel) .. "%")
   transcendenceWidget:setTooltip(tr(specialTooltips["transcendenceValue"], transcendenceLevel))
   transcendenceWidget:setVisible(transcendenceLevel > 0)
 
   -- Amplification
   local amplificationWidget = skillsWindow:recursiveGetChildById('amplificationValue')
   local amplificationLevel = player:getSpecialSkill(Skill.AmplificationChance)
-  amplificationWidget:recursiveGetChildById('value'):setText("+" .. amplificationLevel .. "%")
+  amplificationWidget:recursiveGetChildById('value'):setText("+" .. fmtPct(amplificationLevel) .. "%")
   amplificationWidget:setTooltip(tr(specialTooltips["amplificationValue"], amplificationLevel))
   amplificationWidget:setVisible(amplificationLevel > 0)
 
