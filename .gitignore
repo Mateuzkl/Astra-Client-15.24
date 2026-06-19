@@ -38,6 +38,7 @@ data/things/1524/
 # --- Build artefacts (Visual Studio vc17 / MSBuild) --------------------------
 # OutDir writes the final binary + debug symbols straight into the repo root.
 AstraClient_*.exe
+KoliseuClient*.exe
 *.pdb
 *.ilk
 *.exp
