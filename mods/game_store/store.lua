@@ -165,6 +165,8 @@ end
 
 -- Setup Store
 function onGameEnd()
+  -- Reset the purchase guard so a disconnect mid-buy doesn't leave it stuck.
+  Offers:endPurchase()
   if StoreWindow:isVisible() then
     StoreWindow:hide()
   end
@@ -229,6 +231,12 @@ function showStoreWindow()
 end
 
 function onStoreInit(url, coinsPacketSize)
+  -- The server may send the base URL with or without a trailing slash, while
+  -- every image path is concatenated as a bare relative segment (e.g. "13/..").
+  -- Normalize to a single trailing slash so we never produce ".../store13/..".
+  if url and #url > 0 and url:sub(-1) ~= "/" then
+    url = url .. "/"
+  end
   Store.url = url
   Store.coinsPacketSize = coinsPacketSize
 end
@@ -253,7 +261,12 @@ function onCoinBalance(coins, transferableCoins, reservedCoins)
     bazaarWindow.contentPanel.rulesPanel:recursiveGetChildById('coin'):setText(formatMoney(transferableCoins, ","))
     bazaarWindow.contentPanel.characterPanel:recursiveGetChildById('coin'):setText(formatMoney(transferableCoins, ","))
 
-    Offers:refreshOffers(Offers.displayOffer, Offers.redirect, Offers.filter)
+    -- Don't rebuild the offer list mid-purchase: the post-buy balance update lands
+    -- ~650ms before the delivery screen and the rebuild shows as a flicker. The
+    -- purchase flow refreshes once at the end (completePurchase -> reloadOffers).
+    if not Offers.purchasePending then
+      Offers:refreshOffers(Offers.displayOffer, Offers.redirect, Offers.filter)
+    end
   end
 end
 
@@ -270,7 +283,10 @@ function onSelectionOffer(widget, selectedWidget)
 end
 
 function onStoreDescription(offerId, description)
-  Offers:configureDescription(offerId, description)
+  -- Cache the pushed description; configureDescription writes to the single shared
+  -- panel, so rendering every push would let the last offer clobber the selected
+  -- one. calldescription() renders the selected offer's text from this cache.
+  Offers:cacheDescription(offerId, description)
 end
 
 function showError(title, errorMessage)
@@ -288,6 +304,9 @@ function showError(title, errorMessage)
 end
 
 function onStoreError(errorType, message)
+  -- A failed purchase never reaches completePurchase, so release the guard here or
+  -- onCoinBalance would stop refreshing the list for the rest of the session.
+  Offers:endPurchase()
   StoreWindow:hide()
   g_client.setInputLockWidget(nil)
   showError('Purchase Error', message)
@@ -533,28 +552,11 @@ function pixPlataform()
 end
 
 function choseBuyCoins()
-  if transferError then
-    return
-  end
-
-  local cancelFunc = function()
-    transferError:destroy()
-    transferError = nil
-    showStoreWindow()
-  end
-
-  local otherPlataform = function()
-    cancelFunc()
-    g_platform.openUrl(Services.Coins)
-  end
-
-  transferError = displayGeneralBox(tr('Info'), "Select a payment method below.", {
-    { text=tr('Pix'), callback=pixPlataform },
-    { text=tr('Website'), callback=otherPlataform },
-    { text=tr('Cancel'), callback=cancelFunc }
-  }, otherPlataform, cancelFunc)
-
-  StoreWindow:hide()
+  -- Pix is intentionally disabled in the client for now, so skip the payment-method
+  -- modal and send the player straight to the website (same as the market's Get Coins).
+  -- The Pix code below (pixPlataform / PixWindow / onRecvPix*) is kept for when it's
+  -- re-enabled; just re-add the displayGeneralBox here to bring the chooser back.
+  g_platform.openUrl(Services.Coins)
 end
 
 function createDonateRules()

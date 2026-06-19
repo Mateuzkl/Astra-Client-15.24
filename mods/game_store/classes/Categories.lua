@@ -9,6 +9,23 @@ if not Categories then
 	Categories.name = ''
 end
 
+-- Set a category button's label, ellipsizing it to the button width so long names
+-- (e.g. "Packages and Bundles") no longer spill out of the container. Reserves room
+-- on the right for the dropdown arrow when the category has sub-categories.
+local CATEGORY_TEXT_LEFT = 15
+local function ellipsizeCategory(label, name, hasArrow)
+	local button = label:getParent()
+	local btnW = button:getWidth()
+	if not btnW or btnW <= 0 then
+		btnW = 170
+	end
+	local shown = ellipsize_text(label, name, btnW - CATEGORY_TEXT_LEFT - (hasArrow and 24 or 14))
+	-- Keep the full name reachable on hover when it had to be cut.
+	if shown ~= name then
+		button:setTooltip(name)
+	end
+end
+
 
 function Categories:configure(categories)
 	local categoryPanel = StoreWindow.categories
@@ -58,7 +75,7 @@ function Categories:configure(categories)
 	for id, cat in pairs(Categories.categoryTable) do
 		local widget = g_ui.createWidget('TreeItem', categoryPanel)
 		widget:setId(id)
-		widget.mainButton.text:setText(cat.name)
+		ellipsizeCategory(widget.mainButton.text, cat.name, cat.childs and #cat.childs > 0)
 		if cat.childs and #cat.childs > 0 then
 			widget.mainButton.scroll:setVisible(true)
 		else
@@ -207,7 +224,7 @@ function Categories:setupSearch(disabled)
 	for id, cat in pairs(Categories.categoryTable) do
 		local widget = g_ui.createWidget('TreeItem', categoryPanel)
 		widget:setId(id)
-		widget.mainButton.text:setText(cat.name)
+		ellipsizeCategory(widget.mainButton.text, cat.name, cat.childs and #cat.childs > 0)
 		if cat.childs and #cat.childs > 0 then
 			widget.mainButton.scroll:setVisible(true)
 		else

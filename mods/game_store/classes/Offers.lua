@@ -16,7 +16,65 @@ Offers.completePurchaseEvent = nil
 Offers.gotoEvent = nil
 Offers.coinCheck = nil
 Offers.loadOffersEvent = nil
+-- True between sending a buy and the purchase resolving. Two jobs: (1) suppress the
+-- onCoinBalance list rebuild that lands ~650ms before the delivery screen (flicker);
+-- (2) block rapid re-sends (held Enter / fast clicks) that would buy the same offer
+-- multiple times during the purchase delay. The authoritative anti-exploit guard is
+-- server-side (a purchase cooldown); this is the local UX guard.
+Offers.purchasePending = false
+Offers.purchasePendingEvent = nil
 Offers.clientOffers = {}
+-- Descriptions are PUSHED by the server (0xEA) ahead of the offer list, so we
+-- cache them by offerId here and render the selected offer's text on demand.
+Offers.descriptions = {}
+
+-- Inline description icons. The server embeds {info}/{character}/... tokens in
+-- offer descriptions; we render them as real inline pictures via the engine's
+-- inline-text-image support (g_fonts.registerInlineImage). Each token maps to a
+-- control-byte code and a sub-rect of the local sprite sheet store-icons-inline.png
+-- (247x13). Codes avoid the whitespace control bytes 9..13 (see fontmanager.cpp),
+-- so the placeholder bytes survive the setHTML/setColorText %s trimming.
+local INLINE_SHEET = '/images/store/store-icons-inline.png'
+local INLINE_SHEET_H = 13
+local INLINE_ICONS = {
+  info        = { code = 1,  x = 1,   w = 10 },
+  character   = { code = 2,  x = 17,  w = 5  },
+  usablebyall = { code = 3,  x = 28,  w = 9  },
+  box         = { code = 4,  x = 41,  w = 8  },
+  storeinbox  = { code = 5,  x = 53,  w = 10 },
+  house       = { code = 6,  x = 67,  w = 9  },
+  limit       = { code = 7,  x = 80,  w = 10 },
+  backtoinbox = { code = 8,  x = 92,  w = 10 },
+  activated   = { code = 14, x = 107, w = 8  },
+  speedboost  = { code = 15, x = 118, w = 10 },
+  timed       = { code = 16, x = 133, w = 7  },
+  battlesign  = { code = 17, x = 144, w = 11 },
+  capacity    = { code = 18, x = 159, w = 7  },
+  useicon     = { code = 19, x = 171, w = 9  },
+}
+local function ic(name) return string.char(INLINE_ICONS[name].code) end
+
+-- Style markers for <b>/<i>. The control bytes flip the text engine to an
+-- alternate font mid-string; STYLE_RESET returns to the label's base font.
+-- The fonts match the description label's base (verdana-11px-antialised, h14):
+-- the italic variant lines up exactly; bold uses the closest 11px bold.
+local STYLE_RESET, STYLE_BOLD, STYLE_ITALIC = 20, 21, 22
+local STYLE_BOLD_FONT = "Verdana Bold-11px"
+local STYLE_ITALIC_FONT = "verdana-11px-antialised-italic"
+
+function Offers:registerInlineIcons()
+  if Offers.inlineIconsRegistered then return end
+  if not g_fonts or not g_fonts.registerInlineImage then return end
+  for _, icon in pairs(INLINE_ICONS) do
+    g_fonts.registerInlineImage(icon.code, INLINE_SHEET, icon.x, 0, icon.w, INLINE_SHEET_H, 0)
+  end
+  if g_fonts.registerStyleFont then
+    g_fonts.registerStyleFont(STYLE_RESET, "")            -- back to base font
+    g_fonts.registerStyleFont(STYLE_BOLD, STYLE_BOLD_FONT)
+    g_fonts.registerStyleFont(STYLE_ITALIC, STYLE_ITALIC_FONT)
+  end
+  Offers.inlineIconsRegistered = true
+end
 
 -- "You don't have money" is always the LAST entry of Offers.reasons
 -- (appended in Offers:configure); server-sent reasonIds are strictly smaller,
@@ -51,6 +109,29 @@ function Offers:stopAllEvents()
 
 	if Offers.coinCheck then
 		Offers.coinCheck:cancel()
+	end
+end
+
+-- Marks a purchase as in-flight: blocks further buys and the onCoinBalance flicker
+-- until it resolves. The safety timeout clears the lock even if the resolution never
+-- arrives (e.g. the server silently drops a duplicate buy via its purchase cooldown),
+-- so the store can never get stuck unable to buy.
+function Offers:beginPurchase()
+	Offers.purchasePending = true
+	if Offers.purchasePendingEvent then
+		Offers.purchasePendingEvent:cancel()
+	end
+	Offers.purchasePendingEvent = scheduleEvent(function()
+		Offers.purchasePending = false
+		Offers.purchasePendingEvent = nil
+	end, 5000)
+end
+
+function Offers:endPurchase()
+	Offers.purchasePending = false
+	if Offers.purchasePendingEvent then
+		Offers.purchasePendingEvent:cancel()
+		Offers.purchasePendingEvent = nil
 	end
 end
 
@@ -110,12 +191,23 @@ local function getOfferUI(offer)
 	end
 end
 
+-- Server push (0xEA): store the description and, if its offer is the one on
+-- screen right now, render it immediately. Normally the 0xEA packets all arrive
+-- before any offer is selected, so the cache is what calldescription reads back.
+function Offers:cacheDescription(offerId, description)
+	Offers.descriptions[offerId] = description
+	local selected = Offers.selectedWidget
+	if selected and selected.offer and selected.offer.id == offerId then
+		Offers:configureDescription(offerId, description)
+	end
+end
+
 function calldescription(offerId)
 	if Offers.event then Offers.event:cancel() end
-	Offers.event =  scheduleEvent(function()
-		g_game.doThing(false)
-		g_game.requestOfferDescription(offerId)
-		g_game.doThing(true)
+	-- The crystalserver has no "request description" opcode (requestOfferDescription
+	-- is a no-op); descriptions were pushed up-front via 0xEA, so render from cache.
+	Offers.event = scheduleEvent(function()
+		Offers:configureDescription(offerId, Offers.descriptions[offerId])
 	end, Store.displayDescription)
 end
 
@@ -641,11 +733,12 @@ function Offers:onSelectionOffer(_, selectedWidget)
 		Offers.displayPanel.description.error:setVisible(false)
 	end
 
-	Offers.displayPanel.description.image:setHeight(600)
+	-- The description Label vertically auto-resizes to its text (see offers.otui),
+	-- so we must NOT pin a tall fixed height here -- that forced the scroll area to
+	-- always overflow. The package panel stacks below it in the vertical layout.
 	Offers.displayPanel.description.package:destroyChildren()
 	Offers.displayPanel.description.package:setHeight(20)
 	if #offer.bundles > 0 then
-		Offers.displayPanel.description.image:setHeight(500)
 		local size = 0
 		g_ui.createWidget('PackageLabel', Offers.displayPanel.description.package)
 		size = 30
@@ -691,25 +784,38 @@ function Offers:configureDescription(offerId, description)
 		description = Offers.clientOffers[offerId] .. "\n" .. description
 	end
 
+	Offers:registerInlineIcons()
+
 	local novo_texto = string.gsub(description, "\n", "<br/>")
 	novo_texto = string.gsub(novo_texto, "<br>", "<br/>")
-	novo_texto = string.gsub(novo_texto, "{info}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_1.png"  width="13" height="13" />')
-	novo_texto = string.gsub(novo_texto, "{character}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_2.png" width="13" height="13" />only usable by purchasing character')
-	novo_texto = string.gsub(novo_texto, "{activated}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_11.png"  width="13" height="13" />activated at purchase')
-	novo_texto = string.gsub(novo_texto, "{useicon}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_14.png"  width="13" height="13" />')
-	novo_texto = string.gsub(novo_texto, "{limit|(%d+)}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_7.png"  width="13" height="13" />maximum amount that can be owned by character: %1')
-	novo_texto = string.gsub(novo_texto, "{house}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_6.png"  width="13" height="13" />can only be unwrapped in a house owned by the purchasing character')
-	novo_texto = string.gsub(novo_texto, "{box}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_4.png"  width="13" height="13" />comes in a box which can only be unwrapped by purchasing character')
-	novo_texto = string.gsub(novo_texto, "{storeinbox}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_5.png"  width="13" height="13" />will be sent to your Store inbox and can only be stored there and in depot box')
-	novo_texto = string.gsub(novo_texto, "{usablebyallicon}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_3.png"  width="13" height="13" />')
-	novo_texto = string.gsub(novo_texto, "{backtoinbox}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_8.png"  width="13" height="13" />will be wrapped back and sent to inbox if the purchasing character is no longer the house owner')
-	novo_texto = string.gsub(novo_texto, "{storeinboxicon}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_8.png"  width="13" height="13" />')
-	novo_texto = string.gsub(novo_texto, "{capacity}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_13.png"  width="13" height="13" /><i>cannot be purchased if capacity is exceeded</i>')
-	novo_texto = string.gsub(novo_texto, "{speedboost}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_10.png"  width="13" height="13" />provides character with a speed boost')
-	novo_texto = string.gsub(novo_texto, "{battlesign}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_12.png"  width="13" height="13" />cannot be purchased by characters with protection zone block or battle sign')
-	novo_texto = string.gsub(novo_texto, "{once}", '<img src="https://raw.githubusercontent.com/Imagens404/store/main/store-icons-inline_7.png"  width="13" height="13" />can only be purchased once')
-	novo_texto = string.gsub(novo_texto, "{star}", '<img src="https://raw.githubusercontent.com/Imagens404/seekanddestroy/main/R/store/13/icon-star-gold.png"  width="9" height="10" />')
+	-- Replace each {token} with its inline-icon control byte (+ the descriptive
+	-- text the official store shows next to it). The byte renders as a picture
+	-- once the layout reaches it; see Offers:registerInlineIcons / fontmanager.cpp.
+	novo_texto = string.gsub(novo_texto, "{info}", ic("info"))
+	novo_texto = string.gsub(novo_texto, "{character}", ic("character") .. " only usable by purchasing character")
+	novo_texto = string.gsub(novo_texto, "{activated}", ic("activated") .. " activated at purchase")
+	novo_texto = string.gsub(novo_texto, "{useicon}", ic("useicon"))
+	novo_texto = string.gsub(novo_texto, "{limit|(%d+)}", ic("limit") .. " maximum amount that can be owned by character: %1")
+	novo_texto = string.gsub(novo_texto, "{house}", ic("house") .. " can only be unwrapped in a house owned by the purchasing character")
+	novo_texto = string.gsub(novo_texto, "{box}", ic("box") .. " comes in a box which can only be unwrapped by purchasing character")
+	novo_texto = string.gsub(novo_texto, "{storeinbox}", ic("storeinbox") .. " will be sent to your Store inbox and can only be stored there and in depot box")
+	novo_texto = string.gsub(novo_texto, "{usablebyallicon}", ic("usablebyall"))
+	novo_texto = string.gsub(novo_texto, "{usablebyall}", ic("usablebyall"))
+	novo_texto = string.gsub(novo_texto, "{backtoinbox}", ic("backtoinbox") .. " will be wrapped back and sent to inbox if the purchasing character is no longer the house owner")
+	novo_texto = string.gsub(novo_texto, "{storeinboxicon}", ic("backtoinbox"))
+	novo_texto = string.gsub(novo_texto, "{capacity}", ic("capacity") .. " cannot be purchased if capacity is exceeded")
+	novo_texto = string.gsub(novo_texto, "{speedboost}", ic("speedboost") .. " provides character with a speed boost")
+	novo_texto = string.gsub(novo_texto, "{battlesign}", ic("battlesign") .. " cannot be purchased by characters with protection zone block or battle sign")
+	novo_texto = string.gsub(novo_texto, "{once}", ic("limit") .. " can only be purchased once")
+	-- No matching icon in the local sheet: drop the {star} marker (it previously
+	-- pointed at an external image that the shim stripped anyway).
+	novo_texto = string.gsub(novo_texto, "{star}", "")
 
+	-- Convert <b>/<i> into style-marker bytes BEFORE setHTML strips them: the text
+	-- engine renders the enclosed glyphs with the registered bold/italic fonts and
+	-- the reset byte returns to the base font (see Offers:registerInlineIcons).
+	novo_texto = novo_texto:gsub("<[bB]>", string.char(STYLE_BOLD)):gsub("</[bB]>", string.char(STYLE_RESET))
+	novo_texto = novo_texto:gsub("<[iI]>", string.char(STYLE_ITALIC)):gsub("</[iI]>", string.char(STYLE_RESET))
 
 	desc.image:setHTML(novo_texto)
 
@@ -791,6 +897,12 @@ function onBuyOffer(widget, id, offerType, text, offerName)
 			showStoreWindow()
 		end
 	elseif widget:getId() == 'okBuyButton' then
+		-- Ignore rapid re-clicks / held Enter while a purchase is still resolving,
+		-- so one click == one purchase (the server enforces this too as a backstop).
+		if Offers.purchasePending then
+			return
+		end
+		Offers:beginPurchase()
 		local productType = offerName and 10 or 0
 		g_game.buyStoreOffer(id, productType, "", 0, offerName)
 		Offers.preBuySelectedName = Offers.selectedWidget and Offers.selectedWidget.name:getText() or nil
@@ -848,13 +960,17 @@ function completePurchase(widget, immediate)
 	end
 
 	local action = function()
+		Offers:endPurchase()
 		if SucessOfferWindow:isVisible() then
 			SucessOfferWindow:hide()
 		end
 		if not StoreWindow:isVisible() then
 			showStoreWindow()
-			Categories:onSelectCategory(Categories.selectTreeItem, Categories.name)
 		end
+		-- Force a fresh fetch of the current view so the just-bought offer flips to
+		-- disabled and the combo "All ..." price drops, without reopening the store.
+		-- (onSelectCategory no-ops on the already-selected category, hence reloadOffers.)
+		Store:reloadOffers()
 	end
 
 	if immediate then

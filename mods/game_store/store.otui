@@ -144,8 +144,11 @@ MainWindow
       image-clip: 0 20 64 20
     @onClick: modules.game_store.onGiftWindow()
 
+  // Character auction (Bazaar) isn't implemented via the client yet, so hide the button.
+  // It keeps its rect, so tournamentStatus (anchored to auctionCharacter.right) is fine.
   Button
     id: auctionCharacter
+    visible: false
     anchors.top: separator.bottom
     anchors.left: transferTibiaCoins.right
     margin-top: 13

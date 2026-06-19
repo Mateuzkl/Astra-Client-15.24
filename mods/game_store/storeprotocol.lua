@@ -49,6 +49,12 @@ end
 -- e.g. Categories.lua (OPEN_CATEGORY, name, 0), store.lua (OPEN_SEARCH, text, 0),
 -- Home.lua (SERVICE_OFFER_ID=4, "", offer.id), hunting.lua (3, "", offerType).
 function StoreProtocol.requestStoreOffers(actionOrCategory, stringParam, numberParam)
+  -- Remember the current view so a purchase can force a fresh re-fetch (server
+  -- recomputes owned/disabled state and combo "All ..." prices per request).
+  -- Categories:onSelectCategory short-circuits when the category is already
+  -- selected, so the post-purchase refresh has to replay the raw request itself.
+  Store.lastOffersRequest = { actionOrCategory, stringParam, numberParam }
+
   local msg = OutputMessage.create()
   msg:addU8(OPCODE_REQUEST_STORE_OFFERS)
 
@@ -80,10 +86,10 @@ end
 -- Intentional NO-OP. The crystalserver has no "request offer description"
 -- opcode: descriptions are PUSHED by the server via 0xEA sendOfferDescription
 -- (gamestore/init.lua:736, emitted from sendShowStoreOffers init.lua:1121) and
--- consumed by the native parseStoreOfferDescription. This stub must stay
--- defined because Offers.lua calldescription() invokes
--- g_game.requestOfferDescription on every offer selection and there is no
--- native C++ binding for it (it is only a corelib gameNoop).
+-- consumed by native parseStoreOfferDescription -> g_game.onStoreDescription ->
+-- Offers:cacheDescription. Offers.lua calldescription() now renders from that
+-- cache instead of hitting the wire, so this sender is no longer called; the
+-- stub is kept only so the g_game.requestOfferDescription binding stays valid.
 function StoreProtocol.requestOfferDescription(offerId)
   -- no wire traffic on purpose
 end

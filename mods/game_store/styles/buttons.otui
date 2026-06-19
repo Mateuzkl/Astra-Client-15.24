@@ -119,7 +119,10 @@ ImageOffer < UIWidget
     margin-left: 10
     size: 64 64
     phantom: true
-    image-auto-resize: true
+    // NOTE: do NOT enable image-auto-resize here. setImageSource resizes the
+    // widget to the source's native size when auto-resize is on, so non-64x64
+    // offer icons (e.g. Gem_Extender, Mining_Boost) blew past the 64x64 slot.
+    // With a fixed 64x64 size + fixed ratio, the image is scaled to fill the slot.
     image-fixed-ratio: true
   UIWidget
     id: grayHover

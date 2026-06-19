@@ -82,6 +82,19 @@ function Store:openHome()
 	end, 100)
 end
 
+-- Re-issue the request for the view the player is currently looking at. Used
+-- after a purchase so owned/disabled state and combo "All ..." prices refresh
+-- without the player having to close and reopen the store.
+function Store:reloadOffers()
+	local r = Store.lastOffersRequest
+	if not r then
+		return Store:openHome()
+	end
+	g_game.doThing(false)
+	g_game.requestStoreOffers(r[1], r[2], r[3])
+	g_game.doThing(true)
+end
+
 function Store:getDescription(requestId, offerId, description)
 	local data = {
 		["description"] = "<b>"..description.."</b>",

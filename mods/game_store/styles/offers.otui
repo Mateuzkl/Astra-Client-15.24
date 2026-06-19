@@ -290,6 +290,7 @@ GeneralOffersPanel < Panel
     Label
       id: image
       text-wrap: true
+      text-vertical-auto-resize: true
       color: $var-text-cip-store-red
       visible: true
       margin-left: 2
