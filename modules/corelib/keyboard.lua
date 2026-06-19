@@ -347,6 +347,17 @@ end
 
 ----------------------------
 
+-- Effective held-key walking delay (ms) from the keyboard-delay option: native => the
+-- fixed 250ms default, otherwise the user slider. game_walking throttles its held-key
+-- auto-repeat to one step per this, so a higher delay slows continuous walking (helps
+-- very fast characters not send walk commands faster than the server can process).
+function g_keyboard.getWalkRepeatDelay()
+  local settings = modules.client_settings
+  if not settings or not settings.getOption then return 0 end
+  if settings.getOption('hotkeyDelayNative') then return 250 end
+  return tonumber(settings.getOption('hotkeyDelay')) or 0
+end
+
 function g_keyboard.bindWalkKey(key, dir)
   -- "Dir" may come as a function which dynamically determines the direction and returns it. In that case, call the function to get the return.
   if type(dir) == "function" then

@@ -386,7 +386,14 @@ end
 if UIProgressRect then
   local updateProgressRectTimer
 
-  UIProgressRect.setDuration = UIProgressRect.setDuration or function(self, duration)
+  -- NOTE: guard with rawget(UIProgressRect, ...) instead of a plain `UIProgressRect.x`
+  -- read. The class table's __index chains to UIWidget, and UIWidget defines no-op
+  -- `start`/`stop` stubs (see top of this file). A plain read would resolve those
+  -- inherited stubs as non-nil, so `x = x or function...` kept the no-op `start`
+  -- and the cooldown overlay never animated (setDuration set percent=100, start did
+  -- nothing -> slot stayed clear). rawget only sees methods defined directly on
+  -- UIProgressRect (the C++ setPercent/getPercent bindings), never inherited stubs.
+  UIProgressRect.setDuration = rawget(UIProgressRect, 'setDuration') or function(self, duration)
     self._duration = math.max(0, tonumber(duration) or 0)
     self._durationStartedAt = g_clock.millis()
     self._durationEndsAt = self._durationStartedAt + self._duration
@@ -412,7 +419,11 @@ if UIProgressRect then
       widget:setPercent(duration > 0 and (duration - remaining) * 100 / duration or 100)
     end
     if widget.setText then
-      widget:setText((widget._showTime ~= false and remaining > 0) and tostring(math.ceil(remaining / 1000)) or '')
+      -- Show cooldown with 0.1s (100ms) granularity: 900ms -> "0.9", 100ms -> "0.1",
+      -- anything still running below 100ms -> "0.1" (ceil keeps it >= 1 tenth while
+      -- remaining > 0). 2000ms -> "2.0". Old code showed whole seconds (math.ceil/1000)
+      -- so a 200ms cooldown read as "1", which was wrong for sub-second cooldowns.
+      widget:setText((widget._showTime ~= false and remaining > 0) and string.format("%.1f", math.ceil(remaining / 100) / 10) or '')
     end
 
     if remaining <= 0 then
@@ -424,10 +435,12 @@ if UIProgressRect then
       return
     end
 
-    widget._durationEvent = scheduleEvent(function() updateProgressRectTimer(widget) end, 250)
+    -- 50ms tick: fine enough for a smooth graphical sweep and an accurate 0.1s text
+    -- countdown (the old 250ms made both chunky / skip tenths).
+    widget._durationEvent = scheduleEvent(function() updateProgressRectTimer(widget) end, 50)
   end
 
-  UIProgressRect.start = UIProgressRect.start or function(self)
+  UIProgressRect.start = rawget(UIProgressRect, 'start') or function(self)
     if self._durationEvent then
       removeEvent(self._durationEvent)
       self._durationEvent = nil
@@ -438,7 +451,7 @@ if UIProgressRect then
     updateProgressRectTimer(self)
   end
 
-  UIProgressRect.stop = UIProgressRect.stop or function(self)
+  UIProgressRect.stop = rawget(UIProgressRect, 'stop') or function(self)
     if self._durationEvent then
       removeEvent(self._durationEvent)
       self._durationEvent = nil
@@ -449,21 +462,21 @@ if UIProgressRect then
   -- Missing getters/toggles the action bar's cooldown code calls (getDuration was
   -- nil -> "attempt to call method 'getDuration'" spamming the log ~170x and
   -- breaking spell-group cooldowns). Same data model as setDuration/start above.
-  UIProgressRect.getDuration = UIProgressRect.getDuration or function(self)
+  UIProgressRect.getDuration = rawget(UIProgressRect, 'getDuration') or function(self)
     return self._duration or 0
   end
 
-  UIProgressRect.getTimeElapsed = UIProgressRect.getTimeElapsed or function(self)
+  UIProgressRect.getTimeElapsed = rawget(UIProgressRect, 'getTimeElapsed') or function(self)
     if not self._durationStartedAt then return 0 end
     return math.min(self._duration or 0, math.max(0, g_clock.millis() - self._durationStartedAt))
   end
 
-  UIProgressRect.showTime = UIProgressRect.showTime or function(self, show)
+  UIProgressRect.showTime = rawget(UIProgressRect, 'showTime') or function(self, show)
     self._showTime = (show ~= false)
     if not self._showTime and self.setText then self:setText('') end
   end
 
-  UIProgressRect.showProgress = UIProgressRect.showProgress or function(self, show)
+  UIProgressRect.showProgress = rawget(UIProgressRect, 'showProgress') or function(self, show)
     self._showProgress = (show ~= false)
     -- Turning the graphical cooldown off must wipe any overlay that is frozen
     -- mid-cooldown (the timer stops updating percent), so percent 100 = clear.
@@ -582,7 +595,7 @@ if g_game then
     'enableTimerUnnused', 'highscore', 'invokeOnGameEnd', 'invokeOnLogout',
     'obtainContainer', 'openBosstiarySlots', 'openBosstiaryWindow',
     'openContainer', 'openCyclopedia', 'openDailyReward', 'preyHuntingAction',
-    'processPendingGame', 'questTrackerFlags', 'quickLoot', 'quickLootArea',
+    'questTrackerFlags', 'quickLoot', 'quickLootArea',
     'readAnnouncement', 'redeemBattlePass', 'removeLootContainer',
     'removeObtainContainer', 'requestBattlePass', 'requestBlessings',
     'requestCharacterCheckInformations', 'requestCharacterInformation',
@@ -610,7 +623,7 @@ if g_game then
     'sendRequestPrestigeArenaLiveMatches', 'sendRequestPrestigeInspect',
     'sendTeleport', 'sendUpdateAutoAimList', 'sendVipGroup',
     'sendWatchPrestigeArenaLiveMatch', 'sendWeaponProficiencyAction',
-    'sendWeaponProficiencyApply', 'setCamViewerSpeed', 'setDead',
+    'sendWeaponProficiencyApply', 'setCamViewerSpeed',
     'setFramingTarget', 'setHighlightingTarget', 'setLootValueState',
     'setRsa', 'setStringVersion', 'setWalkProtection', 'sortContainer',
     'stashWithdraw', 'stowItem', 'stowItemContainerStack',
