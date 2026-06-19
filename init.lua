@@ -1,5 +1,5 @@
 -- CONFIG
-APP_NAME = "AstraClient"
+APP_NAME = "KoliseuClient"
 APP_VERSION = 1524
 DEFAULT_LAYOUT = ""
 
@@ -58,7 +58,7 @@ local function loadConfig()
       feedback      = "",
       status        = "http://127.0.0.1:3000/api/status",
       createAccount = "http://127.0.0.1:3000/account/register",
-      getCoinsUrl   = "http://127.0.0.1:3000/donate",
+      Coins         = "http://127.0.0.1:3000/donate", -- read as Services.Coins (Get Coins)
     }, {
       Koliseu = "http://127.0.0.1:3000/api/login",
     }
@@ -94,7 +94,14 @@ g_app.setName(APP_NAME)
 -- CONFIG END
 
 g_logger.info(os.date("== application started at %b %d %Y %X"))
-g_logger.info(g_app.getName() .. ' ' .. g_app.getVersion() .. ' rev ' .. g_app.getBuildRevision() .. ' (' .. g_app.getBuildCommit() .. ') made by ' .. g_app.getAuthor() .. ' built on ' .. g_app.getBuildDate() .. ' for arch ' .. g_app.getBuildArch())
+g_logger.info(g_app.getName() ..
+' ' ..
+g_app.getVersion() ..
+' rev ' ..
+g_app.getBuildRevision() ..
+' (' ..
+g_app.getBuildCommit() ..
+') made by ' .. g_app.getAuthor() .. ' built on ' .. g_app.getBuildDate() .. ' for arch ' .. g_app.getBuildArch())
 
 if not g_resources.directoryExists("/data") then
   g_logger.fatal("Data dir doesn't exist.")
@@ -148,7 +155,7 @@ end
 
 -- run updater, must use data.zip
 if type(Services.updater) == 'string' and Services.updater:len() > 4
-  and g_resources.isLoadedFromArchive() and g_modules.getModule("updater") then
+    and g_resources.isLoadedFromArchive() and g_modules.getModule("updater") then
   g_modules.ensureModuleLoaded("updater")
   return Updater.init(loadModules)
 end

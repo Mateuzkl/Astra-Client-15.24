@@ -985,6 +985,12 @@ function onReorderCharacterList()
 
   if focusLabel then
     characterList:focusChild(focusLabel, KeyboardFocusReason, true)
+    -- The TextList auto-focuses its first row while it's being created, so when
+    -- the row we want focused IS that first row, focusChild above is a no-op and
+    -- onFocusChange never fires -> the row never gets its selected styling/pin
+    -- state. Apply it explicitly so the initial selection (and the freshly
+    -- pinned row after a reorder) is highlighted without the user reselecting.
+    onUpdateOnStates(focusLabel)
     addEvent(function() characterList:ensureChildVisible(focusLabel) end)
   end
 end

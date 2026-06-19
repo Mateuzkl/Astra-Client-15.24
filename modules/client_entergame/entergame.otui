@@ -102,7 +102,7 @@ EnterGameWindow
     size: 90 20
     anchors.left: parent.left
     anchors.top: loginButton.top
-    on: true
+    on: false
     focusable: false
 
     $on:
@@ -118,7 +118,25 @@ EnterGameWindow
       color: $var-text-cip-color
       @onOptionChange: EnterGame.onServerChange()
 
+  // The in-client server selector is hidden: the external Launcher decides which client
+  // (production/test) runs, and each client targets a single server. This button reopens
+  // the Launcher so the player can install/switch clients. See client-rename-and-launcher.
+  Button
+    id: changeClientButton
+    !text: tr('Change Client')
+    height: 20
+    width: 110
+    anchors.left: parent.left
+    anchors.top: loginButton.top
+    !tooltip: tr('Open the Launcher to install or switch between the production and test clients')
+    @onClick: EnterGame.openLauncher()
+
+  // Recordings list (cam viewer) is not implemented in the client yet, so hide its
+  // button. It still anchors below it (prev.bottom) keep working: a hidden widget keeps
+  // its rect. Re-show by removing 'visible: false' when recordings are supported.
   UIButton
+    id: recordingsButton
+    visible: false
     size: 20 20
     anchors.top: loginButton.top
     anchors.left: prev.right
@@ -136,7 +154,7 @@ EnterGameWindow
     anchors.right: parent.right
     anchors.top: prev.bottom
     height: 52
-    on: true
+    on: false
     focusable: true
 
     $on:
@@ -305,6 +323,10 @@ EnterGameWindow
     margin-top: 11
 
   Button
+    id: googleLoginButton
+    // Hidden for now - "Login with Google" is a future feature. Re-enable by
+    // setting visible: true (handler EnterGame.onGoogleClick is already wired).
+    visible: false
     !text: tr('Login with Google')
     size: 229 20
     anchors.left: parent.left

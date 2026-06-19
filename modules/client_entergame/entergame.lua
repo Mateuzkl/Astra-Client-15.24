@@ -594,6 +594,18 @@ function EnterGame.init()
     host = ""
   end
 
+  -- The server selector is hidden in this client (the external Launcher chooses prod/test,
+  -- and each client targets a single server). Pin the selector to the first real server so
+  -- doLogin always has a valid login target, even on a fresh install. See EnterGame.openLauncher.
+  if not getServerInfoByName(serverSelector:getText()) and Servers then
+    for _, srv in pairs(Servers) do
+      if not srv.launchBinary then
+        serverSelector:setCurrentOption(srv.name, false)
+        break
+      end
+    end
+  end
+
   g_keyboard.bindKeyDown("Ctrl+Alt+T", EnterGame.addTestServer, enterGame)
 
   enterGame:getChildById('accountPasswordTextEdit'):setText(password)
@@ -757,6 +769,59 @@ function EnterGame.onServerChange()
   end
 end
 
+function EnterGame.openLauncher()
+  -- "Change Client": hand off to the external Launcher (Tauri app). When the launcher
+  -- started this client it set KOLISEU_LAUNCHER to its own absolute path; fall back to a
+  -- sibling KoliseuLauncher.exe otherwise. Pass --show so the Launcher always presents its
+  -- UI (even when "Default Client" is set) so the player can install/switch clients.
+  local launcher = os.getenv("KOLISEU_LAUNCHER")
+  if not launcher or launcher == "" then
+    launcher = "KoliseuOT-Launcher.exe"
+  end
+  if not g_app.launchBinary(launcher, "--show") then
+    displayErrorBox(tr('Launcher'),
+      tr('The Koliseu Launcher was not found.\n' ..
+         'Reinstall through the launcher to switch clients.'))
+  end
+end
+
+-- OTC update gate. Only active when THIS OTC client was launched by the Launcher, which
+-- sets KOLISEU_CLIENT_VERSION (the installed version) + KOLISEU_CLIENT_ENV (production/
+-- testServer). It compares the installed version with the one published for this client
+-- at /api/client/version; if they differ, login is blocked and the player is offered the
+-- Launcher. The official CIP client never runs this Lua, so the gate is OTC-only.
+function EnterGame.checkOtcUpdate(versionUrl, callback)
+  local installed = os.getenv("KOLISEU_CLIENT_VERSION")
+  if not installed or installed == "" or not versionUrl or versionUrl == "" then
+    return callback(false) -- not launched as OTC by the launcher (or no URL) -> don't block
+  end
+  local env = os.getenv("KOLISEU_CLIENT_ENV")
+  if not env or env == "" then env = "production" end
+
+  HTTP.getJSON(versionUrl, function(data, err)
+    if err or type(data) ~= "table" then
+      return callback(false) -- offline / API error -> never block on a failed check
+    end
+    local envData = data[env]
+    local otc = (type(envData) == "table") and envData.otc or nil
+    local available = (type(otc) == "table") and otc.version or nil
+    if type(available) == "string" and available ~= "" and available ~= installed then
+      return callback(true, installed, available)
+    end
+    callback(false)
+  end)
+end
+
+function EnterGame.showUpdateRequired(installed, available)
+  displayGeneralBox(tr('Update Required'),
+    tr("Your client is outdated and can't connect to the server.\n\nInstalled: %s\nAvailable: %s\n\nUpdate through the Launcher to continue.",
+       installed or '?', available or '?'),
+    {
+      { text = tr('Update'), callback = function() EnterGame.openLauncher() end },
+      { text = tr('Cancel'), callback = function() end },
+    })
+end
+
 function EnterGame.doLogin(account, password, token, host, gtoken)
   if g_game.isOnline() then
     local errorBox = displayErrorBox(tr('Login Error'), tr('Cannot login while already in game.'))
@@ -764,6 +829,23 @@ function EnterGame.doLogin(account, password, token, host, gtoken)
     return
   end
 
+  -- OTC update gate (async, runs once per attempt before connecting). If the installed
+  -- OTC client is behind the published version, block here and offer the Launcher.
+  if not EnterGame._otcGatePassed then
+    local srv = getServerInfoByName(serverSelector:getText():trim())
+    local loginLink = (srv and srv.loginLink) or ""
+    local versionUrl = (loginLink ~= "") and loginLink:gsub("/api/login", "/api/client/version") or ""
+    EnterGame.checkOtcUpdate(versionUrl, function(stale, installed, available)
+      if stale then
+        EnterGame.showUpdateRequired(installed, available)
+      else
+        EnterGame._otcGatePassed = true
+        EnterGame.doLogin(account, password, token, host, gtoken)
+        EnterGame._otcGatePassed = false
+      end
+    end)
+    return
+  end
 
   G.account = account or enterGame:getChildById('accountNameTextEdit'):getText()
   G.password = password or enterGame:getChildById('accountPasswordTextEdit'):getText()
@@ -772,6 +854,17 @@ function EnterGame.doLogin(account, password, token, host, gtoken)
   G.stayLogged = true
   G.server = serverSelector:getText():trim()
   local chosenServer = getServerInfoByName(G.server)
+
+  -- Test/prod split: a server entry with `launchBinary` is not a connection target -- it
+  -- hands off to a separate client exe (the test build). See docs/DISTRIBUICAO_E_UPDATER.md.
+  if chosenServer and chosenServer.launchBinary then
+    if not g_app.launchBinary(chosenServer.launchBinary, "") then
+      displayErrorBox(tr('Test Client'),
+        tr('The test client (%s) is not installed yet.', chosenServer.launchBinary))
+    end
+    return
+  end
+
   G.host = chosenServer and chosenServer.loginLink or serverHostTextEdit:getText()
   G.clientVersion = resolveClientVersion(clientVersionSelector:getText())
 
