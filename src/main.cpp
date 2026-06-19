@@ -42,7 +42,7 @@ int main(int argc, const char* argv[]) {
     g_logger.setLogFile(compactName + ".log");
 
     // setup application name and version
-    g_app.setName("AstraClient");
+    g_app.setName("KoliseuClient");
     g_app.setCompactName(compactName);
     g_app.setVersion("3.1");
 
@@ -56,6 +56,24 @@ int main(int argc, const char* argv[]) {
 #endif
         return 0;
     }
+
+    // Build step: pack a plaintext file (data.zip) into an opaque encrypted
+    // container. With a base exe, emits a self-contained executable.
+    //   --pack <input> <output> [baseExe]
+    if (auto packIt = std::find(args.begin(), args.end(), "--pack"); packIt != args.end()) {
+        size_t idx = static_cast<size_t>(std::distance(args.begin(), packIt));
+        if (idx + 2 >= args.size()) {
+            std::cout << "usage: --pack <input> <output> [baseExe]" << std::endl;
+            return 1;
+        }
+        std::string inPath = args[idx + 1];
+        std::string outPath = args[idx + 2];
+        std::string baseExe = (idx + 3 < args.size()) ? args[idx + 3] : std::string();
+        bool ok = g_resources.packContainer(inPath, outPath, baseExe);
+        std::cout << (ok ? "pack OK -> " : "pack FAILED -> ") << outPath << std::endl;
+        return ok ? 0 : 1;
+    }
+
 #endif
 
     if (g_resources.launchCorrect(g_app.getName(), g_app.getCompactName())) {

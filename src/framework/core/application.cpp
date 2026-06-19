@@ -22,6 +22,7 @@
 
 #include "application.h"
 #include <csignal>
+#include <filesystem>
 #include <framework/core/clock.h>
 #include <framework/core/resourcemanager.h>
 #include <framework/core/modulemanager.h>
@@ -219,6 +220,23 @@ void Application::restartArgs(const std::vector<std::string>& args)
     quick_exit();
 #else
     exit();
+#endif
+}
+
+bool Application::launchBinary(const std::string& binaryName, const std::string& args)
+{
+#if !defined(ANDROID)
+    // Resolve relative to the working dir (= the client's folder, same convention restart()
+    // uses with getBinaryName). If the sibling binary isn't installed, don't close.
+    if (binaryName.empty() || !std::filesystem::exists(binaryName)) {
+        g_logger.error(stdext::format("launchBinary: '%s' not found next to the client", binaryName));
+        return false;
+    }
+    spawnAndDetach(binaryName, args);
+    quick_exit();
+    return true;
+#else
+    return false;
 #endif
 }
 

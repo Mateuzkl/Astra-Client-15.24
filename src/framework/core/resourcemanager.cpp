@@ -33,6 +33,7 @@
 #include <regex>
 
 #include <locale>
+#include <cstring>
 #include <zlib.h>
 
 #define PHYSFS_DEPRECATED
@@ -44,6 +45,89 @@
 
 ResourceManager g_resources;
 static const std::string INIT_FILENAME = "init.lua";
+
+// --- Asset container format (Fase 1: AES-256-GCM, key derived, never stored) --
+//
+//   off  0  [4]  magic      - NOT "ENC*" so the format does not advertise its
+//                             OTClient heritage; rotated per-release with the key
+//   off  4  [16] salt       - random; per-file key = HKDF(masterKey, salt)
+//   off 20  [12] nonce      - random GCM IV
+//   off 32  [16] tag        - GCM authentication tag (detects tampering)
+//   off 48  [4]  origSize   - uncompressed plaintext size, authenticated as AAD
+//   off 52  [..] ciphertext = AES-256-GCM( zlib_compress(plaintext) )
+//
+// Unlike the legacy ENC3 scheme, the decryption key is NEVER written next to the
+// ciphertext. It is derived at runtime from the embedded master key + the salt.
+namespace {
+    constexpr size_t ASSET_MAGIC_LEN = 4;
+    constexpr size_t ASSET_SALT_LEN = 16;
+    constexpr size_t ASSET_NONCE_LEN = 12;
+    constexpr size_t ASSET_TAG_LEN = 16;
+    constexpr size_t ASSET_ORIGSIZE_LEN = 4;
+    constexpr size_t ASSET_OFF_SALT = ASSET_MAGIC_LEN;                       // 4
+    constexpr size_t ASSET_OFF_NONCE = ASSET_OFF_SALT + ASSET_SALT_LEN;      // 20
+    constexpr size_t ASSET_OFF_TAG = ASSET_OFF_NONCE + ASSET_NONCE_LEN;      // 32
+    constexpr size_t ASSET_OFF_ORIGSIZE = ASSET_OFF_TAG + ASSET_TAG_LEN;     // 48
+    constexpr size_t ASSET_HEADER_LEN = ASSET_OFF_ORIGSIZE + ASSET_ORIGSIZE_LEN; // 52
+    constexpr uint32_t ASSET_MAX_SIZE = 512u * 1024u * 1024u;                // sanity bound
+
+    const uint8_t ASSET_MAGIC[ASSET_MAGIC_LEN] = { 0x4B, 0x39, 0x1D, 0xE2 };
+
+    // Footer written after an encrypted container blob that is appended to the
+    // binary, so loadDataFromSelf can locate the blob without a ZIP/PK signature.
+    // Layout: [uint32 LE blobLen][4-byte footer magic]. Total 8 bytes at EOF.
+    constexpr size_t ASSET_FOOTER_LEN = 8;
+    const uint8_t ASSET_FOOTER_MAGIC[4] = { 0xC7, 0x1A, 0x6B, 0x4F };
+
+    // Master-key material. The real per-release values live in a gitignored
+    // generated header (tools/gen_asset_key.py) so the key is never committed.
+    // A committed fallback is used in dev. NOTE: this is free obfuscation only --
+    // the material is, by necessity, present in the binary, so it slows a manual
+    // reverse-engineer but does not stop one. The actual master key bytes never
+    // appear contiguously: they are DERIVED from the scattered material via HKDF.
+#if __has_include("keymaterial.gen.h")
+#  include "keymaterial.gen.h"
+#else
+    static const unsigned char KOLISEU_KM_A[12] = {
+        0x3f, 0xa1, 0x07, 0xcc, 0x91, 0x6e, 0x28, 0xb4, 0x5d, 0xe0, 0x12, 0x8a
+    };
+    static const unsigned char KOLISEU_KM_B[12] = {
+        0xd7, 0x49, 0xbf, 0x03, 0x66, 0xfa, 0x15, 0x9c, 0x2b, 0x80, 0xe5, 0x47
+    };
+    static const unsigned char KOLISEU_KM_C[12] = {
+        0x71, 0x0a, 0xcd, 0x38, 0x96, 0x52, 0xab, 0x1f, 0xe4, 0x63, 0x8d, 0xf0
+    };
+    static const unsigned int KOLISEU_KM_SALT = 0x5A3C9E11u;
+#endif
+
+    void assembleMasterKey(uint8_t out[32]) {
+        uint8_t ikm[36];
+        std::memcpy(ikm + 0,  KOLISEU_KM_A, 12);
+        std::memcpy(ikm + 12, KOLISEU_KM_B, 12);
+        std::memcpy(ikm + 24, KOLISEU_KM_C, 12);
+        uint32_t salt = KOLISEU_KM_SALT;
+        g_crypt.hkdfSha256(ikm, sizeof(ikm),
+                           reinterpret_cast<const uint8_t*>(&salt), sizeof(salt),
+                           reinterpret_cast<const uint8_t*>("koliseu-master-v1"), 17,
+                           out, 32);
+        std::memset(ikm, 0, sizeof(ikm));
+    }
+
+    // Derive the per-file key from the master key and the file's random salt.
+    void deriveAssetKey(const uint8_t* salt, size_t saltLen, uint8_t out[32]) {
+        uint8_t master[32];
+        assembleMasterKey(master);
+        static const char info[] = "koliseu-asset-v1";
+        g_crypt.hkdfSha256(master, sizeof(master), salt, saltLen,
+                           (const uint8_t*)info, sizeof(info) - 1, out, 32);
+        std::memset(master, 0, sizeof(master));
+    }
+
+    bool isAssetEncrypted(const std::string& b) {
+        return b.size() >= ASSET_MAGIC_LEN &&
+               std::memcmp(b.data(), ASSET_MAGIC, ASSET_MAGIC_LEN) == 0;
+    }
+}
 
 void ResourceManager::init(const char *argv0)
 {
@@ -236,6 +320,7 @@ bool ResourceManager::setup()
             PHYSFS_unmount(dir.c_str());
 
         g_logger.info(stdext::format("Found work dir at '%s'", dir));
+        decryptContainerIfNeeded(data);
         if (mountMemoryData(data))
             return true;
     }
@@ -308,7 +393,7 @@ std::string ResourceManager::getCompactName() {
             return regex_match[1].str();
         }
     }
-    return "astraclient";
+    return "koliseuclient";
 }
 
 bool ResourceManager::loadDataFromSelf(bool unmountIfMounted) {
@@ -335,13 +420,33 @@ bool ResourceManager::loadDataFromSelf(bool unmountIfMounted) {
     std::vector<uint8_t> v(1 + size);
     file.read((char*)&v[0], size);
     file.close();
-    for (size_t i = 0, end = size - 128; i < end; ++i) {
-        if (v[i] == 0x50 && v[i + 1] == 0x4b && v[i + 2] == 0x03 && v[i + 3] == 0x04 && v[i + 4] == 0x14) {
-            uint32_t compSize = *(uint32_t*)&v[i + 18];
-            uint32_t decompSize = *(uint32_t*)&v[i + 22];
-            if (compSize < 1024 * 1024 * 512 && decompSize < 1024 * 1024 * 512) {
-                data = std::make_shared<std::vector<uint8_t>>(&v[i], &v[v.size() - 1]);
-                break;
+
+    // Preferred: encrypted container located via the trailing footer. No ZIP/PK
+    // signature is present, so binwalk and friends just see high-entropy noise.
+    if (size > ASSET_FOOTER_LEN + ASSET_HEADER_LEN) {
+        const uint8_t* foot = &v[size - ASSET_FOOTER_LEN];
+        if (std::memcmp(foot + 4, ASSET_FOOTER_MAGIC, 4) == 0) {
+            uint32_t blobLen = 0;
+            std::memcpy(&blobLen, foot, 4);
+            if (blobLen >= ASSET_HEADER_LEN && blobLen <= size - ASSET_FOOTER_LEN) {
+                size_t blobStart = size - ASSET_FOOTER_LEN - blobLen;
+                std::string blob(reinterpret_cast<const char*>(&v[blobStart]), blobLen);
+                if (decryptBuffer(blob))
+                    data = std::make_shared<std::vector<uint8_t>>(blob.begin(), blob.end());
+            }
+        }
+    }
+
+    // Fallback: legacy plaintext zip appended to the binary (PK signature scan).
+    if (!data) {
+        for (size_t i = 0, end = size - 128; i < end; ++i) {
+            if (v[i] == 0x50 && v[i + 1] == 0x4b && v[i + 2] == 0x03 && v[i + 3] == 0x04 && v[i + 4] == 0x14) {
+                uint32_t compSize = *(uint32_t*)&v[i + 18];
+                uint32_t decompSize = *(uint32_t*)&v[i + 22];
+                if (compSize < 1024 * 1024 * 512 && decompSize < 1024 * 1024 * 512) {
+                    data = std::make_shared<std::vector<uint8_t>>(&v[i], &v[v.size() - 1]);
+                    break;
+                }
             }
         }
     }
@@ -1003,9 +1108,6 @@ void ResourceManager::encrypt(const std::string& seed) {
     const std::string dirsToCheck[] = { "data", "modules", "mods", "layouts" };
     const std::string luaExtension = ".lua";
 
-    g_logger.setLogFile("encryption.log");
-    g_logger.info("----------------------");
-
     std::queue<std::filesystem::path> toEncrypt;
     // you can add custom files here
     toEncrypt.push(std::filesystem::path(INIT_FILENAME));
@@ -1036,7 +1138,7 @@ void ResourceManager::encrypt(const std::string& seed) {
             continue;
         std::string buffer(std::istreambuf_iterator<char>(in_file), {});
         in_file.close();
-        if (buffer.size() >= 4 && buffer.substr(0, 4).compare("ENC3") == 0)
+        if (isAssetEncrypted(buffer))
             continue; // already encrypted
 
         if (!encryptForAndroid && it.extension().string() == luaExtension && it.filename().string() != INIT_FILENAME) {
@@ -1065,73 +1167,165 @@ void ResourceManager::encrypt(const std::string& seed) {
 #endif 
 
 bool ResourceManager::decryptBuffer(std::string& buffer) {
-    if (buffer.size() < 5)
+    // Too small to carry our header: cannot be one of our files. Leave as-is so
+    // unencrypted (dev) assets keep loading verbatim.
+    if (buffer.size() < ASSET_HEADER_LEN)
         return true;
 
-    if (buffer.substr(0, 4).compare("ENC3") != 0) {
-        return false;
-    }
+    if (!isAssetEncrypted(buffer))
+        return false; // not our format -> caller decides (plaintext or fatal)
 
-    uint64_t key = *(uint64_t*)&buffer[4];
-    uint32_t compressed_size = *(uint32_t*)&buffer[12];
-    uint32_t size = *(uint32_t*)&buffer[16];
-    uint32_t adler = *(uint32_t*)&buffer[20];
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(buffer.data());
+    const uint8_t* salt = p + ASSET_OFF_SALT;
+    const uint8_t* nonce = p + ASSET_OFF_NONCE;
+    const uint8_t* tag = p + ASSET_OFF_TAG;
+    const uint8_t* aad = p + ASSET_OFF_ORIGSIZE; // 4 bytes, authenticated
+    uint32_t origSize = 0;
+    std::memcpy(&origSize, aad, ASSET_ORIGSIZE_LEN);
 
-    if (compressed_size < buffer.size() - 24)
-        return false;
+    if (origSize > ASSET_MAX_SIZE)
+        return false; // crafted file -> refuse huge allocation
 
-    g_crypt.bdecrypt((uint8_t*)&buffer[24], compressed_size, key);
-    std::string new_buffer;
-    new_buffer.resize(size);
-    unsigned long new_buffer_size = new_buffer.size();
-    if (uncompress((uint8_t*)new_buffer.data(), &new_buffer_size, (uint8_t*)&buffer[24], compressed_size) != Z_OK)
-        return false;
+    uint8_t key[32];
+    deriveAssetKey(salt, ASSET_SALT_LEN, key);
 
-    uint32_t addlerCheck = stdext::adler32((const uint8_t*)&new_buffer[0], size);
-    if (adler != addlerCheck) {
-        uint32_t cseed = adler ^ addlerCheck;
-        if (m_customEncryption == 0) {
-            m_customEncryption = cseed;
-        }
-        if ((addlerCheck ^ m_customEncryption) != adler) {
+    std::string compressed;
+    bool ok = g_crypt.aesGcmDecrypt(p + ASSET_HEADER_LEN, buffer.size() - ASSET_HEADER_LEN,
+                                    key, nonce, aad, ASSET_ORIGSIZE_LEN, tag, compressed);
+    std::memset(key, 0, sizeof(key));
+    if (!ok)
+        return false; // wrong key or tampered (GCM tag mismatch)
+
+    std::string plain;
+    if (origSize > 0) {
+        plain.resize(origSize);
+        uLongf destLen = origSize;
+        if (uncompress(reinterpret_cast<Bytef*>(&plain[0]), &destLen,
+                       reinterpret_cast<const Bytef*>(compressed.data()),
+                       static_cast<uLong>(compressed.size())) != Z_OK)
             return false;
-        }
+        plain.resize(destLen);
     }
 
-    buffer = new_buffer;
+    // First successful decrypt -> we are running on an encrypted build, so from
+    // now on a file that fails to decrypt is a tamper and must be fatal.
+    if (m_customEncryption == 0)
+        m_customEncryption = 1;
+
+    buffer = std::move(plain);
     return true;
 }
 
+void ResourceManager::decryptContainerIfNeeded(std::shared_ptr<std::vector<uint8_t>>& data)
+{
+    if (!data || data->size() < ASSET_HEADER_LEN)
+        return;
+    if (std::memcmp(data->data(), ASSET_MAGIC, ASSET_MAGIC_LEN) != 0)
+        return; // plaintext zip -> mount as-is (back-compat)
+
+    std::string s(reinterpret_cast<const char*>(data->data()), data->size());
+    if (decryptBuffer(s))
+        data = std::make_shared<std::vector<uint8_t>>(s.begin(), s.end());
+}
+
 #ifdef WITH_ENCRYPTION
-bool ResourceManager::encryptBuffer(std::string& buffer, uint32_t seed) {
-    if (buffer.size() >= 4 && buffer.substr(0, 4).compare("ENC3") == 0)
+bool ResourceManager::encryptBuffer(std::string& buffer, uint32_t /*seed*/) {
+    if (isAssetEncrypted(buffer))
         return false; // already encrypted
 
-    // not random beacause it would require to update to new files each time
-    int64_t key = stdext::adler32((const uint8_t*)&buffer[0], buffer.size());
-    key <<= 32;
-    key += stdext::adler32((const uint8_t*)&buffer[0], buffer.size() / 2);
-
-    std::string new_buffer(24 + buffer.size() * 2, '0');
-    new_buffer[0] = 'E';
-    new_buffer[1] = 'N';
-    new_buffer[2] = 'C';
-    new_buffer[3] = '3';
-
-    unsigned long dstLen = new_buffer.size() - 24;
-    if (compress((uint8_t*)&new_buffer[24], &dstLen, (const uint8_t*)buffer.data(), buffer.size()) != Z_OK) {
+    // 1. compress (compress-then-encrypt; the reverse would not compress).
+    uLongf compLen = compressBound(static_cast<uLong>(buffer.size()));
+    std::string compressed(compLen, '\0');
+    if (compress(reinterpret_cast<Bytef*>(&compressed[0]), &compLen,
+                 reinterpret_cast<const Bytef*>(buffer.data()),
+                 static_cast<uLong>(buffer.size())) != Z_OK) {
         g_logger.error("Error while compressing");
         return false;
     }
-    new_buffer.resize(24 + dstLen);
+    compressed.resize(compLen);
 
-    *(int64_t*)&new_buffer[4] = key;
-    *(uint32_t*)&new_buffer[12] = (uint32_t)dstLen;
-    *(uint32_t*)&new_buffer[16] = (uint32_t)buffer.size();
-    *(uint32_t*)&new_buffer[20] = ((uint32_t)stdext::adler32((const uint8_t*)&buffer[0], buffer.size())) ^ seed;
+    // 2. random salt + nonce; derive a per-file key (never stored in the file).
+    uint8_t salt[ASSET_SALT_LEN];
+    uint8_t nonce[ASSET_NONCE_LEN];
+    if (!g_crypt.randomBytes(salt, sizeof(salt)) || !g_crypt.randomBytes(nonce, sizeof(nonce))) {
+        g_logger.error("Error while generating random bytes");
+        return false;
+    }
+    uint8_t key[32];
+    deriveAssetKey(salt, sizeof(salt), key);
 
-    g_crypt.bencrypt((uint8_t*)&new_buffer[0] + 24, new_buffer.size() - 24, key);
-    buffer = new_buffer;
+    // 3. origSize is authenticated (AAD) so it cannot be tampered.
+    uint32_t origSize = static_cast<uint32_t>(buffer.size());
+    uint8_t aad[ASSET_ORIGSIZE_LEN];
+    std::memcpy(aad, &origSize, ASSET_ORIGSIZE_LEN);
+
+    // 4. encrypt the compressed payload.
+    std::string cipher;
+    uint8_t tag[ASSET_TAG_LEN];
+    bool ok = g_crypt.aesGcmEncrypt(reinterpret_cast<const uint8_t*>(compressed.data()),
+                                    compressed.size(), key, nonce, aad, sizeof(aad), cipher, tag);
+    std::memset(key, 0, sizeof(key));
+    if (!ok) {
+        g_logger.error("Error while encrypting");
+        return false;
+    }
+
+    // 5. assemble: magic | salt | nonce | tag | origSize | ciphertext
+    std::string out;
+    out.reserve(ASSET_HEADER_LEN + cipher.size());
+    out.append(reinterpret_cast<const char*>(ASSET_MAGIC), ASSET_MAGIC_LEN);
+    out.append(reinterpret_cast<const char*>(salt), sizeof(salt));
+    out.append(reinterpret_cast<const char*>(nonce), sizeof(nonce));
+    out.append(reinterpret_cast<const char*>(tag), sizeof(tag));
+    out.append(reinterpret_cast<const char*>(aad), sizeof(aad));
+    out.append(cipher);
+
+    buffer = std::move(out);
+    return true;
+}
+
+bool ResourceManager::packContainer(const std::string& inPath, const std::string& outPath,
+                                    const std::string& baseExe)
+{
+    std::ifstream in(inPath, std::ios::binary);
+    if (!in.is_open()) {
+        g_logger.error(stdext::format("pack: unable to open input '%s'", inPath));
+        return false;
+    }
+    std::string buffer((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+
+    if (!encryptBuffer(buffer, 0)) {
+        g_logger.error("pack: encryption failed (already encrypted?)");
+        return false;
+    }
+
+    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        g_logger.error(stdext::format("pack: unable to open output '%s'", outPath));
+        return false;
+    }
+
+    if (!baseExe.empty()) {
+        std::ifstream be(baseExe, std::ios::binary);
+        if (!be.is_open()) {
+            g_logger.error(stdext::format("pack: unable to open base exe '%s'", baseExe));
+            return false;
+        }
+        out << be.rdbuf();
+        be.close();
+    }
+
+    out.write(buffer.data(), buffer.size());
+
+    if (!baseExe.empty()) {
+        uint32_t blobLen = static_cast<uint32_t>(buffer.size());
+        uint8_t footer[ASSET_FOOTER_LEN];
+        std::memcpy(footer, &blobLen, 4);
+        std::memcpy(footer + 4, ASSET_FOOTER_MAGIC, 4);
+        out.write(reinterpret_cast<const char*>(footer), ASSET_FOOTER_LEN);
+    }
+    out.close();
     return true;
 }
 #endif

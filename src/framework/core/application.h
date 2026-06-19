@@ -42,6 +42,10 @@ public:
     virtual void close();
     void restart();
     void restartArgs(const std::vector<std::string>& args);
+    // Hand off to a sibling binary (e.g. the external launcher) living next to this
+    // exe, passing optional command-line args, then close. Returns false (without
+    // closing) if the binary isn't present.
+    bool launchBinary(const std::string& binaryName, const std::string& args = "");
 
     void setName(const std::string& name) { m_appName = name; }
     void setCompactName(const std::string& compactName) { m_appCompactName = compactName; }

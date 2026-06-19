@@ -64,6 +64,27 @@ public:
 #endif
     void bdecrypt(uint8_t * buffer, int len, uint64_t k);
 
+    // --- Asset protection (Fase 1): authenticated encryption + KDF ---------
+    // AES-256-GCM. key = 32 bytes, nonce = 12 bytes, tag = 16 bytes.
+    // The key is NEVER stored alongside the ciphertext (unlike the old ENC3).
+    // Returns false on any OpenSSL failure; decrypt also returns false when the
+    // authentication tag does not verify (tamper / wrong key).
+    bool aesGcmEncrypt(const uint8_t* plain, size_t plainLen,
+                       const uint8_t key[32], const uint8_t nonce[12],
+                       const uint8_t* aad, size_t aadLen,
+                       std::string& outCipher, uint8_t outTag[16]);
+    bool aesGcmDecrypt(const uint8_t* cipher, size_t cipherLen,
+                       const uint8_t key[32], const uint8_t nonce[12],
+                       const uint8_t* aad, size_t aadLen,
+                       const uint8_t tag[16], std::string& outPlain);
+    // HKDF-SHA256 (RFC 5869). Derives outLen bytes from input keying material.
+    void hkdfSha256(const uint8_t* ikm, size_t ikmLen,
+                    const uint8_t* salt, size_t saltLen,
+                    const uint8_t* info, size_t infoLen,
+                    uint8_t* out, size_t outLen);
+    // Cryptographically secure random bytes (CSPRNG).
+    bool randomBytes(uint8_t* out, size_t len);
+
 private:
     std::string _encrypt(const std::string& decrypted_string, bool useMachineUUID);
     std::string _decrypt(const std::string& encrypted_string, bool useMachineUUID);

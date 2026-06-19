@@ -103,6 +103,11 @@ public:
 #ifdef WITH_ENCRYPTION
     void encrypt(const std::string& seed = "");
     bool encryptBuffer(std::string & buffer, uint32_t seed = 0);
+    // Encrypt a whole file (e.g. data.zip) into an opaque container blob.
+    // If baseExe is given, writes baseExe + blob + locator footer (a self-contained
+    // executable); otherwise writes the bare blob (a standalone encrypted data.zip).
+    bool packContainer(const std::string& inPath, const std::string& outPath,
+                       const std::string& baseExe = "");
 #endif
     bool decryptBuffer(std::string & buffer);
 #if defined(WIN32)
@@ -118,6 +123,9 @@ public:
 private:
     bool mountMemoryData(const std::shared_ptr<std::vector<uint8_t>>& data);
     void unmountMemoryData();
+    // If data holds an encrypted container (our magic), decrypt it in place so the
+    // raw zip can be mounted from memory; otherwise leave it untouched (plaintext).
+    void decryptContainerIfNeeded(std::shared_ptr<std::vector<uint8_t>>& data);
 
 #ifndef ANDROID
     std::filesystem::path m_binaryPath, m_writeDir;

@@ -37,8 +37,13 @@
 #include <openssl/md5.h>
 #include <openssl/bn.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/rand.h>
 #endif
 #include <zlib.h>
+#include <vector>
+#include <cstring>
 
 static const std::string base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static inline bool is_base64(unsigned char c) { return (isalnum(c) || (c == '+') || (c == '/')); }
@@ -523,4 +528,161 @@ void Crypt::bdecrypt(uint8_t* buffer, int len, uint64_t k) {
         y = v[0] -= MX;
         sum -= DELTA;
     } while (--rounds);
+}
+
+// --- Asset protection (Fase 1) -------------------------------------------------
+
+bool Crypt::aesGcmEncrypt(const uint8_t* plain, size_t plainLen,
+                          const uint8_t key[32], const uint8_t nonce[12],
+                          const uint8_t* aad, size_t aadLen,
+                          std::string& outCipher, uint8_t outTag[16])
+{
+#ifndef __EMSCRIPTEN__
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx)
+        return false;
+
+    bool ok = false;
+    do {
+        if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1)
+            break;
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) != 1)
+            break;
+        if (EVP_EncryptInit_ex(ctx, nullptr, nullptr, key, nonce) != 1)
+            break;
+
+        int len = 0;
+        if (aad && aadLen > 0) {
+            if (EVP_EncryptUpdate(ctx, nullptr, &len, aad, (int)aadLen) != 1)
+                break;
+        }
+
+        outCipher.resize(plainLen);
+        int outLen = 0;
+        if (plainLen > 0) {
+            if (EVP_EncryptUpdate(ctx, (uint8_t*)&outCipher[0], &len, plain, (int)plainLen) != 1)
+                break;
+            outLen = len;
+        }
+        // GCM adds no padding, so Final produces 0 bytes, but it must still run.
+        if (EVP_EncryptFinal_ex(ctx, (uint8_t*)outCipher.data() + outLen, &len) != 1)
+            break;
+        outLen += len;
+        outCipher.resize(outLen);
+
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, outTag) != 1)
+            break;
+
+        ok = true;
+    } while (false);
+
+    EVP_CIPHER_CTX_free(ctx);
+    if (!ok)
+        outCipher.clear();
+    return ok;
+#else
+    return false;
+#endif
+}
+
+bool Crypt::aesGcmDecrypt(const uint8_t* cipher, size_t cipherLen,
+                          const uint8_t key[32], const uint8_t nonce[12],
+                          const uint8_t* aad, size_t aadLen,
+                          const uint8_t tag[16], std::string& outPlain)
+{
+#ifndef __EMSCRIPTEN__
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx)
+        return false;
+
+    bool ok = false;
+    do {
+        if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1)
+            break;
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) != 1)
+            break;
+        if (EVP_DecryptInit_ex(ctx, nullptr, nullptr, key, nonce) != 1)
+            break;
+
+        int len = 0;
+        if (aad && aadLen > 0) {
+            if (EVP_DecryptUpdate(ctx, nullptr, &len, aad, (int)aadLen) != 1)
+                break;
+        }
+
+        outPlain.resize(cipherLen);
+        int outLen = 0;
+        if (cipherLen > 0) {
+            if (EVP_DecryptUpdate(ctx, (uint8_t*)&outPlain[0], &len, cipher, (int)cipherLen) != 1)
+                break;
+            outLen = len;
+        }
+
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void*)tag) != 1)
+            break;
+
+        // Final returns > 0 only when the authentication tag verifies.
+        if (EVP_DecryptFinal_ex(ctx, (uint8_t*)outPlain.data() + outLen, &len) <= 0)
+            break;
+        outLen += len;
+        outPlain.resize(outLen);
+
+        ok = true;
+    } while (false);
+
+    EVP_CIPHER_CTX_free(ctx);
+    if (!ok)
+        outPlain.clear();
+    return ok;
+#else
+    return false;
+#endif
+}
+
+void Crypt::hkdfSha256(const uint8_t* ikm, size_t ikmLen,
+                       const uint8_t* salt, size_t saltLen,
+                       const uint8_t* info, size_t infoLen,
+                       uint8_t* out, size_t outLen)
+{
+#ifndef __EMSCRIPTEN__
+    constexpr unsigned int HASH_LEN = 32;
+    static const uint8_t zeroSalt[HASH_LEN] = { 0 };
+
+    // Extract: PRK = HMAC-SHA256(salt, IKM)
+    uint8_t prk[HASH_LEN];
+    unsigned int prkLen = 0;
+    const uint8_t* useSalt = (salt && saltLen > 0) ? salt : zeroSalt;
+    int useSaltLen = (salt && saltLen > 0) ? (int)saltLen : (int)HASH_LEN;
+    HMAC(EVP_sha256(), useSalt, useSaltLen, ikm, ikmLen, prk, &prkLen);
+
+    // Expand: T(i) = HMAC-SHA256(PRK, T(i-1) | info | i)
+    uint8_t t[HASH_LEN];
+    unsigned int tLen = 0;
+    size_t pos = 0;
+    uint8_t counter = 1;
+    std::vector<uint8_t> buf;
+    while (pos < outLen) {
+        buf.clear();
+        if (counter > 1)
+            buf.insert(buf.end(), t, t + tLen);
+        if (info && infoLen > 0)
+            buf.insert(buf.end(), info, info + infoLen);
+        buf.push_back(counter);
+        HMAC(EVP_sha256(), prk, prkLen, buf.data(), buf.size(), t, &tLen);
+
+        size_t n = (outLen - pos < tLen) ? (outLen - pos) : tLen;
+        std::memcpy(out + pos, t, n);
+        pos += n;
+        ++counter;
+    }
+#endif
+}
+
+bool Crypt::randomBytes(uint8_t* out, size_t len)
+{
+#ifndef __EMSCRIPTEN__
+    return RAND_bytes(out, (int)len) == 1;
+#else
+    return false;
+#endif
 }
