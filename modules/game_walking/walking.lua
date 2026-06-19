@@ -9,6 +9,7 @@ firstStep = true
 walkLock = 0
 walkEvent = nil
 lastWalk = 0
+walkKeyAnchor = 0 -- held-key throttle anchor (keyboard-delay option, see bindWalkKey)
 lastTurn = 0
 lastTurnDirection = 0
 lastStop = 0
@@ -225,24 +226,36 @@ function bindWalkKey(key, dir)
         if m_settings.getOption('smartWalk') then
           changeWalkDir(dir)
         else
-          walk(dir) 
+          walk(dir)
           checkPressedWalkKeys(key)
         end
       end
     end, gameRootPanel, true)
 
   g_keyboard.bindKeyUp(key, function() changeWalkDir(dir, true) end, gameRootPanel, true)
-  g_keyboard.bindKeyPress(key, 
-    function(c, k, ticks) 
+  g_keyboard.bindKeyPress(key,
+    function(c, k, ticks)
       if modules.game_walking.isBlockWalk() then
         return
       end
 
+      -- ticks==0 is the KeyPress fired immediately on key-down: always allow it so the
+      -- first step stays responsive. Auto-repeats (ticks>0) are throttled to one step per
+      -- the keyboard-delay option, so a higher delay slows continuous walking (helps very
+      -- fast chars not outpace the server). walk() still self-gates on walk speed on top.
+      if ticks and ticks > 0 then
+        local repeatDelay = g_keyboard.getWalkRepeatDelay()
+        if repeatDelay > 0 and g_clock.millis() - walkKeyAnchor < repeatDelay then
+          return
+        end
+      end
+      walkKeyAnchor = g_clock.millis()
+
       checkPressedWalkKeys(key)
       if m_settings.getOption('smartWalk') then
-        smartWalk(dir, ticks) 
+        smartWalk(dir, ticks)
       else
-        walk(dir, ticks) 
+        walk(dir, ticks)
       end
     end, gameRootPanel)
 end

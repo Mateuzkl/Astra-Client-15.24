@@ -241,10 +241,23 @@ function terminate()
   loadedWindows = {}
 end
 
+-- Apply the keyboard-delay option to the game root's auto-repeat *initial* delay (the
+-- pause before held-key auto-repeat starts). The dataset apply only ran while the Options
+-- window was open, so the saved value never took effect at boot; re-apply here on game
+-- start. game_walking additionally throttles the continuous repeat to this same delay
+-- (see g_keyboard.getWalkRepeatDelay), so the initial gap and the walk cadence match.
+function applyKeyboardDelay()
+  local grp = rootWidget:getChildById("gameRootPanel")
+  if not grp then return end
+  local native = GameOptions:getOption('hotkeyDelayNative')
+  grp:setAutoRepeatDelay(native and 250 or math.max(0, tonumber(GameOptions:getOption('hotkeyDelay')) or 0))
+end
+
 function online()
   local benchmark = g_clock.millis()
   tmpResetActions = {}
   g_app.setSmooth(GameOptions:getOption("antialiasing") == 2)
+  applyKeyboardDelay()
 
   if Options.getAutoSwtichPreset() then
     autoSwitchHotkey()
